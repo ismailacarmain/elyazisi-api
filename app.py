@@ -45,50 +45,54 @@ db = firestore.client()
 class HarfSistemi:
     def __init__(self):
         self.char_list = []
-        low, upp, num = "abcçdefgğhıijklmnoöprsştuüvyz", "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ", "0123456789"
-        punc = {".":"nokta", ",":"virgul", ":":"ikiknokta", ";":"noktalivirgul", "?":"soru", "!":"unlem", "-":"tire", "(":"parantezac", ")":"parantezkapama"}
-        for c in low: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1,4)]
-        for c in upp: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1,4)]
+        low = "abcçdefgğhıijklmnoöprsştuüvyz"
+        upp = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ"
+        num = "0123456789"
+        punc = {".":"nokta", ",":"virgül", ":":"iki_nokta", ";":"noktalı_virgül", "?":"soru", "!":"ünlem", "-":"tire", "(":"parantez_aç", ")":"parantez_kapat"}
+        for c in low: [self.char_list.append(f"küçük_{c}_{i}") for i in range(1,4)]
+        for c in upp: [self.char_list.append(f"büyük_{c}_{i}") for i in range(1,4)]
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
-        for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
+        for c, n in punc.items(): [self.char_list.append(f"{n}_{i}") for i in range(1,4)]
+
+    def crop_tight(self, binary_img):
+        coords = cv2.findNonZero(binary_img)
+        if coords is None: return None
+        x, y, w, h = cv2.boundingRect(coords)
+        return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
-        # 1. Gri tona çevir ve kontrastı artır
+        # ORIJINAL KOD MANTIGI (Satir Satir)
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        
-        # Keskinleştirme (Yazıyı belirginleştirir)
-        kernel_sharpen = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-        gray = cv2.filter2D(gray, -1, kernel_sharpen)
-        
-        # 2. Threshold (Senin çalışan kodundaki değerler ama daha hassas)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 8)
-        
-        # 3. Temizlik
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
         kernel = np.ones((2,2), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         
-        # 4. Harfi bul ve kırp
-        coords = cv2.findNonZero(thresh)
-        if coords is None or cv2.countNonZero(thresh) < 15: # Çok küçük noktaları harf sayma
-            return None
-            
-        x, y, w, h = cv2.boundingRect(coords)
-        tight = thresh[y:y+h, x:x+w]
+        tight = self.crop_tight(thresh)
+        if tight is None: return None
         
-        # 5. YAZI SİYAH - ARKA PLAN BEYAZ
+        # SIYAH YAZI - BEYAZ ARKA PLAN (Sadece burayi ekledim ki uygulamada gorunsun)
         return cv2.bitwise_not(tight)
 
     def detect_markers(self, img):
+        # ORIJINAL KOD MANTIGI (Satir Satir)
         dict_aruco = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         params = cv2.aruco.DetectorParameters()
         params.adaptiveThreshWinSizeMin = 3
         params.adaptiveThreshWinSizeMax = 23
+        params.adaptiveThreshWinSizeStep = 5
+        params.minMarkerPerimeterRate = 0.01
+        
         det = cv2.aruco.ArucoDetector(dict_aruco, params)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
-        # Marker bulmak için 3 farklı kontrast denemesi
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        variations = [gray, clahe.apply(gray), cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1]]
+        variations = [
+            gray,
+            clahe.apply(gray),
+            cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1],
+            cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        ]
         
         best_corners, best_ids = None, None
         for v in variations:
@@ -100,46 +104,51 @@ class HarfSistemi:
         return best_corners, best_ids
 
     def process_single_page(self, img):
+        # ORIJINAL KOD MANTIGI (Satir Satir)
         corners, ids = self.detect_markers(img)
         if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı!"
         
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
+        
+        scale = 10
+        sw, sh = 210 * scale, 148 * scale
+        m = 175
         targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
         src_points = []
-        for t in targets:
+        for target in targets:
             found = False
             for i in range(len(ids)):
-                if int(ids[i]) == t:
+                if int(ids[i]) == target:
                     src_points.append(np.mean(corners[i][0], axis=0))
                     found = True; break
-            if not found: return None, f"Marker {t} eksik!"
-        
-        sw, sh = 2100, 1480
+            if not found: return None, f"Marker {target} eksik!"
+
         src = np.float32(src_points)
-        dst = np.float32([[175,175], [sw-175,175], [175,sh-175], [sw-175,sh-175]])
+        dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
         
-        res_map = {}
-        sx, sy, b = (sw-1500)//2, (sh-900)//2, 150
-        s_idx = bid * 60
+        b_px = 150
+        sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
+        start_idx = bid * 60
+        page_results = {}
         for r in range(6):
             for c in range(10):
-                idx = s_idx + (r*10 + c)
+                idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): break
-                # Kutuyu senin kodundaki p=15 payıyla alıyoruz
-                roi = warped[sy+r*b+15 : sy+r*b+b-15, sx+c*b+15 : sx+c*b+b-15]
-                processed = self.process_roi(roi)
-                if processed is not None:
-                    _, buf = cv2.imencode(".png", processed)
-                    res_map[self.char_list[idx]] = base64.b64encode(buf).decode('utf-8')
-        return {'harfler': res_map, 'bid': bid}, None
+                p = 15
+                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                res = self.process_roi(roi)
+                if res is not None:
+                    _, buffer = cv2.imencode(".png", res)
+                    page_results[self.char_list[idx]] = base64.b64encode(buffer).decode('utf-8')
+        return {'harfler': page_results, 'bid': bid}, None
 
 sistem = HarfSistemi()
 
 @app.route('/')
-def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v10_sharpen', 'db': db is not None})
+def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v11_original_logic', 'db': db is not None})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
