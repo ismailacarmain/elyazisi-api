@@ -7,7 +7,6 @@ import base64
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -22,7 +21,6 @@ if not firebase_admin._apps:
             cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
             cred = credentials.Certificate(cred_dict)
         except: pass
-    
     if not cred and os.environ.get("FIREBASE_PROJECT_ID"):
         try:
             cred_dict = {
@@ -37,7 +35,6 @@ if not firebase_admin._apps:
             }
             cred = credentials.Certificate(cred_dict)
         except: pass
-
     if cred:
         firebase_admin.initialize_app(cred)
     else:
@@ -68,6 +65,31 @@ class HarfSistemi:
             return corners, ids
         except: return None, None
 
+    def process_roi(self, roi):
+        # ROI İşleme (Hassas okuma)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        # Eşiklemeyi biraz daha yumuşattık (21, 7)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 7)
+        
+        # Gürültü temizle
+        kernel = np.ones((2,2), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        
+        # Harfi bul ve sıkıştır (Tight crop)
+        coords = cv2.findNonZero(thresh)
+        if coords is None or cv2.countNonZero(thresh) < 25: # Boş kutu kontrolü
+            return None
+            
+        x, y, w, h = cv2.boundingRect(coords)
+        tight = thresh[y:y+h, x:x+w]
+        
+        # SİYAH YAZI - BEYAZ ARKA PLAN
+        # tight su an: yazı=255 (beyaz), arka plan=0 (siyah)
+        # bitwise_not ile: yazı=0 (siyah), arka plan=255 (beyaz)
+        final_img = cv2.bitwise_not(tight)
+        return final_img
+
     def process_single_page(self, img):
         corners, ids = self.detect_markers(img)
         if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı!"
@@ -96,24 +118,19 @@ class HarfSistemi:
             for c in range(10):
                 idx = s_idx + (r*10 + c)
                 if idx >= len(self.char_list): break
-                roi = warped[sy+r*b+15 : sy+r*b+b-15, sx+c*b+15 : sx+c*b+b-15]
-                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+                # Kutuyu al (Hafif geniş kadraj)
+                roi = warped[sy+r*b+10 : sy+r*b+b-10, sx+c*b+10 : sx+c*b+b-10]
                 
-                if cv2.countNonZero(th) > 20:
-                    # --- RENK DEGISIMI BURADA ---
-                    # th su an: Yazi=Beyaz(255), Arka Plan=Siyah(0)
-                    # bitwise_not ile: Yazi=Siyah(0), Arka Plan=Beyaz(255) yapıyoruz.
-                    final_img = cv2.bitwise_not(th) 
-                    
-                    _, buf = cv2.imencode(".png", final_img)
+                processed = self.process_roi(roi)
+                if processed is not None:
+                    _, buf = cv2.imencode(".png", processed)
                     res_map[self.char_list[idx]] = base64.b64encode(buf).decode('utf-8')
         return {'harfler': res_map, 'bid': bid}, None
 
 tarayici = HarfSistemi()
 
 @app.route('/')
-def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v7_colors_fixed', 'db': db is not None})
+def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v8_final', 'db': db is not None})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
