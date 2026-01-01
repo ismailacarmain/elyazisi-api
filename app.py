@@ -2,15 +2,11 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import cv2
 import numpy as np
-from PIL import Image
 import os
 import base64
-import io
 import firebase_admin
 from firebase_admin import credentials, firestore
-import uuid
 import json
-import traceback
 
 app = Flask(__name__)
 CORS(app)
@@ -41,7 +37,6 @@ class HarfSistemi:
         upp = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ"
         num = "0123456789"
         punc = {".":"nokta", ",":"virgul", ":":"ikiknokta", ";":"noktalivirgul", "?":"soru", "!":"unlem", "-":"tire", "(":"parantezac", ")":"parantezkapama"}
-        
         for c in low: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1,4)]
         for c in upp: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1,4)]
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
@@ -62,12 +57,10 @@ class HarfSistemi:
 
     def process_single_page(self, img, section_id):
         corners, ids = self.detect_markers(img)
-        if ids is None or len(ids) < 4:
-            return None, "Markerlar bulunamadı! Formu tam ve net çekin."
+        if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı!"
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
-        
         scale = 10
         sw, sh = 210 * scale, 148 * scale
         m = 175
@@ -81,17 +74,14 @@ class HarfSistemi:
                     found = True
                     break
             if not found: return None, f"Marker {target} eksik!"
-
         src = np.float32(src_points)
         dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
-        
         b_px = 150
         sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
         start_idx = bid * 60
         page_results = {}
         detected_count = 0
-        
         for r in range(6):
             for c in range(10):
                 char_idx = start_idx + (r * 10 + c)
@@ -108,17 +98,12 @@ class HarfSistemi:
                     _, buffer = cv2.imencode(".png", tight)
                     page_results[char_name] = base64.b64encode(buffer).decode('utf-8')
                     detected_count += 1
-        return {
-            'harfler': page_results,
-            'detected': int(detected_count),
-            'total': int(min(60, len(self.char_list) - start_idx)),
-            'section_id': int(bid)
-        }, None
+        return {'harfler': page_results, 'detected': int(detected_count), 'section_id': int(bid)}, None
 
 sistem = HarfSistemi()
 
 @app.route('/')
-def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v3_multistore'})
+def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v4_final'})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -127,33 +112,28 @@ def process_single():
         user_id = data.get('user_id')
         font_name = data.get('font_name', 'Yeni Font')
         img_b64 = data.get('image_base64')
-
         if not user_id or not img_b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-
         nparr = np.frombuffer(base64.b64decode(img_b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         result, error = sistem.process_single_page(img, 0)
         if error: return jsonify({'success': False, 'message': error}), 400
-
         if db:
             font_id = f"font_{user_id}_{font_name.replace(' ', '_')}"
-            # 1. Ana Fontlar Koleksiyonuna Kaydet
             doc_ref = db.collection('fonts').document(font_id)
-            # 2. Kullanıcının Kendi Fontlarım Koleksiyonuna Kaydet (Android burayı okuyor)
             user_font_ref = db.collection('users').document(user_id).collection('fonts').document(font_id)
-            
             doc = doc_ref.get()
-            font_data = {
-                'owner_id': user_id,
-                'font_name': font_name,
-                'font_id': font_id,
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'status': 'completed'
-            }
-
             if not doc.exists:
-                font_data['harfler'] = result['harfler']
-                font_data['sections_completed'] = [result['section_id']]
+                font_data = {
+                    'font_id': font_id,
+                    'font_name': font_name,
+                    'owner_id': user_id,
+                    'user_id': user_id,  # ANDROID'IN BEKLEDIĞI ASIL ALAN
+                    'harf_sayisi': result['detected'],
+                    'harfler': result['harfler'],
+                    'created_at': firestore.SERVER_TIMESTAMP,
+                    'status': 'completed',
+                    'sections_completed': [result['section_id']]
+                }
                 doc_ref.set(font_data)
                 user_font_ref.set(font_data)
             else:
@@ -162,17 +142,14 @@ def process_single():
                 new_harfler.update(result['harfler'])
                 completed = current_data.get('sections_completed', [])
                 if result['section_id'] not in completed: completed.append(result['section_id'])
-                
-                updates = {'harfler': new_harfler, 'sections_completed': completed}
+                updates = {
+                    'harfler': new_harfler, 
+                    'harf_sayisi': len(new_harfler),
+                    'sections_completed': completed
+                }
                 doc_ref.update(updates)
                 user_font_ref.update(updates)
-
-        return jsonify({
-            'success': True,
-            'section_id': result['section_id'],
-            'detected_chars': result['detected'],
-            'total_chars': result['total']
-        })
+        return jsonify({'success': True, 'section_id': result['section_id'], 'detected_chars': result['detected']})
     except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
