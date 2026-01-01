@@ -7,66 +7,51 @@ import base64
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-import traceback
+import uuid
 
 app = Flask(__name__)
 CORS(app)
 
-# Firebase initialization - ULTRA ESNEK MOD
-db = None
-try:
-    if not firebase_admin._apps:
-        cred = None
-        
-        # 1. YOL: FIREBASE_CREDENTIALS Degiskeni (Tum JSON)
-        if os.environ.get('FIREBASE_CREDENTIALS'):
-            try:
-                cred_json = os.environ.get('FIREBASE_CREDENTIALS')
-                cred_dict = json.loads(cred_json)
-                cred = credentials.Certificate(cred_dict)
-                print("Firebase: FIREBASE_CREDENTIALS basarili.")
-            except: pass
-            
-        # 2. YOL: Tek tek girilen Env Degiskenleri (Eger 1. yol olmazsa)
-        if not cred and os.environ.get('FIREBASE_PROJECT_ID'):
-            try:
-                cred_dict = {
-                    "type": "service_account",
-                    "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
-                    "private_key_id": os.environ.get("FIREBASE_PRIVATE_KEY_ID"),
-                    "private_key": os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\n", "\n"),
-                    "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
-                    "client_id": os.environ.get("FIREBASE_CLIENT_ID"),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }
-                cred = credentials.Certificate(cred_dict)
-                print("Firebase: Tekil degiskenler basarili.")
-            except: pass
+# Firebase initialization
+if not firebase_admin._apps:
+    cred = None
+    if os.path.exists('serviceAccountKey.json'):
+        cred = credentials.Certificate('serviceAccountKey.json')
+    elif os.environ.get('FIREBASE_CREDENTIALS'):
+        try:
+            cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
+            cred = credentials.Certificate(cred_dict)
+        except: pass
+    
+    if not cred and os.environ.get("FIREBASE_PROJECT_ID"):
+        try:
+            cred_dict = {
+                "type": "service_account",
+                "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
+                "private_key_id": os.environ.get("FIREBASE_PRIVATE_KEY_ID"),
+                "private_key": os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\n", "\n"),
+                "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
+                "client_id": os.environ.get("FIREBASE_CLIENT_ID"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            cred = credentials.Certificate(cred_dict)
+        except: pass
 
-        # 3. YOL: serviceAccountKey.json Dosyasi
-        if not cred and os.path.exists('serviceAccountKey.json'):
-            cred = credentials.Certificate('serviceAccountKey.json')
-            print("Firebase: Dosya basarili.")
-        
-        if cred:
-            firebase_admin.initialize_app(cred)
-        else:
-            firebase_admin.initialize_app()
-            
-    db = firestore.client()
-except Exception as e:
-    print(f"Firebase Baglanti Hatasi: {e}")
+    if cred:
+        firebase_admin.initialize_app(cred)
+    else:
+        firebase_admin.initialize_app()
+
+db = firestore.client()
 
 class HarfSistemi:
     def __init__(self):
         self.char_list = []
-        low = "abcçdefgğhıijklmnoöprsştuüvyz"
-        upp = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ"
-        num = "0123456789"
+        low, upp, num = "abcçdefgğhıijklmnoöprsştuüvyz", "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ", "0123456789"
         punc = {".":"nokta", ",":"virgul", ":":"ikiknokta", ";":"noktalivirgul", "?":"soru", "!":"unlem", "-":"tire", "(":"parantezac", ")":"parantezkapama"}
         for c in low: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1,4)]
-        for c in upp: [self.char_list.append(f"büyük_{c}_{i}") for i in range(1,4)]
+        for c in upp: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1,4)]
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
         for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
@@ -76,8 +61,8 @@ class HarfSistemi:
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             parameters = cv2.aruco.DetectorParameters()
             if hasattr(cv2.aruco, 'ArucoDetector'):
-                detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-                corners, ids, _ = detector.detectMarkers(gray)
+                det = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+                corners, ids, _ = det.detectMarkers(gray)
             else:
                 corners, ids, _ = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
             return corners, ids
@@ -89,96 +74,82 @@ class HarfSistemi:
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
-        scale = 10
-        sw, sh = 210 * scale, 148 * scale
-        m = 175
         targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
         src_points = []
-        for target in targets:
+        for t in targets:
             found = False
             for i in range(len(ids)):
-                if int(ids[i]) == target:
+                if int(ids[i]) == t:
                     src_points.append(np.mean(corners[i][0], axis=0))
-                    found = True
-                    break
-            if not found: return None, f"Marker {target} eksik!"
+                    found = True; break
+            if not found: return None, f"Marker {t} eksik!"
+        
+        sw, sh = 2100, 1480
         src = np.float32(src_points)
-        dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
+        dst = np.float32([[175,175], [sw-175,175], [175,sh-175], [sw-175,sh-175]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
-        b_px = 150
-        sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
-        start_idx = bid * 60
-        page_results = {}
+        
+        res_map = {}
+        sx, sy, b = (sw-1500)//2, (sh-900)//2, 150
+        s_idx = bid * 60
         for r in range(6):
             for c in range(10):
-                char_idx = start_idx + (r * 10 + c)
-                if char_idx >= len(self.char_list): break
-                char_name = self.char_list[char_idx]
-                p = 15
-                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
-                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                thresh = cv2.adaptiveThreshold(gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
-                coords = cv2.findNonZero(thresh)
-                if coords is not None:
-                    x, y, w, h = cv2.boundingRect(coords)
-                    tight = thresh[y:y+h, x:x+w]
-                    _, buffer = cv2.imencode(".png", tight)
-                    page_results[char_name] = base64.b64encode(buffer).decode('utf-8')
-        return {'harfler': page_results, 'section_id': bid}, None
+                idx = s_idx + (r*10 + c)
+                if idx >= len(self.char_list): break
+                roi = warped[sy+r*b+15 : sy+r*b+b-15, sx+c*b+15 : sx+c*b+b-15]
+                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+                
+                if cv2.countNonZero(th) > 20:
+                    # --- RENK DEGISIMI BURADA ---
+                    # th su an: Yazi=Beyaz(255), Arka Plan=Siyah(0)
+                    # bitwise_not ile: Yazi=Siyah(0), Arka Plan=Beyaz(255) yapıyoruz.
+                    final_img = cv2.bitwise_not(th) 
+                    
+                    _, buf = cv2.imencode(".png", final_img)
+                    res_map[self.char_list[idx]] = base64.b64encode(buf).decode('utf-8')
+        return {'harfler': res_map, 'bid': bid}, None
 
-sistem = HarfSistemi()
+tarayici = HarfSistemi()
 
 @app.route('/')
-def home(): 
-    return jsonify({'status': 'ok', 'engine': 'aruco_v6_ultra', 'db': db is not None})
+def home(): return jsonify({'status': 'ok', 'engine': 'aruco_v7_colors_fixed', 'db': db is not None})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
     try:
         data = request.get_json()
-        user_id = data.get('user_id')
-        font_name = data.get('font_name', 'Yeni Font')
-        img_b64 = data.get('image_base64')
-
-        if not user_id or not img_b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-        if not db: return jsonify({'success': False, 'message': 'Firebase baglantisi kurulamadi'}), 500
-
-        nparr = np.frombuffer(base64.b64decode(img_b64), np.uint8)
+        u_id, f_name, b64 = data.get('user_id'), data.get('font_name', 'Font'), data.get('image_base64')
+        if not u_id or not b64: return jsonify({'error': 'eksik veri'}), 400
+        
+        nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        result, error = sistem.process_single_page(img)
-        if error: return jsonify({'success': False, 'message': error}), 400
+        res, err = tarayici.process_single_page(img)
+        if err: return jsonify({'error': err}), 400
 
-        font_doc_id = f"font_{user_id}_{font_name.replace(' ', '_')}"
-        doc_ref = db.collection('fonts').document(font_doc_id)
-        user_font_ref = db.collection('users').document(user_id).collection('fonts').document(font_doc_id)
+        f_id = f"font_{u_id}_{f_name.replace(' ', '_')}"
+        doc_ref = db.collection('fonts').document(f_id)
+        user_ref = db.collection('users').document(u_id).collection('fonts').document(f_id)
         
         doc = doc_ref.get()
         if not doc.exists:
-            font_data = {
-                'font_id': font_doc_id,
-                'font_name': font_name,
-                'user_id': user_id,
-                'harf_sayisi': len(result['harfler']),
-                'harfler': result['harfler'],
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'sections_completed': [result['section_id']]
+            payload = {
+                'font_id': f_id, 'font_name': f_name, 'user_id': u_id, 'owner_id': u_id,
+                'harf_sayisi': len(res['harfler']), 'harfler': res['harfler'],
+                'created_at': firestore.SERVER_TIMESTAMP, 'status': 'completed',
+                'sections': [res['bid']]
             }
-            doc_ref.set(font_data)
-            user_font_ref.set(font_data)
+            doc_ref.set(payload); user_ref.set(payload)
         else:
-            curr = doc.to_dict()
-            harfler = curr.get('harfler', {})
-            harfler.update(result['harfler'])
-            completed = curr.get('sections_completed', [])
-            if result['section_id'] not in completed: completed.append(result['section_id'])
-            updates = {'harfler': harfler, 'harf_sayisi': len(harfler), 'sections_completed': completed}
-            doc_ref.update(updates)
-            user_font_ref.update(updates)
+            old = doc.to_dict()
+            h = old.get('harfler', {}); h.update(res['harfler'])
+            s = old.get('sections', []); 
+            if res['bid'] not in s: s.append(res['bid'])
+            upd = {'harfler': h, 'harf_sayisi': len(h), 'sections': s}
+            doc_ref.update(upd); user_ref.update(upd)
 
-        return jsonify({'success': True, 'section_id': result['section_id'], 'detected_chars': len(result['harfler'])})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': True, 'count': len(res['harfler'])})
+    except Exception as e: return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
