@@ -10,31 +10,29 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
 import json
+import traceback
 
 app = Flask(__name__)
 CORS(app)
 
 # Firebase initialization
-if not firebase_admin._apps:
-    cred = None
-    if os.path.exists('serviceAccountKey.json'):
-        cred = credentials.Certificate('serviceAccountKey.json')
-    elif os.environ.get('FIREBASE_CREDENTIALS'):
-        try:
+try:
+    if not firebase_admin._apps:
+        cred = None
+        if os.path.exists('serviceAccountKey.json'):
+            cred = credentials.Certificate('serviceAccountKey.json')
+        elif os.environ.get('FIREBASE_CREDENTIALS'):
             cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
             cred = credentials.Certificate(cred_dict)
-        except Exception as e:
-            print(f"Error loading credentials: {e}")
-    
-    try:
+        
         if cred:
             firebase_admin.initialize_app(cred)
         else:
             firebase_admin.initialize_app()
-    except Exception as e:
-        print(f"Firebase initialization error: {e}")
-
-db = firestore.client()
+    db = firestore.client()
+except Exception as e:
+    print(f"Firebase Init Error: {e}")
+    db = None
 
 class HarfSistemi:
     def __init__(self):
@@ -49,52 +47,37 @@ class HarfSistemi:
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
         for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
-    def crop_tight(self, binary_img):
-        coords = cv2.findNonZero(binary_img)
-        if coords is None: return None
-        x, y, w, h = cv2.boundingRect(coords)
-        return binary_img[y:y+h, x:x+w]
-
-    def process_roi(self, roi):
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3,3), 0)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
-        
-        kernel = np.ones((2,2), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        
-        tight = self.crop_tight(thresh)
-        if tight is None: return None
-        
-        h, w = tight.shape
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        rgba[:,:,3] = tight 
-        return rgba
-
     def detect_markers(self, img):
         try:
-            dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-            params = cv2.aruco.DetectorParameters()
-            det = cv2.aruco.ArucoDetector(dict, params)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            corners, ids, _ = det.detectMarkers(gray)
+            aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            parameters = cv2.aruco.DetectorParameters()
+            
+            # Yeni OpenCV (4.7+) ve Eski OpenCV uyumluluğu
+            if hasattr(cv2.aruco, 'ArucoDetector'):
+                detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+                corners, ids, rejected = detector.detectMarkers(gray)
+            else:
+                corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
+            
             return corners, ids
-        except:
+        except Exception as e:
+            print(f"Marker Detection Error: {e}")
             return None, None
 
     def process_single_page(self, img, section_id):
         corners, ids = self.detect_markers(img)
         if ids is None or len(ids) < 4:
-            return None, "Markerlar bulunamadı. Formun tamamını ve köşeleri net çekin."
+            return None, "Markerlar bulunamadı! Lütfen formu düz ve net bir şekilde çekin."
             
         ids = ids.flatten()
         base = min(ids)
         bid = base // 4
         
+        # Perspektif düzeltme
         scale = 10
         sw, sh = 210 * scale, 148 * scale
         m = 175
-        
         targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
         src_points = []
         for target in targets:
@@ -104,16 +87,16 @@ class HarfSistemi:
                     src_points.append(np.mean(corners[i][0], axis=0))
                     found = True
                     break
-            if not found: return None, f"Marker {target} eksik."
+            if not found: return None, f"Sayfa markerı (ID:{target}) eksik!"
 
         src = np.float32(src_points)
         dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
         
+        # Harf kesme işlemi
         b_px = 150
         sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
         start_idx = bid * 60
-        
         page_results = {}
         detected_count = 0
         missing_chars = []
@@ -126,10 +109,16 @@ class HarfSistemi:
                 char_name = self.char_list[char_idx]
                 p = 15
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
-                res = self.process_roi(roi)
                 
-                if res is not None:
-                    _, buffer = cv2.imencode(".png", res)
+                # Basit harf işleme
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                thresh = cv2.adaptiveThreshold(gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+                
+                coords = cv2.findNonZero(thresh)
+                if coords is not None:
+                    x, y, w, h = cv2.boundingRect(coords)
+                    tight = thresh[y:y+h, x:x+w]
+                    _, buffer = cv2.imencode(".png", tight)
                     png_base64 = base64.b64encode(buffer).decode('utf-8')
                     page_results[char_name] = png_base64
                     detected_count += 1
@@ -148,18 +137,20 @@ sistem = HarfSistemi()
 
 @app.route('/')
 def home():
-    return jsonify({'status': 'ok', 'engine': 'aruco_v2'})
+    return jsonify({'status': 'ok', 'db': db is not None})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
     try:
         data = request.get_json()
+        if not data: return jsonify({'success': False, 'message': 'JSON veri bulunamadı'}), 400
+        
         user_id = data.get('user_id')
-        font_name = data.get('font_name')
+        font_name = data.get('font_name', 'Yeni Font')
         img_b64 = data.get('image_base64')
 
         if not user_id or not img_b64:
-            return jsonify({'success': False, 'message': 'Eksik veri'}), 400
+            return jsonify({'success': False, 'message': 'Eksik user_id veya görsel'}), 400
 
         nparr = np.frombuffer(base64.b64decode(img_b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -168,26 +159,26 @@ def process_single():
         if error:
             return jsonify({'success': False, 'message': error}), 400
 
-        font_doc_id = f"{user_id}_{font_name.replace(' ', '_')}"
-        doc_ref = db.collection('fonts').document(font_doc_id)
-        
-        doc = doc_ref.get()
-        if not doc.exists:
-            doc_ref.set({
-                'owner_id': user_id,
-                'font_name': font_name,
-                'harfler': result['harfler'],
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'sections_completed': [result['section_id']]
-            })
-        else:
-            current_data = doc.to_dict()
-            new_harfler = current_data.get('harfler', {})
-            new_harfler.update(result['harfler'])
-            completed = current_data.get('sections_completed', [])
-            if result['section_id'] not in completed:
-                completed.append(result['section_id'])
-            doc_ref.update({'harfler': new_harfler, 'sections_completed': completed})
+        if db:
+            font_doc_id = f"{user_id}_{font_name.replace(' ', '_')}"
+            doc_ref = db.collection('fonts').document(font_doc_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                doc_ref.set({
+                    'owner_id': user_id,
+                    'font_name': font_name,
+                    'harfler': result['harfler'],
+                    'created_at': firestore.SERVER_TIMESTAMP,
+                    'sections_completed': [result['section_id']]
+                })
+            else:
+                current_data = doc.to_dict()
+                new_harfler = current_data.get('harfler', {})
+                new_harfler.update(result['harfler'])
+                completed = current_data.get('sections_completed', [])
+                if result['section_id'] not in completed: completed.append(result['section_id'])
+                doc_ref.update({'harfler': new_harfler, 'sections_completed': completed})
 
         return jsonify({
             'success': True,
@@ -197,6 +188,7 @@ def process_single():
             'missing_chars': result['missing']
         })
     except Exception as e:
+        print(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
