@@ -6,13 +6,12 @@ import os
 import base64
 import io
 import firebase_admin
-from firebase_admin import credentials, storage, firestore
-import tempfile
+from firebase_admin import credentials, firestore
 import uuid
 
 app = Flask(__name__)
 
-# Firebase başlat (Render'da environment variable olarak ayarlanacak)
+# Firebase başlat (Storage YOK - sadece Firestore)
 if not firebase_admin._apps:
     cred_dict = {
         "type": "service_account",
@@ -25,12 +24,10 @@ if not firebase_admin._apps:
         "token_uri": "https://oauth2.googleapis.com/token",
     }
     cred = credentials.Certificate(cred_dict)
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': f"{os.environ.get('FIREBASE_PROJECT_ID')}.appspot.com"
-    })
+    firebase_admin.initialize_app(cred)
 
 db = firestore.client()
-bucket = storage.bucket()
+
 
 class HarfTarayici:
     def __init__(self):
@@ -240,7 +237,7 @@ def health():
 @app.route('/process', methods=['POST'])
 def process_form():
     """
-    İki sayfa JPG al, harfleri çıkar, Firebase'e kaydet
+    İki sayfa JPG al, harfleri çıkar, Firebase Firestore'a kaydet
     
     Body (JSON):
     {
@@ -275,29 +272,16 @@ def process_form():
         harfler = tarayici.process_images(image1_bytes, image2_bytes)
         
         if not harfler:
-            return jsonify({'error': 'Hiç harf tespit edilemedi'}), 400
+            return jsonify({'error': 'Hiç harf tespit edilemedi. Kırmızı kutulu form kullanın.'}), 400
         
         # Font ID oluştur
         font_id = str(uuid.uuid4())
         
-        # Firebase Storage'a yükle ve URL'leri topla
-        harf_urls = {}
+        # Harfleri base64 olarak dict'e topla (Storage YOK - direkt Firestore'a)
+        harf_data_dict = {}
         for harf_data in harfler:
-            # Dosya adı: tip_harf_varyasyon.png
-            filename = f"{harf_data['tip']}_{harf_data['harf']}_{harf_data['varyasyon']}.png"
-            blob_path = f"users/{user_id}/fonts/{font_id}/{filename}"
-            
-            # PNG'yi decode et
-            png_bytes = base64.b64decode(harf_data['png_base64'])
-            
-            # Storage'a yükle
-            blob = bucket.blob(blob_path)
-            blob.upload_from_string(png_bytes, content_type='image/png')
-            blob.make_public()
-            
-            # URL'yi kaydet
             key = f"{harf_data['tip']}_{harf_data['harf']}_{harf_data['varyasyon']}"
-            harf_urls[key] = blob.public_url
+            harf_data_dict[key] = harf_data['png_base64']
         
         # Firestore'a font bilgisini kaydet
         font_doc = {
@@ -305,7 +289,7 @@ def process_form():
             'font_name': font_name,
             'user_id': user_id,
             'harf_sayisi': len(harfler),
-            'harfler': harf_urls,
+            'harfler': harf_data_dict,
             'created_at': firestore.SERVER_TIMESTAMP,
             'status': 'completed'
         }
@@ -317,7 +301,7 @@ def process_form():
             'font_id': font_id,
             'font_name': font_name,
             'harf_sayisi': len(harfler),
-            'message': f'{len(harfler)} harf başarıyla işlendi!'
+            'message': f'{len(harfler)} harf başarıyla işlendi ve Firestore\'a kaydedildi!'
         })
         
     except Exception as e:
