@@ -12,19 +12,42 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# Firebase initialization
+# Firebase initialization - ULTRA ESNEK MOD
 db = None
 try:
     if not firebase_admin._apps:
         cred = None
+        
+        # 1. YOL: FIREBASE_CREDENTIALS Degiskeni (Tum JSON)
         if os.environ.get('FIREBASE_CREDENTIALS'):
             try:
-                cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
+                cred_json = os.environ.get('FIREBASE_CREDENTIALS')
+                cred_dict = json.loads(cred_json)
                 cred = credentials.Certificate(cred_dict)
+                print("Firebase: FIREBASE_CREDENTIALS basarili.")
             except: pass
-        
+            
+        # 2. YOL: Tek tek girilen Env Degiskenleri (Eger 1. yol olmazsa)
+        if not cred and os.environ.get('FIREBASE_PROJECT_ID'):
+            try:
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
+                    "private_key_id": os.environ.get("FIREBASE_PRIVATE_KEY_ID"),
+                    "private_key": os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\n", "\n"),
+                    "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
+                    "client_id": os.environ.get("FIREBASE_CLIENT_ID"),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+                cred = credentials.Certificate(cred_dict)
+                print("Firebase: Tekil degiskenler basarili.")
+            except: pass
+
+        # 3. YOL: serviceAccountKey.json Dosyasi
         if not cred and os.path.exists('serviceAccountKey.json'):
             cred = credentials.Certificate('serviceAccountKey.json')
+            print("Firebase: Dosya basarili.")
         
         if cred:
             firebase_admin.initialize_app(cred)
@@ -33,7 +56,7 @@ try:
             
     db = firestore.client()
 except Exception as e:
-    print(f"Firebase Error: {e}")
+    print(f"Firebase Baglanti Hatasi: {e}")
 
 class HarfSistemi:
     def __init__(self):
@@ -43,7 +66,7 @@ class HarfSistemi:
         num = "0123456789"
         punc = {".":"nokta", ",":"virgul", ":":"ikiknokta", ";":"noktalivirgul", "?":"soru", "!":"unlem", "-":"tire", "(":"parantezac", ")":"parantezkapama"}
         for c in low: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1,4)]
-        for c in upp: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1,4)]
+        for c in upp: [self.char_list.append(f"büyük_{c}_{i}") for i in range(1,4)]
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
         for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
@@ -62,7 +85,7 @@ class HarfSistemi:
 
     def process_single_page(self, img):
         corners, ids = self.detect_markers(img)
-        if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı! Lütfen formu tam çekin."
+        if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı!"
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
@@ -107,7 +130,7 @@ sistem = HarfSistemi()
 
 @app.route('/')
 def home(): 
-    return jsonify({'status': 'ok', 'engine': 'aruco_v5_final', 'db': db is not None})
+    return jsonify({'status': 'ok', 'engine': 'aruco_v6_ultra', 'db': db is not None})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -118,14 +141,13 @@ def process_single():
         img_b64 = data.get('image_base64')
 
         if not user_id or not img_b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-        if not db: return jsonify({'success': False, 'message': 'Firebase baglantisi yok'}), 500
+        if not db: return jsonify({'success': False, 'message': 'Firebase baglantisi kurulamadi'}), 500
 
         nparr = np.frombuffer(base64.b64decode(img_b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         result, error = sistem.process_single_page(img)
         if error: return jsonify({'success': False, 'message': error}), 400
 
-        # Font ID'yi Android'deki gibi user_id ile iliskili olustur
         font_doc_id = f"font_{user_id}_{font_name.replace(' ', '_')}"
         doc_ref = db.collection('fonts').document(font_doc_id)
         user_font_ref = db.collection('users').document(user_id).collection('fonts').document(font_doc_id)
@@ -149,14 +171,13 @@ def process_single():
             harfler.update(result['harfler'])
             completed = curr.get('sections_completed', [])
             if result['section_id'] not in completed: completed.append(result['section_id'])
-            
             updates = {'harfler': harfler, 'harf_sayisi': len(harfler), 'sections_completed': completed}
             doc_ref.update(updates)
             user_font_ref.update(updates)
 
         return jsonify({'success': True, 'section_id': result['section_id'], 'detected_chars': len(result['harfler'])})
     except Exception as e:
-        return jsonify({'success': False, 'message': f"Hata: {str(e)}"}), 500
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
