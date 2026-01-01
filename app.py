@@ -52,29 +52,24 @@ class HarfSistemi:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             parameters = cv2.aruco.DetectorParameters()
-            
-            # Yeni OpenCV (4.7+) ve Eski OpenCV uyumluluğu
             if hasattr(cv2.aruco, 'ArucoDetector'):
                 detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
                 corners, ids, rejected = detector.detectMarkers(gray)
             else:
                 corners, ids, rejected = cv2.aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
-            
             return corners, ids
         except Exception as e:
-            print(f"Marker Detection Error: {e}")
             return None, None
 
     def process_single_page(self, img, section_id):
         corners, ids = self.detect_markers(img)
         if ids is None or len(ids) < 4:
-            return None, "Markerlar bulunamadı! Lütfen formu düz ve net bir şekilde çekin."
+            return None, "Markerlar bulunamadı! Formu tam ve net çekin."
             
         ids = ids.flatten()
-        base = min(ids)
-        bid = base // 4
+        base = int(min(ids)) # NumPy int32 -> Python int
+        bid = int(base // 4) # NumPy int32 -> Python int
         
-        # Perspektif düzeltme
         scale = 10
         sw, sh = 210 * scale, 148 * scale
         m = 175
@@ -83,17 +78,16 @@ class HarfSistemi:
         for target in targets:
             found = False
             for i in range(len(ids)):
-                if ids[i] == target:
+                if int(ids[i]) == target:
                     src_points.append(np.mean(corners[i][0], axis=0))
                     found = True
                     break
-            if not found: return None, f"Sayfa markerı (ID:{target}) eksik!"
+            if not found: return None, f"Marker {target} eksik!"
 
         src = np.float32(src_points)
         dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
         
-        # Harf kesme işlemi
         b_px = 150
         sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
         start_idx = bid * 60
@@ -110,7 +104,6 @@ class HarfSistemi:
                 p = 15
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
-                # Basit harf işleme
                 gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                 thresh = cv2.adaptiveThreshold(gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
                 
@@ -127,30 +120,28 @@ class HarfSistemi:
                     
         return {
             'harfler': page_results,
-            'detected': detected_count,
-            'total': min(60, len(self.char_list) - start_idx),
+            'detected': int(detected_count),
+            'total': int(min(60, len(self.char_list) - start_idx)),
             'missing': missing_chars,
-            'section_id': bid
+            'section_id': int(bid)
         }, None
 
 sistem = HarfSistemi()
 
 @app.route('/')
 def home():
-    return jsonify({'status': 'ok', 'db': db is not None})
+    return jsonify({'status': 'ok', 'engine': 'aruco_v2_fixed'})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
     try:
         data = request.get_json()
-        if not data: return jsonify({'success': False, 'message': 'JSON veri bulunamadı'}), 400
-        
         user_id = data.get('user_id')
         font_name = data.get('font_name', 'Yeni Font')
         img_b64 = data.get('image_base64')
 
         if not user_id or not img_b64:
-            return jsonify({'success': False, 'message': 'Eksik user_id veya görsel'}), 400
+            return jsonify({'success': False, 'message': 'Eksik veri'}), 400
 
         nparr = np.frombuffer(base64.b64decode(img_b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -188,7 +179,6 @@ def process_single():
             'missing_chars': result['missing']
         })
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
