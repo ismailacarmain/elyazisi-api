@@ -12,7 +12,7 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# --- FIREBASE BAĞLANTISI ---
+# --- FIREBASE BAĞLANTISI (RENDER PARÇA DEĞİŞKEN UYUMLU) ---
 db = None
 connected_project_id = "BILINMIYOR"
 init_error = None
@@ -24,30 +24,58 @@ def init_firebase():
 
     try:
         cred = None
-        # 1. Env Var
+        
+        # YÖNTEM 1: Tek Parça JSON (FIREBASE_CREDENTIALS)
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         if env_creds:
             try:
                 cred_dict = json.loads(env_creds.strip())
                 cred = credentials.Certificate(cred_dict)
-                connected_project_id = cred_dict.get('project_id', 'Bulunamadı')
+                connected_project_id = cred_dict.get('project_id', 'EnvJson')
+                print("Firebase: Tek parça JSON ile bağlandı.")
             except Exception as e:
-                init_error = f"Env JSON Hatası: {e}"
+                init_error = f"Env JSON Parse Hatası: {e}"
 
-        # 2. Dosya
+        # YÖNTEM 2: Parça Parça Değişkenler (Render Default Yapısı)
+        # Senin Render'da gördüğün değişkenleri burada birleştiriyoruz
+        if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
+            try:
+                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
+                    "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID'),
+                    "private_key": private_key,
+                    "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL'),
+                    "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": os.environ.get('FIREBASE_CLIENT_X509_CERT_URL') # Opsiyonel
+                }
+                
+                # Eksik var mı kontrol et (En önemlileri)
+                if not cred_dict['project_id'] or not cred_dict['client_email']:
+                    raise Exception("Eksik Render Değişkeni (PROJECT_ID veya EMAIL yok)")
+
+                cred = credentials.Certificate(cred_dict)
+                connected_project_id = cred_dict.get('project_id')
+                print("Firebase: Render Parça Değişkenleri ile bağlandı.")
+            except Exception as e:
+                init_error = f"Render Değişken Hatası: {e}"
+
+        # YÖNTEM 3: Dosya (Local Test)
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
                     try:
                         cred = credentials.Certificate(p)
-                        # JSON dosyasını okuyup proje ID'yi alalım
                         with open(p, 'r') as f:
-                            f_content = json.load(f)
-                            connected_project_id = f_content.get('project_id', 'Dosyadan Okunamadı')
+                            connected_project_id = json.load(f).get('project_id', 'Dosya')
                         break
                     except Exception as e:
-                        init_error = f"Dosya Hatası ({p}): {e}"
+                        init_error = f"Dosya Hatası: {e}"
 
         if cred:
             if not firebase_admin._apps:
@@ -56,7 +84,6 @@ def init_firebase():
             print(f"Firestore BAĞLANDI. Proje: {connected_project_id}")
             init_error = None
         else:
-            # Default deneme (Google Cloud ortamı)
             if not firebase_admin._apps:
                 firebase_admin.initialize_app()
             db = firestore.client()
@@ -84,19 +111,23 @@ class HarfSistemi:
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
         for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
+    def crop_tight(self, binary_img):
+        coords = cv2.findNonZero(binary_img)
+        if coords is None: return None
+        x, y, w, h = cv2.boundingRect(coords)
+        return binary_img[y:y+h, x:x+w]
+
     def process_roi(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (3,3), 0)
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
         kernel = np.ones((2,2), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        coords = cv2.findNonZero(thresh)
-        if coords is None: return None
-        x, y, w, h = cv2.boundingRect(coords)
-        tight = thresh[y:y+h, x:x+w]
+        tight = self.crop_tight(thresh)
+        if tight is None: return None
         h, w = tight.shape
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        rgba[:,:,3] = tight
+        rgba[:,:,3] = tight 
         return rgba
 
     def detect_markers(self, img):
@@ -154,7 +185,7 @@ sistem = HarfSistemi()
 @app.route('/')
 def home():
     status = f"BAGLI (Proje: {connected_project_id})" if db else f"BAGLANTI YOK: {init_error}"
-    return jsonify({'status': 'ok', 'engine': 'aruco_v10_db_tracer', 'db_status': status})
+    return jsonify({'status': 'ok', 'engine': 'aruco_v11_render_vars', 'db_status': status})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -177,10 +208,7 @@ def process_single():
                 fid = f"{u_id}_{f_name.replace(' ', '_')}"
                 d_ref = database.collection('fonts').document(fid)
                 u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
-                
-                # Nereye kaydettigimizi gosterelim
                 saved_path = f"fonts/{fid} ve users/{u_id}/fonts/{fid}"
-                
                 doc = d_ref.get()
                 payload = {'harfler': res['harfler'], 'harf_sayisi': len(res['harfler']), 'sections_completed': [res['section_id']]}
                 if not doc.exists:
@@ -202,9 +230,9 @@ def process_single():
             'success': True,
             'section_id': res['section_id'],
             'detected_chars': res['detected'],
-            'db_project_id': connected_project_id, # Hangi projeye bagli?
-            'db_save_path': saved_path,            # Nereye kaydetti?
-            'db_status': db_debug_info             # Sonuc ne?
+            'db_project_id': connected_project_id,
+            'db_save_path': saved_path,
+            'db_status': db_debug_info
         })
     except Exception as e:
         traceback.print_exc()
