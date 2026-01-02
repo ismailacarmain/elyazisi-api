@@ -21,20 +21,18 @@ def init_firebase():
     global db, init_error, connected_project_id
     if db is not None:
         return db
-
     try:
         cred = None
-        # 1. Env Var (Render)
+        # Env Var (Tek JSON)
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         if env_creds:
             try:
                 cred_dict = json.loads(env_creds.strip())
                 cred = credentials.Certificate(cred_dict)
                 connected_project_id = cred_dict.get('project_id', 'EnvJson')
-            except Exception as e:
-                init_error = f"Env JSON Hatası: {e}"
+            except Exception as e: init_error = f"Env JSON Hatası: {e}"
 
-        # 2. Env Vars (Parçalı)
+        # Env Vars (Parçalı)
         if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
             try:
                 private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
@@ -50,10 +48,9 @@ def init_firebase():
                 }
                 cred = credentials.Certificate(cred_dict)
                 connected_project_id = cred_dict.get('project_id')
-            except Exception as e:
-                init_error = f"Env Vars Hatası: {e}"
+            except Exception as e: init_error = f"Env Vars Hatası: {e}"
 
-        # 3. Dosya (Local)
+        # Dosya (Local)
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
@@ -63,23 +60,19 @@ def init_firebase():
                         with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                         break
                     except Exception as e: init_error = f"Dosya Hatası ({p}): {e}"
-
+        
         if cred:
             if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
             print(f"Firestore BAĞLANDI. Proje: {connected_project_id}")
             init_error = None
         else:
-            if not firebase_admin._apps: firebase_admin.initialize_app()
-            db = firestore.client()
-            connected_project_id = "Default"
-            init_error = None
-
+            raise Exception("Firebase için hiçbir credential (kimlik bilgisi) bulunamadı.")
+            
     except Exception as e:
         print(f"FIREBASE KRITIK HATA: {e}")
         init_error = str(e)
         db = None
-    
     return db
 
 init_firebase()
@@ -110,10 +103,17 @@ class HarfSistemi:
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         tight = self.crop_tight(thresh)
         if tight is None: return None
+        
+        # --- FIX: GÖRÜNÜR RESİM ÜRETME ---
+        # Önceki kod şeffaf PNG üretiyordu, görünmüyordu.
+        # Şimdi Beyaz Arka Plan üzerine Siyah Yazı üretiyoruz.
         h, w = tight.shape
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        rgba[:,:,3] = tight 
-        return rgba
+        # 1. Beyaz bir tuval (arka plan) oluştur
+        image_with_bg = np.full((h, w, 3), 255, dtype=np.uint8) 
+        # 2. Yazı olan pikselleri (değeri 255 olanlar) tuvalde siyaha (0,0,0) boya
+        image_with_bg[tight == 255] = [0, 0, 0]
+        
+        return image_with_bg
 
     def detect_markers(self, img):
         try:
@@ -158,10 +158,7 @@ class HarfSistemi:
                 if idx >= len(self.char_list): break
                 p = 15; roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 res = self.process_roi(roi)
-                
-                # FIX: Gürültü filtresini kaldırdım (> 0). Her şeyi kaydet.
-                # FIX: Base64 string'i temizle (.replace)
-                if res is not None and np.count_nonzero(res[:,:,3]) > 0:
+                if res is not None:
                     _, buffer = cv2.imencode(".png", res)
                     b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
                     page_results[self.char_list[idx]] = b64_str
@@ -174,7 +171,7 @@ sistem = HarfSistemi()
 @app.route('/')
 def home():
     status = f"BAGLI (Proje: {connected_project_id})" if db else f"BAGLANTI YOK: {init_error}"
-    return jsonify({'status': 'ok', 'engine': 'aruco_v12_force_visible', 'db_status': status})
+    return jsonify({'status': 'ok', 'engine': 'aruco_v13_solid_bg', 'db_status': status})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -197,7 +194,7 @@ def process_single():
                 fid = f"{u_id}_{f_name.replace(' ', '_')}"
                 d_ref = database.collection('fonts').document(fid)
                 u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
-                saved_path = f"fonts/{fid} ve users/{u_id}/fonts/{fid}"
+                saved_path = f"fonts/{fid} & users/.../{fid}"
                 doc = d_ref.get()
                 payload = {'harfler': res['harfler'], 'harf_sayisi': len(res['harfler']), 'sections_completed': [res['section_id']]}
                 if not doc.exists:
