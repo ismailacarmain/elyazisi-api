@@ -12,7 +12,7 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# --- FIREBASE BAĞLANTISI (RENDER PARÇA DEĞİŞKEN UYUMLU) ---
+# --- FIREBASE BAĞLANTISI ---
 db = None
 connected_project_id = "BILINMIYOR"
 init_error = None
@@ -24,20 +24,17 @@ def init_firebase():
 
     try:
         cred = None
-        
-        # YÖNTEM 1: Tek Parça JSON (FIREBASE_CREDENTIALS)
+        # 1. Env Var (Render)
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         if env_creds:
             try:
                 cred_dict = json.loads(env_creds.strip())
                 cred = credentials.Certificate(cred_dict)
                 connected_project_id = cred_dict.get('project_id', 'EnvJson')
-                print("Firebase: Tek parça JSON ile bağlandı.")
             except Exception as e:
-                init_error = f"Env JSON Parse Hatası: {e}"
+                init_error = f"Env JSON Hatası: {e}"
 
-        # YÖNTEM 2: Parça Parça Değişkenler (Render Default Yapısı)
-        # Senin Render'da gördüğün değişkenleri burada birleştiriyoruz
+        # 2. Env Vars (Parçalı)
         if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
             try:
                 private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
@@ -50,44 +47,32 @@ def init_firebase():
                     "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_x509_cert_url": os.environ.get('FIREBASE_CLIENT_X509_CERT_URL') # Opsiyonel
                 }
-                
-                # Eksik var mı kontrol et (En önemlileri)
-                if not cred_dict['project_id'] or not cred_dict['client_email']:
-                    raise Exception("Eksik Render Değişkeni (PROJECT_ID veya EMAIL yok)")
-
                 cred = credentials.Certificate(cred_dict)
                 connected_project_id = cred_dict.get('project_id')
-                print("Firebase: Render Parça Değişkenleri ile bağlandı.")
             except Exception as e:
-                init_error = f"Render Değişken Hatası: {e}"
+                init_error = f"Env Vars Hatası: {e}"
 
-        # YÖNTEM 3: Dosya (Local Test)
+        # 3. Dosya (Local)
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
                     try:
                         cred = credentials.Certificate(p)
-                        with open(p, 'r') as f:
-                            connected_project_id = json.load(f).get('project_id', 'Dosya')
+                        with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                         break
-                    except Exception as e:
-                        init_error = f"Dosya Hatası: {e}"
+                    except Exception as e: init_error = f"Dosya Hatası ({p}): {e}"
 
         if cred:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
             print(f"Firestore BAĞLANDI. Proje: {connected_project_id}")
             init_error = None
         else:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app()
+            if not firebase_admin._apps: firebase_admin.initialize_app()
             db = firestore.client()
-            connected_project_id = "Default/GoogleCloud"
+            connected_project_id = "Default"
             init_error = None
 
     except Exception as e:
@@ -173,9 +158,13 @@ class HarfSistemi:
                 if idx >= len(self.char_list): break
                 p = 15; roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 res = self.process_roi(roi)
-                if res is not None and np.count_nonzero(res[:,:,3]) > 10:
+                
+                # FIX: Gürültü filtresini kaldırdım (> 0). Her şeyi kaydet.
+                # FIX: Base64 string'i temizle (.replace)
+                if res is not None and np.count_nonzero(res[:,:,3]) > 0:
                     _, buffer = cv2.imencode(".png", res)
-                    page_results[self.char_list[idx]] = base64.b64encode(buffer).decode('utf-8')
+                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
+                    page_results[self.char_list[idx]] = b64_str
                     detected_count += 1
                 else: missing_chars.append(self.char_list[idx])
         return {'harfler': page_results, 'detected': detected_count, 'total': min(60, len(self.char_list)-start_idx), 'missing': missing_chars, 'section_id': bid}, None
@@ -185,7 +174,7 @@ sistem = HarfSistemi()
 @app.route('/')
 def home():
     status = f"BAGLI (Proje: {connected_project_id})" if db else f"BAGLANTI YOK: {init_error}"
-    return jsonify({'status': 'ok', 'engine': 'aruco_v11_render_vars', 'db_status': status})
+    return jsonify({'status': 'ok', 'engine': 'aruco_v12_force_visible', 'db_status': status})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
