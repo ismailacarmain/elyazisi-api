@@ -198,14 +198,14 @@ def process_single():
                 doc = d_ref.get()
                 payload = {'harfler': res['harfler'], 'harf_sayisi': len(res['harfler']), 'sections_completed': [res['section_id']]}
                 if not doc.exists:
-                    payload.update({'owner_id': u_id, 'user_id': u_id, 'font_name': f_name, 'created_at': firestore.SERVER_TIMESTAMP})
+                    payload.update({'owner_id': u_id, 'user_id': u_id, 'font_name': f_name, 'font_id': fid, 'created_at': firestore.SERVER_TIMESTAMP})
                     d_ref.set(payload); u_ref.set(payload)
                 else:
                     curr = doc.to_dict()
                     h = curr.get('harfler', {}); h.update(res['harfler'])
                     s = curr.get('sections_completed', []); 
                     if res['section_id'] not in s: s.append(res['section_id'])
-                    payload = {'harfler': h, 'harf_sayisi': len(h), 'sections_completed': s}
+                    payload = {'harfler': h, 'harf_sayisi': len(h), 'sections_completed': s, 'font_id': fid}
                     d_ref.update(payload); u_ref.update(payload)
             except Exception as e:
                 db_debug_info = f"YAZMA HATASI: {str(e)}"
