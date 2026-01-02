@@ -12,34 +12,59 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# Firebase initialization
-if not firebase_admin._apps:
-    cred = None
-    if os.path.exists('serviceAccountKey.json'):
-        cred = credentials.Certificate('serviceAccountKey.json')
-    elif os.environ.get('FIREBASE_CREDENTIALS'):
-        try:
-            cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
-            cred = credentials.Certificate(cred_dict)
-            print("Firebase: Ortam değişkeninden yüklendi.")
-        except Exception as e:
-            print(f"Error loading credentials: {e}")
-    
-    try:
-        if cred:
-            firebase_admin.initialize_app(cred)
-        else:
-            firebase_admin.initialize_app()
-            print("Firebase: Default credentials kullanıldı.")
-    except Exception as e:
-        print(f"Firebase initialization error: {e}")
+# --- FIREBASE BAĞLANTISI (GÜVENLİ MOD) ---
+# Global 'db' değişkenini başta None yapıyoruz.
+# Böylece bağlantı başarısız olsa bile uygulama açılabilir.
+db = None
 
-db = firestore.client()
+def init_firebase():
+    global db
+    if db is not None:
+        return db
+
+    try:
+        if not firebase_admin._apps:
+            cred = None
+            # 1. Environment Variable Kontrolü
+            if os.environ.get('FIREBASE_CREDENTIALS'):
+                try:
+                    cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
+                    cred = credentials.Certificate(cred_dict)
+                    print("Firebase: Env Var okundu.")
+                except Exception as e:
+                    print(f"Firebase Env Hatası: {e}")
+
+            # 2. Dosya Kontrolü (Local Test İçin)
+            if not cred and os.path.exists('serviceAccountKey.json'):
+                try:
+                    cred = credentials.Certificate('serviceAccountKey.json')
+                    print("Firebase: Dosya okundu.")
+                except Exception as e:
+                    print(f"Firebase Dosya Hatası: {e}")
+
+            # 3. Başlatma
+            if cred:
+                firebase_admin.initialize_app(cred)
+            else:
+                # Render bazen default creds ile çalışabilir, deneyelim
+                firebase_admin.initialize_app()
+                print("Firebase: Default creds denendi.")
+        
+        db = firestore.client()
+        print("Firestore bağlantısı BAŞARILI.")
+    except Exception as e:
+        print(f"KRİTİK FIREBASE HATASI (Uygulama çalışmaya devam edecek): {e}")
+        db = None # Bağlanamazsa None kalsın, uygulama çökmesin
+    
+    return db
+
+# Uygulama açılırken bir kere denesin ama hatayı yutsun
+init_firebase()
 
 class HarfSistemi:
     def __init__(self):
         self.char_list = []
-        # Working File (app.py) Logic: Uses 'kucuk', 'buyuk', 'ozel' (ASCII)
+        # Çalışan Dosya Mantığı (kucuk_, buyuk_)
         low = "abcçdefgğhıijklmnoöprsştuüvyz"
         upp = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ"
         num = "0123456789"
@@ -74,10 +99,10 @@ class HarfSistemi:
 
     def detect_markers(self, img):
         try:
-            # Gelişmiş Marker Tespiti (Multi-Variation)
-            # Bu kısım 'calisandi' dosyasından DAHA İYİ, çünkü 0 harf hatasını çözer.
+            # ROBUST DETECT MARKERS (0 Harf Hatası Fixi)
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             parameters = cv2.aruco.DetectorParameters()
+            # Hassas ayarlar
             parameters.adaptiveThreshWinSizeMin = 3
             parameters.adaptiveThreshWinSizeMax = 23
             parameters.adaptiveThreshWinSizeStep = 5
@@ -88,7 +113,7 @@ class HarfSistemi:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
             
-            # 4 Farklı Yöntemle Dene (Robust)
+            # 4 Farklı Yöntem (Karanlık, Aydınlık, Kontrastlı)
             variations = [
                 gray,                                                                   
                 clahe.apply(gray),                                                      
@@ -113,9 +138,10 @@ class HarfSistemi:
 
     def process_single_page(self, img, section_id):
         corners, ids = self.detect_markers(img)
+        # Hata mesajını detaylandıralım
         if ids is None or len(ids) < 4:
             found = len(ids) if ids is not None else 0
-            return None, f"Markerlar bulunamadı! (Bulunan: {found}/4). Formun tamamını ve köşeleri net çekin."
+            return None, f"Markerlar bulunamadı! (Bulunan: {found}/4). Işık yansımasını kontrol edin."
             
         ids = ids.flatten()
         base = int(min(ids))
@@ -134,7 +160,7 @@ class HarfSistemi:
                     src_points.append(np.mean(corners[i][0], axis=0))
                     found = True
                     break
-            if not found: return None, f"Marker {target} eksik. Köşeleri kontrol edin."
+            if not found: return None, f"Marker {target} eksik. Formun o köşesi çıkmamış."
 
         src = np.float32(src_points)
         dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
@@ -159,10 +185,14 @@ class HarfSistemi:
                 res = self.process_roi(roi)
                 
                 if res is not None:
-                    _, buffer = cv2.imencode(".png", res)
-                    png_base64 = base64.b64encode(buffer).decode('utf-8')
-                    page_results[char_name] = png_base64
-                    detected_count += 1
+                    # Gürültü filtresi: Çok küçükse (örn. nokta kadar) alma
+                    if np.count_nonzero(res[:,:,3]) > 10: 
+                        _, buffer = cv2.imencode(".png", res)
+                        png_base64 = base64.b64encode(buffer).decode('utf-8')
+                        page_results[char_name] = png_base64
+                        detected_count += 1
+                    else:
+                        missing_chars.append(char_name)
                 else:
                     missing_chars.append(char_name)
                     
@@ -178,7 +208,9 @@ sistem = HarfSistemi()
 
 @app.route('/')
 def home():
-    return jsonify({'status': 'ok', 'engine': 'aruco_v7_working_merged'})
+    # Firebase durumunu da göster
+    status = "Bağlı" if db else "Bağlı Değil (Ama Çalışıyor)"
+    return jsonify({'status': 'ok', 'engine': 'aruco_v8_crash_proof', 'db_status': status})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -186,7 +218,6 @@ def process_single():
         data = request.get_json()
         user_id = data.get('user_id')
         font_name = data.get('font_name')
-        # section_id Android'den gelmeyebilir, markerlardan alacağız ama parametre olarak kalabilir
         section_id_param = data.get('section_id', 0)
         img_b64 = data.get('image_base64')
 
@@ -200,52 +231,51 @@ def process_single():
         if error:
             return jsonify({'success': False, 'message': error}), 400
 
-        # Firebase Kayıt (Working File Logic + Error Handling)
+        # --- FIREBASE KAYIT (Hata Yakalamalı) ---
         try:
-            if not db:
-                raise Exception("Veritabanı bağlantısı yok")
-
-            font_doc_id = f"{user_id}_{font_name.replace(' ', '_')}"
-            doc_ref = db.collection('fonts').document(font_doc_id)
-            user_font_ref = db.collection('users').document(user_id).collection('fonts').document(font_doc_id)
+            # Bağlantı yoksa tekrar dene (Lazy Init)
+            database = init_firebase()
             
-            doc = doc_ref.get()
-            if not doc.exists:
-                # Yeni kayıt
-                data_payload = {
-                    'owner_id': user_id, # Working file uses 'owner_id'
-                    'user_id': user_id,  # Add both for compatibility
-                    'font_name': font_name,
-                    'harfler': result['harfler'],
-                    'harf_sayisi': len(result['harfler']),
-                    'created_at': firestore.SERVER_TIMESTAMP,
-                    'sections_completed': [result['section_id']]
-                }
-                doc_ref.set(data_payload)
-                user_font_ref.set(data_payload)
+            if database:
+                font_doc_id = f"{user_id}_{font_name.replace(' ', '_')}"
+                doc_ref = database.collection('fonts').document(font_doc_id)
+                user_font_ref = database.collection('users').document(user_id).collection('fonts').document(font_doc_id)
+                
+                doc = doc_ref.get()
+                if not doc.exists:
+                    payload = {
+                        'owner_id': user_id,
+                        'user_id': user_id,
+                        'font_name': font_name,
+                        'harfler': result['harfler'],
+                        'harf_sayisi': len(result['harfler']),
+                        'created_at': firestore.SERVER_TIMESTAMP,
+                        'sections_completed': [result['section_id']]
+                    }
+                    doc_ref.set(payload)
+                    user_font_ref.set(payload)
+                else:
+                    curr = doc.to_dict()
+                    new_harfler = curr.get('harfler', {})
+                    new_harfler.update(result['harfler'])
+                    
+                    completed = curr.get('sections_completed', [])
+                    if result['section_id'] not in completed:
+                        completed.append(result['section_id'])
+                    
+                    payload = {
+                        'harfler': new_harfler,
+                        'harf_sayisi': len(new_harfler),
+                        'sections_completed': completed
+                    }
+                    doc_ref.update(payload)
+                    user_font_ref.update(payload)
             else:
-                # Güncelleme
-                current_data = doc.to_dict()
-                new_harfler = current_data.get('harfler', {})
-                new_harfler.update(result['harfler'])
-                
-                completed = current_data.get('sections_completed', [])
-                if result['section_id'] not in completed:
-                    completed.append(result['section_id'])
-                
-                update_payload = {
-                    'harfler': new_harfler,
-                    'harf_sayisi': len(new_harfler),
-                    'sections_completed': completed
-                }
-                doc_ref.update(update_payload)
-                user_font_ref.update(update_payload)
+                print("Uyarı: DB bağlantısı olmadığı için kayıt atlandı.")
 
         except Exception as db_err:
-            print(f"DB Error: {db_err}")
-            # Veritabanı hatası olsa bile harfleri Android'e döndür ki kullanıcı beklemesin
-            # return jsonify({'success': False, 'message': f"DB Hatası: {str(db_err)}"}), 500
-            pass 
+            print(f"DB Kayıt Hatası: {db_err}")
+            # Hata olsa bile devam et, kullanıcıya harfleri dön
 
         return jsonify({
             'success': True,
@@ -256,7 +286,7 @@ def process_single():
         })
 
     except Exception as e:
-        print(f"Server Error: {e}")
+        print(f"Sunucu Hatası: {e}")
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
 
