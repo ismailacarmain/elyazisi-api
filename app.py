@@ -12,65 +12,64 @@ import traceback
 app = Flask(__name__)
 CORS(app)
 
-# --- FIREBASE BAĞLANTISI (DETAYLI DEBUG MODU) ---
+# --- FIREBASE BAĞLANTISI ---
 db = None
-init_error = None # Başlangıç hatasını sakla
+connected_project_id = "BILINMIYOR"
+init_error = None
 
 def init_firebase():
-    global db, init_error
+    global db, init_error, connected_project_id
     if db is not None:
         return db
 
     try:
-        if not firebase_admin._apps:
-            cred = None
-            
-            # YÖNTEM 1: Environment Variable (Render İçin En İyisi)
-            env_creds = os.environ.get('FIREBASE_CREDENTIALS')
-            if env_creds:
-                try:
-                    # JSON formatını düzeltmeye çalış (bazı platformlar tırnakları bozar)
-                    env_creds = env_creds.strip()
-                    cred_dict = json.loads(env_creds)
-                    cred = credentials.Certificate(cred_dict)
-                    print("Firebase: Env Var başarıyla okundu.")
-                except Exception as e:
-                    print(f"Firebase Env Var JSON Hatası: {e}")
-                    init_error = f"Env Var JSON Bozuk: {str(e)}"
+        cred = None
+        # 1. Env Var
+        env_creds = os.environ.get('FIREBASE_CREDENTIALS')
+        if env_creds:
+            try:
+                cred_dict = json.loads(env_creds.strip())
+                cred = credentials.Certificate(cred_dict)
+                connected_project_id = cred_dict.get('project_id', 'Bulunamadı')
+            except Exception as e:
+                init_error = f"Env JSON Hatası: {e}"
 
-            # YÖNTEM 2: Dosya (Local Test veya Secret File)
-            # Render'da Secret File genelde /etc/secrets/ altına konur
-            potential_paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
-            if not cred:
-                for p in potential_paths:
-                    if os.path.exists(p):
-                        try:
-                            cred = credentials.Certificate(p)
-                            print(f"Firebase: Dosya okundu ({p}).")
-                            break
-                        except Exception as e:
-                            print(f"Firebase Dosya Okuma Hatası ({p}): {e}")
-                            if not init_error: init_error = f"Dosya Bozuk: {str(e)}"
+        # 2. Dosya
+        if not cred:
+            paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
+            for p in paths:
+                if os.path.exists(p):
+                    try:
+                        cred = credentials.Certificate(p)
+                        # JSON dosyasını okuyup proje ID'yi alalım
+                        with open(p, 'r') as f:
+                            f_content = json.load(f)
+                            connected_project_id = f_content.get('project_id', 'Dosyadan Okunamadı')
+                        break
+                    except Exception as e:
+                        init_error = f"Dosya Hatası ({p}): {e}"
 
-            # Başlatma
-            if cred:
+        if cred:
+            if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred)
-            else:
-                # Son çare: Default (Google Cloud ortamındaysa çalışır)
-                print("Firebase: Credential bulunamadı, Default deniyor...")
+            db = firestore.client()
+            print(f"Firestore BAĞLANDI. Proje: {connected_project_id}")
+            init_error = None
+        else:
+            # Default deneme (Google Cloud ortamı)
+            if not firebase_admin._apps:
                 firebase_admin.initialize_app()
-        
-        db = firestore.client()
-        print("Firestore bağlantısı BAŞARILI.")
-        init_error = None # Hata varsa temizle
+            db = firestore.client()
+            connected_project_id = "Default/GoogleCloud"
+            init_error = None
+
     except Exception as e:
-        print(f"KRİTİK FIREBASE HATASI: {e}")
+        print(f"FIREBASE KRITIK HATA: {e}")
         init_error = str(e)
         db = None
     
     return db
 
-# İlk açılışta dene
 init_firebase()
 
 class HarfSistemi:
@@ -85,33 +84,26 @@ class HarfSistemi:
         for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
         for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
-    def crop_tight(self, binary_img):
-        coords = cv2.findNonZero(binary_img)
-        if coords is None: return None
-        x, y, w, h = cv2.boundingRect(coords)
-        return binary_img[y:y+h, x:x+w]
-
     def process_roi(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (3,3), 0)
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
         kernel = np.ones((2,2), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        tight = self.crop_tight(thresh)
-        if tight is None: return None
+        coords = cv2.findNonZero(thresh)
+        if coords is None: return None
+        x, y, w, h = cv2.boundingRect(coords)
+        tight = thresh[y:y+h, x:x+w]
         h, w = tight.shape
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        rgba[:,:,3] = tight 
+        rgba[:,:,3] = tight
         return rgba
 
     def detect_markers(self, img):
         try:
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
             parameters = cv2.aruco.DetectorParameters()
-            parameters.adaptiveThreshWinSizeMin = 3
-            parameters.adaptiveThreshWinSizeMax = 23
-            parameters.adaptiveThreshWinSizeStep = 5
-            parameters.minMarkerPerimeterRate = 0.01
+            parameters.adaptiveThreshWinSizeMin = 3; parameters.adaptiveThreshWinSizeMax = 23; parameters.adaptiveThreshWinSizeStep = 5; parameters.minMarkerPerimeterRate = 0.01
             detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
@@ -131,33 +123,24 @@ class HarfSistemi:
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
-        scale = 10
-        sw, sh = 210 * scale, 148 * scale
-        m = 175
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
         targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
         src_points = []
         for target in targets:
             found = False
             for i in range(len(ids)):
-                if int(ids[i]) == target:
-                    src_points.append(np.mean(corners[i][0], axis=0))
-                    found = True; break
+                if int(ids[i]) == target: src_points.append(np.mean(corners[i][0], axis=0)); found = True; break
             if not found: return None, f"Marker {target} eksik."
         src = np.float32(src_points)
         dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
-        b_px = 150
-        sx, sy = int((sw - 1500)/2), int((sh - 900)/2)
-        start_idx = bid * 60
-        page_results = {}
-        detected_count = 0
-        missing_chars = []
+        b_px = 150; sx, sy = int((sw - 1500)/2), int((sh - 900)/2); start_idx = bid * 60
+        page_results = {}; detected_count = 0; missing_chars = []
         for r in range(6):
             for c in range(10):
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): break
-                p = 15
-                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                p = 15; roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 res = self.process_roi(roi)
                 if res is not None and np.count_nonzero(res[:,:,3]) > 10:
                     _, buffer = cv2.imencode(".png", res)
@@ -170,9 +153,8 @@ sistem = HarfSistemi()
 
 @app.route('/')
 def home():
-    global init_error
-    status = "BAGLI" if db else f"BAGLANTI YOK: {init_error}"
-    return jsonify({'status': 'ok', 'engine': 'aruco_v9_debug', 'db_status': status})
+    status = f"BAGLI (Proje: {connected_project_id})" if db else f"BAGLANTI YOK: {init_error}"
+    return jsonify({'status': 'ok', 'engine': 'aruco_v10_db_tracer', 'db_status': status})
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
@@ -186,7 +168,8 @@ def process_single():
         res, err = sistem.process_single_page(img, 0)
         if err: return jsonify({'success': False, 'message': err}), 400
 
-        db_msg = "Kayit Basarili"
+        db_debug_info = "Kayit Basarili"
+        saved_path = "Yok"
         database = init_firebase()
         
         if database:
@@ -194,9 +177,12 @@ def process_single():
                 fid = f"{u_id}_{f_name.replace(' ', '_')}"
                 d_ref = database.collection('fonts').document(fid)
                 u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
+                
+                # Nereye kaydettigimizi gosterelim
+                saved_path = f"fonts/{fid} ve users/{u_id}/fonts/{fid}"
+                
                 doc = d_ref.get()
                 payload = {'harfler': res['harfler'], 'harf_sayisi': len(res['harfler']), 'sections_completed': [res['section_id']]}
-                
                 if not doc.exists:
                     payload.update({'owner_id': u_id, 'user_id': u_id, 'font_name': f_name, 'created_at': firestore.SERVER_TIMESTAMP})
                     d_ref.set(payload); u_ref.set(payload)
@@ -208,17 +194,17 @@ def process_single():
                     payload = {'harfler': h, 'harf_sayisi': len(h), 'sections_completed': s}
                     d_ref.update(payload); u_ref.update(payload)
             except Exception as e:
-                db_msg = f"DB YAZMA HATASI: {str(e)}"
+                db_debug_info = f"YAZMA HATASI: {str(e)}"
         else:
-            db_msg = f"DB BAGLANTISI YOK: {init_error}"
+            db_debug_info = f"BAGLANTI YOK: {init_error}"
 
         return jsonify({
             'success': True,
             'section_id': res['section_id'],
             'detected_chars': res['detected'],
-            'total_chars': res['total'],
-            'missing_chars': res['missing'],
-            'db_debug': db_msg # Hatayi burda gorecegiz
+            'db_project_id': connected_project_id, # Hangi projeye bagli?
+            'db_save_path': saved_path,            # Nereye kaydetti?
+            'db_status': db_debug_info             # Sonuc ne?
         })
     except Exception as e:
         traceback.print_exc()
