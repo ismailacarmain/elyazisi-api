@@ -3,263 +3,335 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>El Yazısı Pro - Editör</title>
+    <title>El Yazısı Editörü Pro</title>
+    <!-- Modern Font: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
         :root {
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --bg-color: #f3f4f6;
+            --primary: #6366f1;       /* Indigo 500 */
+            --primary-hover: #4f46e5; /* Indigo 600 */
+            --accent: #8b5cf6;        /* Violet 500 */
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
             --text-main: #1e293b;
             --text-muted: #64748b;
-            --panel-bg: rgba(255, 255, 255, 0.8);
-            --border-color: rgba(255, 255, 255, 0.5);
-            --input-bg: #ffffff;
-            --shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+            --radius-xl: 24px;
+            --radius-lg: 16px;
+            --radius-md: 12px;
         }
 
         [data-theme="dark"] {
             --primary: #818cf8;
             --primary-hover: #6366f1;
-            --bg-color: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.8);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
             --text-main: #f1f5f9;
             --text-muted: #94a3b8;
-            --panel-bg: rgba(30, 41, 59, 0.8);
-            --border-color: rgba(255, 255, 255, 0.1);
-            --input-bg: #1e293b;
-            --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; }
+        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
         
         body {
             font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
+            background-color: #f3f4f6;
             color: var(--text-main);
-            height: 100vh;
-            display: flex;
-            overflow: hidden;
-            transition: all 0.3s ease;
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.5;
+            /* Mesh Gradient Background (Orijinal Tasarım) */
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
+            background: linear-gradient(-45deg, #e0e7ff, #f3e8ff, #eef2ff, #faf5ff);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
         }
 
-        /* Sidebar - Glassmorphism */
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* CONTAINER - Modern Floating Layout */
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 30px;
+            min-height: 100vh;
+            align-items: start;
+        }
+
+        /* SIDEBAR - Floating Dock Style */
         .sidebar {
-            width: 350px;
-            background: var(--panel-bg);
-            backdrop-filter: blur(15px);
-            border-right: 1px solid var(--border-color);
-            padding: 25px;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
+            position: sticky;
+            top: 20px;
+            padding: 30px;
+            max-height: calc(100vh - 40px);
             overflow-y: auto;
-            z-index: 100;
-            transition: transform 0.3s ease;
+            z-index: 50;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--glass-shadow);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
+        
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
 
-        /* Main Area */
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        /* Toolbar */
-        .toolbar {
-            height: 70px;
-            background: var(--panel-bg);
-            backdrop-filter: blur(10px);
-            border-bottom: 1px solid var(--border-color);
+        .logo-area {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 0 30px;
+            gap: 16px;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
         }
-
-        /* Split View Workspace */
-        .workspace {
-            flex: 1;
-            display: flex;
-            overflow: hidden;
-        }
-
-        .input-container {
-            flex: 1;
-            padding: 30px;
-            background: var(--bg-color);
-            display: flex;
-            flex-direction: column;
-        }
-
-        textarea {
-            flex: 1;
-            width: 100%;
-            background: var(--input-bg);
-            border: 1px solid var(--border-color);
+        
+        .logo-img {
+            width: 52px; height: 52px;
             border-radius: 16px;
-            padding: 25px;
-            font-family: 'Inter', sans-serif;
-            font-size: 1.1em;
-            line-height: 1.6;
-            color: var(--text-main);
-            resize: none;
-            box-shadow: var(--shadow);
+            object-fit: cover;
+            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
         }
-
-        .preview-container {
-            flex: 1;
-            background: #334155;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            overflow: auto;
-            padding: 40px;
-        }
-
-        canvas {
-            background: white;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            max-width: 100%;
-            height: auto;
-        }
-
-        /* UI Elements */
-        .logo-area { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-        .logo-img { width: 45px; height: 48px; border-radius: 10px; object-fit: cover; }
         
-        .btn {
-            padding: 12px 20px; border-radius: 12px; border: none; font-weight: 600; cursor: pointer;
-            transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
-        }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
-        .btn-secondary { background: var(--input-bg); color: var(--text-main); border: 1px solid var(--border-color); }
-
-        .control-group { display: flex; flex-direction: column; gap: 8px; }
-        .control-group label { font-size: 0.85em; font-weight: 600; color: var(--text-muted); }
+        .logo-text h2 { font-size: 1.4em; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(to right, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         
-        select, input[type=range] {
-            width: 100%; padding: 10px; border-radius: 10px; 
-            background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-main);
-        }
-
-        /* Profile & Auth */
+        /* AUTH SECTION */
         .auth-card {
-            background: linear-gradient(135deg, var(--primary), #818cf8);
-            padding: 20px; border-radius: 16px; color: white;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: var(--radius-lg);
+            padding: 15px;
+            color: white;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
         }
-        .profile-info { display: flex; align-items: center; gap: 12px; }
-        .avatar { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); display: grid; place-items: center; font-weight: bold; }
+        .profile-info { display: flex; align-items: center; gap: 10px; }
+        .avatar { width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 50%; display: grid; place-items: center; font-weight: bold; }
 
-        /* Mobile */
+        /* SETTINGS */
+        .setting-group { margin-bottom: 24px; }
+        .setting-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .setting-header label { font-size: 0.9em; font-weight: 600; color: var(--text-main); }
+        
+        .value-badge {
+            background: white;
+            color: var(--primary);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 0.75em;
+            font-weight: 700;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            min-width: 45px;
+            text-align: center;
+        }
+
+        /* MODERN SLIDER */
+        input[type="range"] {
+            -webkit-appearance: none; width: 100%; height: 6px;
+            background: rgba(0,0,0,0.1); border-radius: 99px; cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 22px; height: 22px;
+            background: white; border: 2px solid var(--primary); border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        /* BUTTONS & SELECTS */
+        .btn {
+            width: 100%; padding: 14px; border: none; border-radius: var(--radius-lg);
+            font-size: 0.95em; font-weight: 600; cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center; gap: 10px;
+            margin-bottom: 12px;
+        }
+        .btn-primary { background: linear-gradient(135deg, var(--primary), var(--accent)); color: white; box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3); }
+        .btn-secondary { background: white; color: var(--text-muted); border: 1px solid rgba(0,0,0,0.1); }
+        
+        .toolbar-select {
+            padding: 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.1);
+            background: rgba(255,255,255,0.8); width: 100%; margin-bottom: 10px;
+            font-family: inherit; color: var(--text-main);
+        }
+
+        /* EDITOR AREA */
+        .editor-container { display: flex; flex-direction: column; gap: 20px; }
+
+        .editor-header {
+            background: var(--glass-bg); padding: 20px 32px; border-radius: var(--radius-xl);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+        }
+
+        .toolbar {
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            padding: 10px 20px; border-radius: var(--radius-xl);
+            border: 1px solid var(--glass-border);
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 15px; position: sticky; top: 20px; z-index: 40;
+        }
+
+        .workspace {
+            background: white; border-radius: var(--radius-xl);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+            overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; 
+            border: 1px solid white; min-height: 700px;
+        }
+
+        .input-area { padding: 30px; background: #fafafa; border-right: 1px solid rgba(0,0,0,0.05); }
+        
+        textarea {
+            width: 100%; height: 100%; border: none; background: transparent;
+            font-family: 'Inter', sans-serif; font-size: 1.1em; line-height: 1.7;
+            color: var(--text-main); resize: none; padding: 0;
+        }
+        
+        .canvas-wrapper {
+            background: #334155;
+            background-image: radial-gradient(#475569 1px, transparent 1px);
+            background-size: 20px 20px;
+            padding: 40px; overflow: auto; 
+            display: flex; justify-content: center; align-items: flex-start;
+        }
+        
+        #mainCanvas {
+            background: white; width: 100%; max-width: 794px; height: auto;
+            box-shadow: 0 20px 50px -10px rgba(0,0,0,0.5); border-radius: 2px;
+        }
+
+        /* LOADING */
+        .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.9); backdrop-filter: blur(15px); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+        .progress-container { width: 300px; height: 4px; background: rgba(0,0,0,0.1); border-radius: 99px; overflow: hidden; margin-top: 20px; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+
+        /* RESPONSIVE */
         @media (max-width: 1024px) {
-            .sidebar { position: fixed; transform: translateX(-100%); height: 100%; }
+            .container { display: block; padding: 0; }
+            .sidebar { 
+                position: fixed; left: 0; top: 0; bottom: 0; 
+                transform: translateX(-100%); width: 300px; 
+                border-radius: 0; margin: 0;
+            }
             .sidebar.active { transform: translateX(0); }
-            .workspace { flex-direction: column; }
-            .input-container { height: 40%; }
-            .preview-container { height: 60%; }
+            .editor-container { padding: 10px; }
+            .workspace { grid-template-columns: 1fr; grid-template-rows: 300px 1fr; }
+            .input-area { border-right: none; border-bottom: 1px solid #eee; }
+            #mobileMenuBtn { display: block; }
         }
+        @media (min-width: 1025px) { #mobileMenuBtn { display: none; } }
 
-        /* Loading Screen */
-        .loader {
-            position: fixed; inset: 0; background: var(--bg-color); z-index: 1000;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-        }
     </style>
 </head>
 <body>
-
-    <!-- Loader -->
-    <div id="loadingScreen" class="loader">
-        <h1 style="font-size: 3em; margin-bottom: 20px;">✒️</h1>
-        <p id="loadStatus">Editör hazırlanıyor...</p>
-        <div style="width: 200px; height: 4px; background: #ddd; margin-top: 20px; border-radius: 2px; overflow: hidden;">
-            <div id="progressFill" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.3s;"></div>
-        </div>
+    <div id="loadingScreen" class="loading">
+        <h1 style="font-size: 3em; color: var(--primary);">✍️</h1>
+        <div class="progress-container"><div id="progressFill" class="progress-fill"></div></div>
+        <p style="margin-top: 20px; color: var(--text-muted);">El yazısı motoru yükleniyor...</p>
     </div>
 
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-        <div class="logo-area">
-            <img src="/static/logo.jpg" class="logo-img" alt="Logo" onerror="this.style.display='none'">
-            <h2 style="font-weight: 800; letter-spacing: -1px;">El Yazısı Pro</h2>
-        </div>
-
-        <!-- Auth Section -->
-        <div id="authBox">
-            <button id="loginBtn" class="btn btn-primary">
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/action/google.svg" width="18"> Google ile Giriş Yap
-            </button>
-        </div>
-        <div id="profileBox" class="auth-card" style="display: none;">
-            <div class="profile-info">
-                <div class="avatar" id="userInitial">U</div>
-                <div style="flex:1; overflow:hidden;">
-                    <div id="userName" style="font-weight:700; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Kullanıcı</div>
-                    <small id="userEmail" style="opacity:0.8;">...</small>
+    <div class="container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar" id="sidebar">
+            <div class="logo-area">
+                <!-- LOGO BURADA -->
+                <img src="/static/logo.jpg" class="logo-img" onerror="this.style.display='none'">
+                <div class="logo-text"><h2>Pro Yazı</h2><span style="color:var(--text-muted); font-size:0.8em;">v3.0 Ultra</span></div>
+                <button id="closeSidebar" class="btn-secondary" style="width: auto; margin-left: auto; display: none; padding: 5px 10px;">✕</button>
+            </div>
+            
+            <!-- AUTH & PROFILE -->
+            <div id="authSection">
+                <button id="googleLoginBtn" class="btn btn-primary" style="background:#fff; color:#333; border:1px solid #ddd;">
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/action/google.svg" width="18" style="margin-right:10px;"> Google ile Giriş
+                </button>
+            </div>
+            <div id="userProfile" class="auth-card" style="display: none;">
+                <div class="profile-info">
+                    <div class="avatar" id="userAvatar">U</div>
+                    <div style="flex:1; overflow:hidden;">
+                        <div id="userName" style="font-weight:700;">Kullanıcı</div>
+                        <small id="userEmail" style="opacity:0.8;">...</small>
+                    </div>
+                    <button id="logoutBtn" style="background:none; border:none; cursor:pointer; color:white; font-size:1.2em;">🚪</button>
                 </div>
-                <button id="logoutBtn" style="background:none; border:none; cursor:pointer; color:white; font-size:1.2em;">🚪</button>
             </div>
-        </div>
 
-        <button id="toggleTheme" class="btn btn-secondary">🌓 Tema Değiştir</button>
-
-        <hr style="border:0; border-top:1px solid var(--border-color);">
-
-        <div class="control-group">
-            <label>🔤 Yazı Tipi Seçimi</label>
-            <select id="fontSelector"></select>
-            <button id="applyFontBtn" class="btn btn-primary" style="margin-top: 5px;">Fontu Uygula</button>
-        </div>
-
-        <div class="control-group"><label>Yazı Boyutu</label><input type="range" id="scaleSlider" min="30" max="250" value="140"></div>
-        <div class="control-group"><label>Satır Aralığı</label><input type="range" id="lineHeightSlider" min="40" max="450" value="220"></div>
-        <div class="control-group"><label>Harf Aralığı</label><input type="range" id="letterSpacingSlider" min="-10" max="30" value="3"></div>
-        <div class="control-group"><label>Kelime Boşluğu</label><input type="range" id="wordSlider" min="10" max="150" value="55"></div>
-        <div class="control-group"><label>Doğallık (Jitter)</label><input type="range" id="jitterSlider" min="0" max="20" value="5"></div>
-
-        <button id="pdfBtn" class="btn btn-primary" style="margin-top: 20px; background: #10b981;">📄 PDF Olarak İndir</button>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="main-content">
-        <header class="toolbar">
-            <button id="menuBtn" class="btn btn-secondary" style="width: auto;">☰ Menü</button>
-            <div style="display: flex; gap: 10px;">
-                <select id="paperSelect" class="toolbar-select">
-                    <option value="cizgili">📝 Çizgili</option>
-                    <option value="kareli">▦ Kareli</option>
-                    <option value="duz">⬜ Düz Kağıt</option>
+            <!-- FONT SEÇİCİ -->
+            <div class="setting-group" style="background: rgba(255,255,255,0.5); padding: 15px; border-radius: 12px; margin-top: 10px;">
+                <div class="setting-header"><label>🔤 Yazı Tipi</label></div>
+                <select id="fontSelector" class="toolbar-select">
+                    <option value="" disabled selected>Yükleniyor...</option>
                 </select>
-                <select id="colorSelect" class="toolbar-select">
-                    <option value="tukenmez">⚫ Siyah</option>
-                    <option value="bic_mavi">🔵 Mavi</option>
-                    <option value="kirmizi">🔴 Kırmızı</option>
-                </select>
+                <button id="refreshFontBtn" class="btn btn-primary" style="padding: 8px; font-size: 0.9em; margin-bottom: 0;">🔄 Fontu Uygula</button>
             </div>
-        </header>
 
-        <div class="workspace">
-            <section class="input-container">
-                <textarea id="metinAlani" placeholder="Metninizi buraya yazın, sağ tarafta el yazınıza dönüşsün..."></textarea>
-            </section>
-            <section class="preview-container">
-                <canvas id="mainCanvas"></canvas>
-            </section>
-        </div>
-    </main>
+            <!-- AYARLAR -->
+            <div class="setting-group">
+                <div class="setting-header"><label>✏️ Yazı Boyutu</label><span class="value-badge" id="scaleValue">140px</span></div>
+                <input type="range" id="scaleSlider" min="30" max="250" value="140" step="10">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>📏 Satır Aralığı</label><span class="value-badge" id="lineHeightValue">220px</span></div>
+                <input type="range" id="lineHeightSlider" min="40" max="400" value="220" step="10">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>🔠 Harf Aralığı</label><span class="value-badge" id="letterSpacingValue">3px</span></div>
+                <input type="range" id="letterSpacingSlider" min="-5" max="20" value="3" step="1">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>〰️ Doğallık</label><span class="value-badge" id="jitterValue">5</span></div>
+                <input type="range" id="jitterSlider" min="0" max="20" value="5" step="1">
+            </div>
+
+            <button id="toggleTheme" class="btn btn-secondary" style="margin-top: 20px;">🌙 Gece Modu</button>
+            <button id="pdfBtn" class="btn btn-primary" style="margin-top: 10px;">📄 PDF İndir</button>
+        </aside>
+
+        <!-- EDITOR AREA -->
+        <main class="editor-container">
+            <header class="editor-header" style="padding: 15px 20px;">
+                <div style="display:flex; align-items:center; gap:15px;">
+                    <button id="mobileMenuBtn" class="btn-secondary" style="width: auto; padding: 8px 12px; margin:0;">☰</button>
+                    <h1 style="font-size:1.2em; font-weight:700;">Belge Önizleme</h1>
+                </div>
+                <div>
+                    <select id="paperSelect" class="toolbar-select" style="width:auto; display:inline-block; margin:0;">
+                        <option value="cizgili">📝 Çizgili</option>
+                        <option value="kareli">▦ Kareli</option>
+                        <option value="duz">⬜ Düz</option>
+                    </select>
+                </div>
+            </header>
+
+            <div class="workspace">
+                <div class="input-area">
+                    <textarea id="metinAlani" placeholder="Buraya yazın... Yazdıklarınız sağ tarafta el yazısına dönüşecek."></textarea>
+                </div>
+                <div class="canvas-wrapper">
+                    <canvas id="mainCanvas"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
 
     <!-- Scripts -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="/static/js/engine.js"></script>
-
     <script>
-        // --- FIREBASE CONFIG ---
+        // --- 1. FIREBASE CONFIG ---
         const firebaseConfig = {
             apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
             authDomain: "elyazisiapp.firebaseapp.com",
@@ -270,96 +342,63 @@
             appId: "1:823659862878:web:1615116c77d98f7f848dcf",
             measurementId: "G-DYW7TZ01T9"
         };
-        firebase.initializeApp(firebaseConfig);
+        try { firebase.initializeApp(firebaseConfig); } catch(e) {}
 
         let editor = null;
-        let currentUser = null;
         const metinAlani = document.getElementById('metinAlani');
 
-        // --- INIT ---
+        // --- 2. INIT ---
         async function init() {
             const loading = document.getElementById('loadingScreen');
             const progress = document.getElementById('progressFill');
             
-            // GÜVENLİK: 3.5 saniye sonra ne olursa olsun aç
-            setTimeout(() => { if(loading.style.display !== 'none') hideLoader(); }, 3500);
+            setTimeout(() => { if(loading.style.display!=='none') loading.style.display='none'; }, 3500);
 
             try {
                 editor = new FinalHandwritingEditor('mainCanvas');
                 await editor.loadAssets(p => progress.style.width = (p*100)+'%');
-                hideLoader();
-            } catch (e) {
-                console.error("Yükleme hatası:", e);
-                hideLoader();
-            }
+                loading.style.display = 'none';
+                
+                const saved = localStorage.getItem('saved_text');
+                if(saved) { metinAlani.value = saved; editor.setText(saved); }
+            } catch(e) { loading.style.display = 'none'; }
         }
 
-        function hideLoader() {
-            document.getElementById('loadingScreen').style.display = 'none';
-            // Kayıtlı metni yükle
-            const saved = localStorage.getItem('saved_text');
-            if(saved) {
-                metinAlani.value = saved;
-                editor.setText(saved);
-            }
-        }
-
-        // --- EDITOR EVENTS (MODERN FIX) ---
+        // --- 3. EDITOR LISTENERS ---
         metinAlani.addEventListener('input', () => {
             editor.setText(metinAlani.value);
             localStorage.setItem('saved_text', metinAlani.value);
         });
-
         ['click', 'keyup', 'focus'].forEach(evt => {
-            metinAlani.addEventListener(evt, () => {
-                editor.setCursorIndex(metinAlani.selectionStart);
-            });
+            metinAlani.addEventListener(evt, () => editor.setCursorIndex(metinAlani.selectionStart));
         });
 
-        // --- AUTH LOGIC ---
+        // --- 4. AUTH & FONTS ---
         firebase.auth().onAuthStateChanged(user => {
-            if (user) {
-                currentUser = user;
-                document.getElementById('authBox').style.display = 'none';
-                document.getElementById('profileBox').style.display = 'block';
+            if(user) {
+                document.getElementById('authSection').style.display = 'none';
+                document.getElementById('userProfile').style.display = 'block';
                 document.getElementById('userName').textContent = user.displayName;
                 document.getElementById('userEmail').textContent = user.email;
-                document.getElementById('userInitial').textContent = user.displayName[0];
+                document.getElementById('userAvatar').textContent = user.displayName[0];
                 loadFontList(user.uid);
             } else {
-                document.getElementById('authBox').style.display = 'block';
-                document.getElementById('profileBox').style.display = 'none';
+                document.getElementById('authSection').style.display = 'block';
+                document.getElementById('userProfile').style.display = 'none';
                 loadFontList('');
             }
         });
 
-        document.getElementById('loginBtn').onclick = () => firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+        document.getElementById('googleLoginBtn').onclick = () => firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
         document.getElementById('logoutBtn').onclick = () => firebase.auth().signOut();
 
-        // --- CONTROLS ---
-        const bind = (id, method) => document.getElementById(id).oninput = e => editor[method](parseInt(e.target.value));
-        bind('scaleSlider', 'setLetterScale');
-        bind('lineHeightSlider', 'setLineHeight');
-        bind('wordSlider', 'setWordSpacing');
-        bind('letterSpacingSlider', 'setLetterSpacing');
-        bind('jitterSlider', 'setJitter');
-
-        document.getElementById('paperSelect').onchange = e => editor.setPaperType(e.target.value);
-        document.getElementById('colorSelect').onchange = e => editor.setInkColor(e.target.value);
-        document.getElementById('pdfBtn').onclick = () => editor.exportPDF();
-        document.getElementById('toggleTheme').onclick = () => {
-            const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', theme);
-        };
-
-        // --- FONT LIST ---
         async function loadFontList(uid) {
             const select = document.getElementById('fontSelector');
             const currentFont = new URLSearchParams(window.location.search).get('font_id');
             try {
                 const res = await fetch(`/api/list_fonts?user_id=${uid}`);
                 const data = await res.json();
-                select.innerHTML = '<option value="">Varsayılan (Sistem)</option>';
+                select.innerHTML = '<option value="">Varsayılan</option>';
                 if (data.success && data.fonts) {
                     const myG = document.createElement('optgroup'); myG.label = "📂 Benim Fontlarım";
                     const pubG = document.createElement('optgroup'); pubG.label = "🌎 Paylaşılanlar";
@@ -373,19 +412,37 @@
             } catch(e) {}
         }
 
-        document.getElementById('applyFontBtn').onclick = () => {
-            const url = new URL(window.location);
+        document.getElementById('refreshFontBtn').onclick = () => {
             const val = document.getElementById('fontSelector').value;
+            const url = new URL(window.location);
             if(val) url.searchParams.set('font_id', val); else url.searchParams.delete('font_id');
             window.location.href = url.toString();
         };
 
-        // Mobile Menu
-        document.getElementById('menuBtn').onclick = () => document.getElementById('sidebar').classList.add('active');
-        document.body.onclick = e => {
-            if(window.innerWidth <= 1024 && !document.getElementById('sidebar').contains(e.target) && e.target.id !== 'menuBtn')
-                document.getElementById('sidebar').classList.remove('active');
+        // --- 5. CONTROLS ---
+        const bind = (id, method, labelId, unit='') => {
+            document.getElementById(id).oninput = e => {
+                editor[method](parseInt(e.target.value));
+                if(labelId) document.getElementById(labelId).textContent = e.target.value + unit;
+            };
         };
+        bind('scaleSlider', 'setLetterScale', 'scaleValue', 'px');
+        bind('lineHeightSlider', 'setLineHeight', 'lineHeightValue', 'px');
+        bind('letterSpacingSlider', 'setLetterSpacing', 'letterSpacingValue', 'px');
+        bind('jitterSlider', 'setJitter', 'jitterValue', '');
+
+        document.getElementById('paperSelect').onchange = e => editor.setPaperType(e.target.value);
+        document.getElementById('pdfBtn').onclick = () => editor.exportPDF();
+        
+        document.getElementById('toggleTheme').onclick = () => {
+            const current = document.documentElement.getAttribute('data-theme');
+            document.documentElement.setAttribute('data-theme', current==='dark'?'light':'dark');
+        };
+
+        // Responsive Menu
+        const sb = document.getElementById('sidebar');
+        document.getElementById('mobileMenuBtn').onclick = () => sb.classList.add('active');
+        document.getElementById('closeSidebar').onclick = () => sb.classList.remove('active');
 
         window.onload = init;
     </script>
