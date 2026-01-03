@@ -422,12 +422,12 @@ class FinalHandwritingEditor {
                 typeYOffset = this.config.letterScale * 0.15;
             } else if (/[.,:;]/.test(char)) {
                 // Noktalama (Alt): Çok küçük + Tabana yapışık
-                typeScale = 0.35;
-                typeYOffset = this.config.letterScale * 0.35;
+                typeScale = 0.25;
+                typeYOffset = this.config.letterScale * 0.40;
             } else if (/['"`^]/.test(char)) {
                 // Noktalama (Üst): Küçük + Tavana yakın
-                typeScale = 0.35;
-                typeYOffset = -this.config.letterScale * 0.30;
+                typeScale = 0.25;
+                typeYOffset = -this.config.letterScale * 0.35;
             } else if (/[-+*=/]/.test(char)) {
                 // Matematiksel / Orta
                 typeScale = 0.50;
@@ -580,6 +580,7 @@ class FinalHandwritingEditor {
     setMarginTop(v) { this.config.marginTop = v; this.render(); }
     setLineHeight(v) { this.config.lineHeight = v; this.render(); }
     setLetterScale(v) { this.config.letterScale = v; this.render(); }
+    setLetterSpacing(v) { this.config.letterSpacing = v; this.render(); }
     setBaselineOffset(v) { this.config.baselineOffset = v; this.render(); }
     setWordSpacing(v) { this.config.wordSpacing = v; this.render(); }
     setBoldness(v) { this.config.boldness = v; this.render(); }

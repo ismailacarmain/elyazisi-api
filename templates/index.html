@@ -382,6 +382,10 @@
                 <input type="range" id="wordSlider" min="20" max="120" value="55" step="5">
             </div>
             <div class="setting-group">
+                <div class="setting-header"><label>🔠 Harf Aralığı</label><span class="value-badge" id="letterSpacingValue">3px</span></div>
+                <input type="range" id="letterSpacingSlider" min="-5" max="20" value="3" step="1">
+            </div>
+            <div class="setting-group">
                 <div class="setting-header"><label>🎯 Taban Ayarı</label><span class="value-badge" id="baselineValue">+10px</span></div>
                 <input type="range" id="baselineSlider" min="-50" max="50" value="10" step="1">
             </div>
@@ -614,7 +618,6 @@
             
             bindSlider('marginSlider', 'marginValue', 'setMarginTop', 'px');
             bindSlider('lineHeightSlider', 'lineHeightValue', 'setLineHeight', 'px');
-            // bindSlider('scaleSlider', 'scaleValue', 'setLetterScale', 'px'); // REMOVED -> Custom logic below
             
             // YAZI BOYUTU DEĞİŞİNCE SATIR ARALIĞINI OTOMATİK AYARLA (WORD GİBİ)
             document.getElementById('scaleSlider').addEventListener('input', (e) => {
@@ -622,12 +625,10 @@
                 document.getElementById('scaleValue').textContent = fontSize + 'px';
                 editor.setLetterScale(fontSize);
                 
-                // Otomatik Satır Aralığı (x1.6)
                 const newLineHeight = Math.floor(fontSize * 1.6);
                 const lhSlider = document.getElementById('lineHeightSlider');
                 const lhLabel = document.getElementById('lineHeightValue');
                 
-                // Slider sınırlarını kontrol et
                 if (newLineHeight >= lhSlider.min && newLineHeight <= lhSlider.max) {
                     lhSlider.value = newLineHeight;
                     lhLabel.textContent = newLineHeight + 'px';
@@ -637,6 +638,7 @@
 
             bindSlider('boldSlider', 'boldValue', 'setBoldness');
             bindSlider('wordSlider', 'wordValue', 'setWordSpacing', 'px');
+            bindSlider('letterSpacingSlider', 'letterSpacingValue', 'setLetterSpacing', 'px');
             bindSlider('baselineSlider', 'baselineValue', 'setBaselineOffset', 'px');
             bindSlider('jitterSlider', 'jitterValue', 'setJitter');
             bindSlider('slopeSlider', 'slopeValue', 'setLineSlope');
