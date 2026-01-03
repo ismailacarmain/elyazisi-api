@@ -352,6 +352,15 @@
                 <div class="logo-text"><h2>Pro Yazı</h2><span style="color:var(--text-muted); font-size:0.8em;">v3.0 Ultra</span></div>
             </div>
             
+            <!-- FONT SEÇİCİ -->
+            <div class="setting-group" style="background: white; padding: 15px; border-radius: 12px; border: 1px solid rgba(0,0,0,0.1);">
+                <div class="setting-header"><label>🔤 Yazı Tipi</label></div>
+                <select id="fontSelector" class="toolbar-select" style="width: 100%; margin-bottom: 10px;">
+                    <option value="" disabled selected>Yükleniyor...</option>
+                </select>
+                <button id="refreshFontBtn" class="btn btn-secondary" style="font-size: 0.8em; padding: 8px;">🔄 Fontu Uygula</button>
+            </div>
+
             <div class="setting-group">
                 <div class="setting-header"><label>📍 Üst Boşluk</label><span class="value-badge" id="marginValue">250px</span></div>
                 <input type="range" id="marginSlider" min="0" max="500" value="250" step="10">
@@ -695,6 +704,51 @@
         }
         
         window.addEventListener('load', init);
+
+        // FONT YÖNETİMİ
+        async function loadFontList() {
+            const fontSelect = document.getElementById('fontSelector');
+            const urlParams = new URLSearchParams(window.location.search);
+            const currentFontId = urlParams.get('font_id');
+            const userId = urlParams.get('user_id') || '';
+
+            try {
+                const res = await fetch(`/api/list_fonts?user_id=${userId}`);
+                const data = await res.json();
+                
+                fontSelect.innerHTML = '<option value="">Varsayılan Font</option>';
+                
+                if (data.success && data.fonts) {
+                    data.fonts.forEach(font => {
+                        const option = document.createElement('option');
+                        option.value = font.id;
+                        option.textContent = `${font.name} (${font.type === 'public' ? 'Genel' : 'Özel'})`;
+                        if (font.id === currentFontId) option.selected = true;
+                        fontSelect.appendChild(option);
+                    });
+                }
+            } catch (e) {
+                console.error("Font listesi çekilemedi", e);
+                fontSelect.innerHTML = '<option>Hata oluştu</option>';
+            }
+
+            // Butona tıklandığında
+            document.getElementById('refreshFontBtn').addEventListener('click', () => {
+                const selectedFont = fontSelect.value;
+                if (selectedFont) {
+                    // URL'i güncelle ve yenile
+                    urlParams.set('font_id', selectedFont);
+                    window.location.search = urlParams.toString();
+                } else {
+                    // Varsayılan için parametreyi sil
+                    urlParams.delete('font_id');
+                    window.location.search = urlParams.toString();
+                }
+            });
+        }
+        
+        // Başlangıçta listeyi çek
+        loadFontList();
     </script>
 </body>
 </html>

@@ -66,36 +66,53 @@ class FinalHandwritingEditor {
     
     async loadAssets(progressCallback) {
         try {
-            const response = await fetch('/api/get_assets');
+            // URL'den font_id ve user_id bilgilerini al
+            const urlParams = new URLSearchParams(window.location.search);
+            const fontId = urlParams.get('font_id') || '';
+            const userId = urlParams.get('user_id') || '';
+            
+            const apiUrl = `/api/get_assets?font_id=${fontId}&user_id=${userId}`;
+            const response = await fetch(apiUrl);
             const data = await response.json();
             if (!data.success) throw new Error('Asset yüklenemedi');
             
             const assetMap = data.assets;
-            const allFiles = Object.values(assetMap).flat();
-            const total = allFiles.length;
+            const source = data.source; // 'firebase' veya 'local'
+            const allKeys = Object.keys(assetMap);
+            const total = allKeys.length;
             let loaded = 0;
             
             for (const [key, files] of Object.entries(assetMap)) {
                 this.assets[key] = [];
-                for (const file of files) {
+                for (const fileData of files) {
                     try {
-                        const img = await this.loadImage(`/static/harfler/${file}`);
+                        let src = "";
+                        if (source === 'firebase') {
+                            // Firebase'den direkt base64 geliyorsa
+                            src = fileData.startsWith('data:image') ? fileData : `data:image/png;base64,${fileData}`;
+                        } else {
+                            // Yerel klasörden dosya adı geliyorsa
+                            src = `/static/harfler/${fileData}`;
+                        }
+                        
+                        const img = await this.loadImage(src);
                         this.assets[key].push(img);
-                        loaded++;
-                        if (progressCallback) progressCallback(loaded / total);
                     } catch (err) {
-                        console.error(`Hata: ${file}`);
+                        console.error(`Hata: ${key} yüklenemedi`);
                     }
                 }
+                loaded++;
+                if (progressCallback) progressCallback(loaded / total);
             }
             
             this.assetsLoaded = true;
             this.startCursorBlink();
             this.render();
-            console.log(`✅ ${loaded} harf yüklendi - Yüksek çözünürlük: ${this.WIDTH}x${this.HEIGHT}`);
+            console.log(`✅ ${loaded} harf grubu yüklendi (${source})`);
             return true;
         } catch (error) {
             console.error('Yükleme hatası:', error);
+            this.assetsLoaded = true; // Hata olsa da sistemi aç
             return false;
         }
     }

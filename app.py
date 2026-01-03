@@ -108,6 +108,45 @@ def get_assets():
     
     return jsonify({"error": "Harf bulunamadı"}), 404
 
+@app.route('/api/list_fonts')
+def list_fonts():
+    """Kullanıcının erişebileceği tüm fontları listeler"""
+    user_id = request.args.get('user_id')
+    fonts = []
+    
+    database = init_firebase()
+    if not database:
+        return jsonify({"success": False, "error": "Veritabanı bağlantısı yok"})
+
+    try:
+        # 1. Genel Fontlar
+        public_fonts = database.collection('fonts').stream()
+        for doc in public_fonts:
+            d = doc.to_dict()
+            fonts.append({
+                'id': d.get('font_id', doc.id),
+                'name': d.get('font_name', 'Adsız Font'),
+                'type': 'public'
+            })
+            
+        # 2. Kullanıcının Özel Fontları
+        if user_id:
+            private_fonts = database.collection('users').document(user_id).collection('fonts').stream()
+            for doc in private_fonts:
+                d = doc.to_dict()
+                # ID çakışmasını önle (eğer hem public hem private varsa)
+                fid = d.get('font_id', doc.id)
+                if not any(f['id'] == fid for f in fonts):
+                    fonts.append({
+                        'id': fid,
+                        'name': d.get('font_name', 'Özel Font'),
+                        'type': 'private'
+                    })
+                    
+        return jsonify({"success": True, "fonts": fonts})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
 # --- ESKİ API ROTALARI (BOZMADIK!) ---
 
 @app.route('/process_single', methods=['POST'])
