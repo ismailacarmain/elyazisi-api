@@ -1,450 +1,790 @@
 <!DOCTYPE html>
-<html lang="tr" data-theme="light">
+<html lang="tr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>El Yazısı Editörü Pro</title>
-    <!-- Modern Font: Inter -->
+    <title>El Yazısı Editörü</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <style>
         :root {
-            --primary: #6366f1;       /* Indigo 500 */
-            --primary-hover: #4f46e5; /* Indigo 600 */
-            --accent: #8b5cf6;        /* Violet 500 */
-            --glass-bg: rgba(255, 255, 255, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.5);
-            --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
-            --text-main: #1e293b;
-            --text-muted: #64748b;
-            --radius-xl: 24px;
-            --radius-lg: 16px;
-            --radius-md: 12px;
-        }
-
-        [data-theme="dark"] {
-            --primary: #818cf8;
-            --primary-hover: #6366f1;
-            --glass-bg: rgba(30, 41, 59, 0.8);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            --text-main: #f1f5f9;
+            --primary: #4f46e5;
+            --primary-light: #818cf8;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --text: #f8fafc;
             --text-muted: #94a3b8;
+            --border: #334155;
+            --sidebar-width: 320px;
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f3f4f6;
-            color: var(--text-main);
+            background: var(--bg-dark);
+            color: var(--text);
             min-height: 100vh;
             overflow-x: hidden;
-            line-height: 1.5;
-            /* Mesh Gradient Background (Orijinal Tasarım) */
-            background-image: 
-                radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
-                radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
-                radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
-            background: linear-gradient(-45deg, #e0e7ff, #f3e8ff, #eef2ff, #faf5ff);
-            background-size: 400% 400%;
-            animation: gradientBG 15s ease infinite;
         }
 
-        @keyframes gradientBG {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-
-        /* CONTAINER - Modern Floating Layout */
-        .container {
-            max-width: 1800px;
-            margin: 0 auto;
-            padding: 20px;
-            display: grid;
-            grid-template-columns: 380px 1fr;
-            gap: 30px;
-            min-height: 100vh;
-            align-items: start;
-        }
-
-        /* SIDEBAR - Floating Dock Style */
-        .sidebar {
-            position: sticky;
-            top: 20px;
-            padding: 30px;
-            max-height: calc(100vh - 40px);
-            overflow-y: auto;
-            z-index: 50;
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--glass-shadow);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        /* ==================== LOGIN SCREEN ==================== */
+        .login-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--bg-dark);
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         
-        .sidebar::-webkit-scrollbar { width: 4px; }
-        .sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .login-card {
+            background: var(--bg-card);
+            padding: 48px 40px;
+            border-radius: 24px;
+            text-align: center;
+            width: 90%;
+            max-width: 400px;
+            border: 1px solid var(--border);
+        }
+        
+        .login-logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
+            border-radius: 20px;
+            margin: 0 auto 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+        
+        .login-card h1 {
+            font-size: 1.75rem;
+            margin-bottom: 8px;
+        }
+        
+        .login-card p {
+            color: var(--text-muted);
+            margin-bottom: 32px;
+        }
+        
+        .google-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background: white;
+            color: #1f2937;
+            width: 100%;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .google-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(79, 70, 229, 0.3);
+        }
+        
+        .google-btn svg { width: 20px; height: 20px; }
 
-        .logo-area {
+        /* ==================== MAIN LAYOUT ==================== */
+        .app-container {
+            display: none;
+            min-height: 100vh;
+        }
+        
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 100;
+        }
+        
+        .header-left {
             display: flex;
             align-items: center;
             gap: 16px;
-            margin-bottom: 20px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
         }
         
-        .logo-img {
-            width: 52px; height: 52px;
-            border-radius: 16px;
-            object-fit: cover;
-            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
-        }
-        
-        .logo-text h2 { font-size: 1.4em; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(to right, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        
-        /* AUTH SECTION */
-        .auth-card {
-            background: linear-gradient(135deg, var(--primary), var(--accent));
-            border-radius: var(--radius-lg);
-            padding: 15px;
-            color: white;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
-        }
-        .profile-info { display: flex; align-items: center; gap: 10px; }
-        .avatar { width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 50%; display: grid; place-items: center; font-weight: bold; }
-
-        /* SETTINGS */
-        .setting-group { margin-bottom: 24px; }
-        .setting-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .setting-header label { font-size: 0.9em; font-weight: 600; color: var(--text-main); }
-        
-        .value-badge {
-            background: white;
-            color: var(--primary);
-            padding: 4px 10px;
+        .menu-btn {
+            background: none;
+            border: none;
+            color: var(--text);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 8px;
             border-radius: 8px;
-            font-size: 0.75em;
+            transition: background 0.2s;
+        }
+        
+        .menu-btn:hover { background: var(--border); }
+        
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-weight: 700;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            min-width: 45px;
-            text-align: center;
+            font-size: 14px;
         }
-
-        /* MODERN SLIDER */
-        input[type="range"] {
-            -webkit-appearance: none; width: 100%; height: 6px;
-            background: rgba(0,0,0,0.1); border-radius: 99px; cursor: pointer;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none; width: 22px; height: 22px;
-            background: white; border: 2px solid var(--primary); border-radius: 50%;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
-
-        /* BUTTONS & SELECTS */
-        .btn {
-            width: 100%; padding: 14px; border: none; border-radius: var(--radius-lg);
-            font-size: 0.95em; font-weight: 600; cursor: pointer; transition: all 0.2s;
-            display: flex; align-items: center; justify-content: center; gap: 10px;
-            margin-bottom: 12px;
-        }
-        .btn-primary { background: linear-gradient(135deg, var(--primary), var(--accent)); color: white; box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3); }
-        .btn-secondary { background: white; color: var(--text-muted); border: 1px solid rgba(0,0,0,0.1); }
         
-        .toolbar-select {
-            padding: 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.1);
-            background: rgba(255,255,255,0.8); width: 100%; margin-bottom: 10px;
-            font-family: inherit; color: var(--text-main);
+        .user-name {
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .logout-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 8px;
+            font-size: 18px;
+            transition: color 0.2s;
+        }
+        
+        .logout-btn:hover { color: #ef4444; }
+
+        /* ==================== SIDEBAR ==================== */
+        .sidebar-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 200;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        
+        .sidebar-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: var(--sidebar-width);
+            height: 100%;
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            z-index: 300;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .sidebar.active { transform: translateX(0); }
+        
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .sidebar-header h2 {
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 4px;
+        }
+        
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .setting-group {
+            margin-bottom: 24px;
+        }
+        
+        .setting-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        
+        .setting-group select {
+            width: 100%;
+            padding: 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text);
+            font-size: 14px;
+            cursor: pointer;
+        }
+        
+        .setting-group input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: var(--bg-dark);
+            border-radius: 3px;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+        
+        .setting-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        .range-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .range-value {
+            background: var(--primary);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .sidebar-footer {
+            padding: 20px;
+            border-top: 1px solid var(--border);
+        }
+        
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.2s;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-light);
+            transform: translateY(-1px);
         }
 
-        /* EDITOR AREA */
-        .editor-container { display: flex; flex-direction: column; gap: 20px; }
-
-        .editor-header {
-            background: var(--glass-bg); padding: 20px 32px; border-radius: var(--radius-xl);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--glass-border);
-            backdrop-filter: blur(20px);
-        }
-
-        .toolbar {
-            background: var(--glass-bg); backdrop-filter: blur(20px);
-            padding: 10px 20px; border-radius: var(--radius-xl);
-            border: 1px solid var(--glass-border);
-            display: flex; justify-content: space-between; align-items: center;
-            gap: 15px; position: sticky; top: 20px; z-index: 40;
-        }
-
+        /* ==================== WORKSPACE ==================== */
         .workspace {
-            background: white; border-radius: var(--radius-xl);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
-            overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; 
-            border: 1px solid white; min-height: 700px;
-        }
-
-        .input-area { padding: 30px; background: #fafafa; border-right: 1px solid rgba(0,0,0,0.05); }
-        
-        textarea {
-            width: 100%; height: 100%; border: none; background: transparent;
-            font-family: 'Inter', sans-serif; font-size: 1.1em; line-height: 1.7;
-            color: var(--text-main); resize: none; padding: 0;
+            padding-top: 60px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
         
-        .canvas-wrapper {
-            background: #334155;
-            background-image: radial-gradient(#475569 1px, transparent 1px);
+        /* Toolbar */
+        .toolbar {
+            background: var(--bg-card);
+            padding: 12px 20px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .toolbar select {
+            padding: 10px 16px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            cursor: pointer;
+        }
+        
+        /* Editor Area */
+        .editor-wrapper {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            min-height: calc(100vh - 120px);
+        }
+        
+        .input-panel {
+            background: var(--bg-card);
+            padding: 24px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .input-panel h3 {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+        
+        .input-panel textarea {
+            flex: 1;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            color: var(--text);
+            font-size: 16px;
+            line-height: 1.7;
+            resize: none;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .input-panel textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .input-panel textarea::placeholder {
+            color: var(--text-muted);
+        }
+        
+        .canvas-panel {
+            background: #1a1a2e;
+            padding: 24px;
+            overflow: auto;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            background-image: 
+                radial-gradient(circle, #2a2a4a 1px, transparent 1px);
             background-size: 20px 20px;
-            padding: 40px; overflow: auto; 
-            display: flex; justify-content: center; align-items: flex-start;
         }
         
         #mainCanvas {
-            background: white; width: 100%; max-width: 794px; height: auto;
-            box-shadow: 0 20px 50px -10px rgba(0,0,0,0.5); border-radius: 2px;
+            background: white;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+            max-width: 100%;
         }
 
-        /* LOADING */
-        .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.9); backdrop-filter: blur(15px); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
-        .progress-container { width: 300px; height: 4px; background: rgba(0,0,0,0.1); border-radius: 99px; overflow: hidden; margin-top: 20px; }
-        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
-
-        /* RESPONSIVE */
-        @media (max-width: 1024px) {
-            .container { display: block; padding: 0; }
-            .sidebar { 
-                position: fixed; left: 0; top: 0; bottom: 0; 
-                transform: translateX(-100%); width: 300px; 
-                border-radius: 0; margin: 0;
+        /* ==================== RESPONSIVE ==================== */
+        @media (max-width: 900px) {
+            .editor-wrapper {
+                grid-template-columns: 1fr;
             }
-            .sidebar.active { transform: translateX(0); }
-            .editor-container { padding: 10px; }
-            .workspace { grid-template-columns: 1fr; grid-template-rows: 300px 1fr; }
-            .input-area { border-right: none; border-bottom: 1px solid #eee; }
-            #mobileMenuBtn { display: block; }
+            
+            .input-panel {
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                min-height: 200px;
+            }
+            
+            .canvas-panel {
+                min-height: 400px;
+            }
+            
+            .user-name { display: none; }
         }
-        @media (min-width: 1025px) { #mobileMenuBtn { display: none; } }
+        
+        @media (max-width: 600px) {
+            .header h1 { display: none; }
+            
+            .toolbar {
+                padding: 10px;
+            }
+            
+            .toolbar select {
+                flex: 1;
+                min-width: 0;
+            }
+            
+            .input-panel, .canvas-panel {
+                padding: 16px;
+            }
+        }
 
+        /* ==================== DESKTOP SIDEBAR ==================== */
+        @media (min-width: 1200px) {
+            .sidebar {
+                transform: translateX(0);
+                top: 60px;
+                height: calc(100% - 60px);
+            }
+            
+            .sidebar-overlay { display: none; }
+            
+            .close-btn { display: none; }
+            
+            .workspace {
+                margin-left: var(--sidebar-width);
+            }
+            
+            .sidebar.collapsed {
+                transform: translateX(-100%);
+            }
+            
+            .workspace.expanded {
+                margin-left: 0;
+            }
+        }
     </style>
 </head>
 <body>
-    <div id="loadingScreen" class="loading">
-        <h1 style="font-size: 3em; color: var(--primary);">✍️</h1>
-        <div class="progress-container"><div id="progressFill" class="progress-fill"></div></div>
-        <p style="margin-top: 20px; color: var(--text-muted);">El yazısı motoru yükleniyor...</p>
+
+    <!-- ==================== LOGIN SCREEN ==================== -->
+    <div id="loginOverlay" class="login-overlay">
+        <div class="login-card">
+            <div class="login-logo">✍️</div>
+            <h1>El Yazısı Editörü</h1>
+            <p>Kendi el yazınızla dijital belgeler oluşturun</p>
+            
+            <button id="googleLoginBtn" class="google-btn">
+                <svg viewBox="0 0 48 48">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.63 1.22 9.14 3.59l6.86-6.86C35.84 2.37 30.31 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6.19c4.51-4.18 7.09-10.36 7.09-17.84z"/>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6.19c-2.14 1.44-4.88 2.27-8.16 2.27-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+                Google ile Giriş Yap
+            </button>
+        </div>
     </div>
 
-    <div class="container">
-        <!-- SIDEBAR -->
-        <aside class="sidebar" id="sidebar">
-            <div class="logo-area">
-                <!-- LOGO BURADA -->
-                <img src="/static/logo.jpg" class="logo-img" onerror="this.style.display='none'">
-                <div class="logo-text"><h2>Pro Yazı</h2><span style="color:var(--text-muted); font-size:0.8em;">v3.0 Ultra</span></div>
-                <button id="closeSidebar" class="btn-secondary" style="width: auto; margin-left: auto; display: none; padding: 5px 10px;">✕</button>
+    <!-- ==================== MAIN APP ==================== -->
+    <div id="appContainer" class="app-container">
+        
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <button id="menuBtn" class="menu-btn">☰</button>
+                <h1>📝 El Yazısı Editörü</h1>
+            </div>
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">U</div>
+                <span class="user-name" id="userName">Kullanıcı</span>
+                <button id="logoutBtn" class="logout-btn" title="Çıkış Yap">🚪</button>
+            </div>
+        </header>
+
+        <!-- Sidebar Overlay (Mobile) -->
+        <div id="sidebarOverlay" class="sidebar-overlay"></div>
+        
+        <!-- Sidebar -->
+        <aside id="sidebar" class="sidebar active">
+            <div class="sidebar-header">
+                <h2>⚙️ Ayarlar</h2>
+                <button id="closeBtn" class="close-btn">×</button>
             </div>
             
-            <!-- AUTH & PROFILE -->
-            <div id="authSection">
-                <button id="googleLoginBtn" class="btn btn-primary" style="background:#fff; color:#333; border:1px solid #ddd;">
-                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/action/google.svg" width="18" style="margin-right:10px;"> Google ile Giriş
-                </button>
-            </div>
-            <div id="userProfile" class="auth-card" style="display: none;">
-                <div class="profile-info">
-                    <div class="avatar" id="userAvatar">U</div>
-                    <div style="flex:1; overflow:hidden;">
-                        <div id="userName" style="font-weight:700;">Kullanıcı</div>
-                        <small id="userEmail" style="opacity:0.8;">...</small>
-                    </div>
-                    <button id="logoutBtn" style="background:none; border:none; cursor:pointer; color:white; font-size:1.2em;">🚪</button>
-                </div>
-            </div>
-
-            <!-- FONT SEÇİCİ -->
-            <div class="setting-group" style="background: rgba(255,255,255,0.5); padding: 15px; border-radius: 12px; margin-top: 10px;">
-                <div class="setting-header"><label>🔤 Yazı Tipi</label></div>
-                <select id="fontSelector" class="toolbar-select">
-                    <option value="" disabled selected>Yükleniyor...</option>
-                </select>
-                <button id="refreshFontBtn" class="btn btn-primary" style="padding: 8px; font-size: 0.9em; margin-bottom: 0;">🔄 Fontu Uygula</button>
-            </div>
-
-            <!-- AYARLAR -->
-            <div class="setting-group">
-                <div class="setting-header"><label>✏️ Yazı Boyutu</label><span class="value-badge" id="scaleValue">140px</span></div>
-                <input type="range" id="scaleSlider" min="30" max="250" value="140" step="10">
-            </div>
-            <div class="setting-group">
-                <div class="setting-header"><label>📏 Satır Aralığı</label><span class="value-badge" id="lineHeightValue">220px</span></div>
-                <input type="range" id="lineHeightSlider" min="40" max="400" value="220" step="10">
-            </div>
-            <div class="setting-group">
-                <div class="setting-header"><label>🔠 Harf Aralığı</label><span class="value-badge" id="letterSpacingValue">3px</span></div>
-                <input type="range" id="letterSpacingSlider" min="-5" max="20" value="3" step="1">
-            </div>
-            <div class="setting-group">
-                <div class="setting-header"><label>〰️ Doğallık</label><span class="value-badge" id="jitterValue">5</span></div>
-                <input type="range" id="jitterSlider" min="0" max="20" value="5" step="1">
-            </div>
-
-            <button id="toggleTheme" class="btn btn-secondary" style="margin-top: 20px;">🌙 Gece Modu</button>
-            <button id="pdfBtn" class="btn btn-primary" style="margin-top: 10px;">📄 PDF İndir</button>
-        </aside>
-
-        <!-- EDITOR AREA -->
-        <main class="editor-container">
-            <header class="editor-header" style="padding: 15px 20px;">
-                <div style="display:flex; align-items:center; gap:15px;">
-                    <button id="mobileMenuBtn" class="btn-secondary" style="width: auto; padding: 8px 12px; margin:0;">☰</button>
-                    <h1 style="font-size:1.2em; font-weight:700;">Belge Önizleme</h1>
-                </div>
-                <div>
-                    <select id="paperSelect" class="toolbar-select" style="width:auto; display:inline-block; margin:0;">
-                        <option value="cizgili">📝 Çizgili</option>
-                        <option value="kareli">▦ Kareli</option>
-                        <option value="duz">⬜ Düz</option>
+            <div class="sidebar-content">
+                <!-- Font Selection -->
+                <div class="setting-group">
+                    <label>🔤 Yazı Tipi</label>
+                    <select id="fontSelector">
+                        <option value="">Varsayılan Font</option>
                     </select>
                 </div>
-            </header>
-
-            <div class="workspace">
-                <div class="input-area">
-                    <textarea id="metinAlani" placeholder="Buraya yazın... Yazdıklarınız sağ tarafta el yazısına dönüşecek."></textarea>
+                
+                <!-- Scale -->
+                <div class="setting-group">
+                    <div class="range-header">
+                        <label>Boyut</label>
+                        <span class="range-value" id="scaleValue">140</span>
+                    </div>
+                    <input type="range" id="scaleSlider" min="30" max="250" value="140">
                 </div>
-                <div class="canvas-wrapper">
+                
+                <!-- Line Height -->
+                <div class="setting-group">
+                    <div class="range-header">
+                        <label>Satır Aralığı</label>
+                        <span class="range-value" id="lineHeightValue">220</span>
+                    </div>
+                    <input type="range" id="lineHeightSlider" min="40" max="450" value="220">
+                </div>
+                
+                <!-- Letter Spacing -->
+                <div class="setting-group">
+                    <div class="range-header">
+                        <label>Harf Aralığı</label>
+                        <span class="range-value" id="letterSpacingValue">3</span>
+                    </div>
+                    <input type="range" id="letterSpacingSlider" min="-5" max="20" value="3">
+                </div>
+                
+                <!-- Word Spacing -->
+                <div class="setting-group">
+                    <div class="range-header">
+                        <label>Kelime Boşluğu</label>
+                        <span class="range-value" id="wordValue">55</span>
+                    </div>
+                    <input type="range" id="wordSlider" min="20" max="150" value="55">
+                </div>
+                
+                <!-- Jitter -->
+                <div class="setting-group">
+                    <div class="range-header">
+                        <label>Doğallık</label>
+                        <span class="range-value" id="jitterValue">5</span>
+                    </div>
+                    <input type="range" id="jitterSlider" min="0" max="20" value="5">
+                </div>
+            </div>
+            
+            <div class="sidebar-footer">
+                <button id="pdfBtn" class="btn-primary">📄 PDF İndir</button>
+            </div>
+        </aside>
+
+        <!-- Workspace -->
+        <main id="workspace" class="workspace">
+            <!-- Toolbar -->
+            <div class="toolbar">
+                <select id="paperSelect">
+                    <option value="cizgili">📝 Çizgili Kağıt</option>
+                    <option value="kareli">▦ Kareli Kağıt</option>
+                    <option value="duz">⬜ Düz Kağıt</option>
+                </select>
+                <select id="colorSelect">
+                    <option value="tukenmez">⚫ Siyah Kalem</option>
+                    <option value="bic_mavi">🔵 Mavi Kalem</option>
+                    <option value="kirmizi">🔴 Kırmızı Kalem</option>
+                </select>
+            </div>
+            
+            <!-- Editor -->
+            <div class="editor-wrapper">
+                <div class="input-panel">
+                    <h3>✏️ Metninizi Yazın</h3>
+                    <textarea id="metinAlani" placeholder="Buraya yazın... Yazdığınız metin el yazınıza dönüşecek."></textarea>
+                </div>
+                <div class="canvas-panel">
                     <canvas id="mainCanvas"></canvas>
                 </div>
             </div>
         </main>
     </div>
 
-    <!-- Scripts -->
+    <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="/static/js/engine.js"></script>
+    
     <script>
-        // --- 1. FIREBASE CONFIG ---
+        // Firebase Config
         const firebaseConfig = {
             apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
             authDomain: "elyazisiapp.firebaseapp.com",
-            databaseURL: "https://elyazisiapp-default-rtdb.firebaseio.com",
             projectId: "elyazisiapp",
             storageBucket: "elyazisiapp.firebasestorage.app",
             messagingSenderId: "823659862878",
-            appId: "1:823659862878:web:1615116c77d98f7f848dcf",
-            measurementId: "G-DYW7TZ01T9"
+            appId: "1:823659862878:web:1615116c77d98f7f848dcf"
         };
+        
         try { firebase.initializeApp(firebaseConfig); } catch(e) {}
 
-        let editor = null;
+        // Elements
+        const loginOverlay = document.getElementById('loginOverlay');
+        const appContainer = document.getElementById('appContainer');
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const workspace = document.getElementById('workspace');
         const metinAlani = document.getElementById('metinAlani');
+        
+        let editor = null;
+        let isDesktop = window.innerWidth >= 1200;
 
-        // --- 2. INIT ---
-        async function init() {
-            const loading = document.getElementById('loadingScreen');
-            const progress = document.getElementById('progressFill');
-            
-            setTimeout(() => { if(loading.style.display!=='none') loading.style.display='none'; }, 3500);
-
-            try {
-                editor = new FinalHandwritingEditor('mainCanvas');
-                await editor.loadAssets(p => progress.style.width = (p*100)+'%');
-                loading.style.display = 'none';
-                
-                const saved = localStorage.getItem('saved_text');
-                if(saved) { metinAlani.value = saved; editor.setText(saved); }
-            } catch(e) { loading.style.display = 'none'; }
-        }
-
-        // --- 3. EDITOR LISTENERS ---
-        metinAlani.addEventListener('input', () => {
-            editor.setText(metinAlani.value);
-            localStorage.setItem('saved_text', metinAlani.value);
-        });
-        ['click', 'keyup', 'focus'].forEach(evt => {
-            metinAlani.addEventListener(evt, () => editor.setCursorIndex(metinAlani.selectionStart));
-        });
-
-        // --- 4. AUTH & FONTS ---
+        // Auth State
         firebase.auth().onAuthStateChanged(user => {
-            if(user) {
-                document.getElementById('authSection').style.display = 'none';
-                document.getElementById('userProfile').style.display = 'block';
-                document.getElementById('userName').textContent = user.displayName;
-                document.getElementById('userEmail').textContent = user.email;
-                document.getElementById('userAvatar').textContent = user.displayName[0];
+            if (user) {
+                loginOverlay.style.display = 'none';
+                appContainer.style.display = 'block';
+                
+                document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
+                document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
+                
+                initEditor();
                 loadFontList(user.uid);
             } else {
-                document.getElementById('authSection').style.display = 'block';
-                document.getElementById('userProfile').style.display = 'none';
-                loadFontList('');
+                loginOverlay.style.display = 'flex';
+                appContainer.style.display = 'none';
             }
         });
 
-        document.getElementById('googleLoginBtn').onclick = () => firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
-        document.getElementById('logoutBtn').onclick = () => firebase.auth().signOut();
+        // Login
+        document.getElementById('googleLoginBtn').onclick = () => {
+            firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+        };
 
+        // Logout
+        document.getElementById('logoutBtn').onclick = () => {
+            firebase.auth().signOut();
+        };
+
+        // Sidebar Toggle
+        document.getElementById('menuBtn').onclick = () => {
+            sidebar.classList.toggle('active');
+            if (!isDesktop) {
+                sidebarOverlay.classList.toggle('active');
+            } else {
+                sidebar.classList.toggle('collapsed');
+                workspace.classList.toggle('expanded');
+            }
+        };
+
+        document.getElementById('closeBtn').onclick = () => {
+            sidebar.classList.remove('active');
+            sidebarOverlay.classList.remove('active');
+        };
+
+        sidebarOverlay.onclick = () => {
+            sidebar.classList.remove('active');
+            sidebarOverlay.classList.remove('active');
+        };
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            isDesktop = window.innerWidth >= 1200;
+            if (isDesktop) {
+                sidebarOverlay.classList.remove('active');
+            }
+        });
+
+        // Editor Init
+        async function initEditor() {
+            try {
+                editor = new FinalHandwritingEditor('mainCanvas');
+                await editor.loadAssets();
+                const saved = localStorage.getItem('saved_text');
+                if (saved) {
+                    metinAlani.value = saved;
+                    editor.setText(saved);
+                }
+            } catch(e) {
+                console.error('Editor init error:', e);
+            }
+        }
+
+        // Text Input
+        metinAlani.addEventListener('input', () => {
+            if (editor) {
+                editor.setText(metinAlani.value);
+                localStorage.setItem('saved_text', metinAlani.value);
+            }
+        });
+
+        // Font List
         async function loadFontList(uid) {
             const select = document.getElementById('fontSelector');
-            const currentFont = new URLSearchParams(window.location.search).get('font_id');
             try {
                 const res = await fetch(`/api/list_fonts?user_id=${uid}`);
                 const data = await res.json();
-                select.innerHTML = '<option value="">Varsayılan</option>';
+                select.innerHTML = '<option value="">Varsayılan Font</option>';
                 if (data.success && data.fonts) {
-                    const myG = document.createElement('optgroup'); myG.label = "📂 Benim Fontlarım";
-                    const pubG = document.createElement('optgroup'); pubG.label = "🌎 Paylaşılanlar";
+                    const myGroup = document.createElement('optgroup');
+                    myGroup.label = "📂 Benim Fontlarım";
+                    const pubGroup = document.createElement('optgroup');
+                    pubGroup.label = "🌍 Paylaşılan Fontlar";
+                    
                     data.fonts.forEach(f => {
                         const opt = new Option(f.name, f.id);
-                        if(f.id === currentFont) opt.selected = true;
-                        (f.type === 'private' ? myG : pubG).appendChild(opt);
+                        (f.type === 'private' ? myGroup : pubGroup).appendChild(opt);
                     });
-                    select.add(myG); select.add(pubG);
+                    
+                    if (myGroup.children.length) select.appendChild(myGroup);
+                    if (pubGroup.children.length) select.appendChild(pubGroup);
                 }
             } catch(e) {}
         }
 
-        document.getElementById('refreshFontBtn').onclick = () => {
-            const val = document.getElementById('fontSelector').value;
+        // Font Change
+        document.getElementById('fontSelector').onchange = (e) => {
             const url = new URL(window.location);
-            if(val) url.searchParams.set('font_id', val); else url.searchParams.delete('font_id');
+            if (e.target.value) {
+                url.searchParams.set('font_id', e.target.value);
+            } else {
+                url.searchParams.delete('font_id');
+            }
             window.location.href = url.toString();
         };
 
-        // --- 5. CONTROLS ---
-        const bind = (id, method, labelId, unit='') => {
-            document.getElementById(id).oninput = e => {
-                editor[method](parseInt(e.target.value));
-                if(labelId) document.getElementById(labelId).textContent = e.target.value + unit;
+        // Sliders with value display
+        const sliderConfig = [
+            { id: 'scaleSlider', valueId: 'scaleValue', method: 'setLetterScale' },
+            { id: 'lineHeightSlider', valueId: 'lineHeightValue', method: 'setLineHeight' },
+            { id: 'letterSpacingSlider', valueId: 'letterSpacingValue', method: 'setLetterSpacing' },
+            { id: 'wordSlider', valueId: 'wordValue', method: 'setWordSpacing' },
+            { id: 'jitterSlider', valueId: 'jitterValue', method: 'setJitter' }
+        ];
+
+        sliderConfig.forEach(({ id, valueId, method }) => {
+            const slider = document.getElementById(id);
+            const valueSpan = document.getElementById(valueId);
+            slider.oninput = (e) => {
+                valueSpan.textContent = e.target.value;
+                if (editor && editor[method]) {
+                    editor[method](parseInt(e.target.value));
+                }
             };
-        };
-        bind('scaleSlider', 'setLetterScale', 'scaleValue', 'px');
-        bind('lineHeightSlider', 'setLineHeight', 'lineHeightValue', 'px');
-        bind('letterSpacingSlider', 'setLetterSpacing', 'letterSpacingValue', 'px');
-        bind('jitterSlider', 'setJitter', 'jitterValue', '');
+        });
 
-        document.getElementById('paperSelect').onchange = e => editor.setPaperType(e.target.value);
-        document.getElementById('pdfBtn').onclick = () => editor.exportPDF();
-        
-        document.getElementById('toggleTheme').onclick = () => {
-            const current = document.documentElement.getAttribute('data-theme');
-            document.documentElement.setAttribute('data-theme', current==='dark'?'light':'dark');
+        // Paper & Color
+        document.getElementById('paperSelect').onchange = (e) => {
+            if (editor) editor.setPaperType(e.target.value);
         };
 
-        // Responsive Menu
-        const sb = document.getElementById('sidebar');
-        document.getElementById('mobileMenuBtn').onclick = () => sb.classList.add('active');
-        document.getElementById('closeSidebar').onclick = () => sb.classList.remove('active');
+        document.getElementById('colorSelect').onchange = (e) => {
+            if (editor) editor.setInkColor(e.target.value);
+        };
 
-        window.onload = init;
+        // PDF Export
+        document.getElementById('pdfBtn').onclick = () => {
+            if (editor) editor.exportPDF();
+        };
     </script>
 </body>
 </html>
