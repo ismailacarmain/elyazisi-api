@@ -541,13 +541,25 @@
         <div id="sidebarOverlay" class="sidebar-overlay"></div>
         
         <!-- Sidebar -->
-        <aside id="sidebar" class="sidebar">
+        <aside id="sidebar" class="sidebar active">
             <div class="sidebar-header">
                 <h2>⚙️ Ayarlar</h2>
-                <button id="closeBtn" class="close-btn" title="Kapat">✕</button>
+                <button id="closeBtn" class="close-btn">×</button>
             </div>
             
             <div class="sidebar-content">
+                <!-- PROFIL KARTI (Sadece Web için) -->
+                <div id="webUserProfile" class="setting-group" style="background: var(--bg-dark); padding: 15px; border-radius: 12px; border: 1px solid var(--border); display: none;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <div id="userAvatar" style="width: 32px; height: 32px; background: var(--primary); border-radius: 50%; display: grid; place-items: center; font-weight: bold;">U</div>
+                        <div style="flex: 1; overflow: hidden;">
+                            <div id="userName" style="font-weight: 600; font-size: 14px;">Kullanıcı</div>
+                            <div id="userEmail" style="font-size: 12px; color: var(--text-muted); text-overflow: ellipsis; overflow: hidden;">...</div>
+                        </div>
+                    </div>
+                    <button id="logoutBtn" style="width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; cursor: pointer; font-size: 13px;">Çıkış Yap</button>
+                </div>
+
                 <!-- Font Selection -->
                 <div class="setting-group">
                     <label>🔤 Yazı Tipi</label>
@@ -695,42 +707,42 @@
         });
 
         // ==================== AUTH ====================
-        const urlParams = new URLSearchParams(window.location.search);
-        const androidUid = urlParams.get('user_id');
+        // Auth State
+        firebase.auth().onAuthStateChanged(user => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const androidUid = urlParams.get('user_id');
 
-        if (androidUid) {
-            // Android Modu
-            loginOverlay.classList.add('hidden');
-            appContainer.classList.add('visible');
-            document.getElementById('userName').textContent = 'Mobil Kullanıcı';
-            document.getElementById('logoutBtn').style.display = 'none';
-            initEditor();
-            loadFontList(androidUid);
-        } else {
-            // Web Modu
-            firebase.auth().onAuthStateChanged(user => {
-                if (user) {
-                    loginOverlay.classList.add('hidden');
-                    appContainer.classList.add('visible');
-                    document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
-                    document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
-                    initEditor();
-                    loadFontList(user.uid);
-                } else {
-                    loginOverlay.classList.remove('hidden');
-                    appContainer.classList.remove('visible');
-                }
-            });
-        }
-
-        // Login & Logout
-        document.getElementById('googleLoginBtn').addEventListener('click', () => {
-            firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+            if (androidUid) {
+                // ANDROID MODU
+                loginOverlay.style.display = 'none';
+                appContainer.style.display = 'block';
+                document.getElementById('webUserProfile').style.display = 'none'; // Profili gizle
+                
+                initEditor();
+                loadFontList(androidUid);
+            } else if (user) {
+                // WEB MODU (Giriş Yapmış)
+                loginOverlay.style.display = 'none';
+                appContainer.style.display = 'block';
+                
+                // Profili doldur ve göster
+                const profileCard = document.getElementById('webUserProfile');
+                profileCard.style.display = 'block';
+                document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
+                document.getElementById('userEmail').textContent = user.email;
+                document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
+                
+                initEditor();
+                loadFontList(user.uid);
+            } else {
+                // ÇIKIŞ YAPMIŞ
+                loginOverlay.style.display = 'flex';
+                appContainer.style.display = 'none';
+            }
         });
 
-        document.getElementById('logoutBtn').addEventListener('click', () => {
-            firebase.auth().signOut();
-        });
+        // Logout Logic
+        document.getElementById('logoutBtn').onclick = () => firebase.auth().signOut();
 
         // ==================== EDITOR ====================
         async function initEditor() {
