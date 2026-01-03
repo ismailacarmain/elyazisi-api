@@ -16,7 +16,7 @@
             --text: #f8fafc;
             --text-muted: #94a3b8;
             --border: #334155;
-            --sidebar-width: 320px;
+            --sidebar-width: 300px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -40,6 +40,8 @@
             align-items: center;
         }
         
+        .login-overlay.hidden { display: none; }
+        
         .login-card {
             background: var(--bg-card);
             padding: 48px 40px;
@@ -62,15 +64,8 @@
             font-size: 36px;
         }
         
-        .login-card h1 {
-            font-size: 1.75rem;
-            margin-bottom: 8px;
-        }
-        
-        .login-card p {
-            color: var(--text-muted);
-            margin-bottom: 32px;
-        }
+        .login-card h1 { font-size: 1.75rem; margin-bottom: 8px; }
+        .login-card p { color: var(--text-muted); margin-bottom: 32px; }
         
         .google-btn {
             display: flex;
@@ -102,97 +97,114 @@
             min-height: 100vh;
         }
         
-        /* Header */
+        .app-container.visible { display: block; }
+
+        /* ==================== HEADER ==================== */
         .header {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
-            height: 60px;
+            height: 56px;
             background: var(--bg-card);
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 20px;
+            padding: 0 16px;
             z-index: 100;
         }
         
         .header-left {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
         }
         
         .menu-btn {
-            background: none;
-            border: none;
+            width: 40px;
+            height: 40px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
             color: var(--text);
-            font-size: 24px;
+            font-size: 20px;
             cursor: pointer;
-            padding: 8px;
-            border-radius: 8px;
-            transition: background 0.2s;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
         }
         
-        .menu-btn:hover { background: var(--border); }
+        .menu-btn:hover { background: var(--primary); border-color: var(--primary); }
         
-        .header h1 {
-            font-size: 1.1rem;
+        .header-title {
+            font-size: 1rem;
             font-weight: 600;
         }
         
         .user-info {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
         }
         
         .user-avatar {
-            width: 36px;
-            height: 36px;
+            width: 34px;
+            height: 34px;
             border-radius: 50%;
             background: var(--primary);
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 14px;
+            font-size: 13px;
         }
         
         .user-name {
             font-weight: 500;
-            font-size: 14px;
+            font-size: 13px;
         }
         
         .logout-btn {
+            width: 34px;
+            height: 34px;
             background: none;
-            border: none;
+            border: 1px solid var(--border);
+            border-radius: 8px;
             color: var(--text-muted);
             cursor: pointer;
-            padding: 8px;
-            font-size: 18px;
-            transition: color 0.2s;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
         }
         
-        .logout-btn:hover { color: #ef4444; }
+        .logout-btn:hover { 
+            background: #ef4444; 
+            border-color: #ef4444; 
+            color: white; 
+        }
 
-        /* ==================== SIDEBAR ==================== */
+        /* ==================== SIDEBAR OVERLAY ==================== */
         .sidebar-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(0, 0, 0, 0.6);
             z-index: 200;
             opacity: 0;
             visibility: hidden;
-            transition: opacity 0.3s, visibility 0.3s;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
         }
         
         .sidebar-overlay.active {
             opacity: 1;
             visibility: visible;
         }
-        
+
+        /* ==================== SIDEBAR ==================== */
         .sidebar {
             position: fixed;
             top: 0;
@@ -203,35 +215,51 @@
             border-right: 1px solid var(--border);
             z-index: 300;
             transform: translateX(-100%);
-            transition: transform 0.3s ease;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             flex-direction: column;
+            box-shadow: 5px 0 30px rgba(0,0,0,0.3);
         }
         
-        .sidebar.active { transform: translateX(0); }
+        .sidebar.open {
+            transform: translateX(0);
+        }
         
         .sidebar-header {
-            padding: 20px;
+            padding: 16px 20px;
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             justify-content: space-between;
+            min-height: 56px;
         }
         
         .sidebar-header h2 {
-            font-size: 1.1rem;
+            font-size: 1rem;
+            font-weight: 600;
             display: flex;
             align-items: center;
             gap: 8px;
         }
         
         .close-btn {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            font-size: 24px;
+            width: 36px;
+            height: 36px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 20px;
             cursor: pointer;
-            padding: 4px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        
+        .close-btn:hover {
+            background: #ef4444;
+            border-color: #ef4444;
         }
         
         .sidebar-content {
@@ -241,26 +269,52 @@
         }
         
         .setting-group {
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
         
         .setting-group label {
             display: block;
-            font-size: 13px;
-            font-weight: 500;
+            font-size: 12px;
+            font-weight: 600;
             color: var(--text-muted);
             margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .setting-group select {
             width: 100%;
-            padding: 12px;
+            padding: 12px 14px;
             background: var(--bg-dark);
             border: 1px solid var(--border);
             border-radius: 10px;
             color: var(--text);
             font-size: 14px;
             cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        
+        .setting-group select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .range-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .range-value {
+            background: var(--primary);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+            min-width: 40px;
+            text-align: center;
         }
         
         .setting-group input[type="range"] {
@@ -274,77 +328,73 @@
         
         .setting-group input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 18px;
-            height: 18px;
+            width: 20px;
+            height: 20px;
             background: var(--primary);
             border-radius: 50%;
             cursor: pointer;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+            transition: transform 0.2s;
         }
         
-        .range-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        
-        .range-value {
-            background: var(--primary);
-            color: white;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-            font-weight: 600;
+        .setting-group input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
         }
         
         .sidebar-footer {
-            padding: 20px;
+            padding: 16px 20px;
             border-top: 1px solid var(--border);
         }
         
         .btn-primary {
             width: 100%;
             padding: 14px;
-            background: var(--primary);
+            background: linear-gradient(135deg, var(--primary), var(--primary-light));
             color: white;
             border: none;
             border-radius: 12px;
             font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s, transform 0.2s;
+            transition: all 0.2s;
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
         }
         
         .btn-primary:hover {
-            background: var(--primary-light);
-            transform: translateY(-1px);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4);
+        }
+        
+        .btn-primary:active {
+            transform: translateY(0);
         }
 
         /* ==================== WORKSPACE ==================== */
         .workspace {
-            padding-top: 60px;
+            padding-top: 56px;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
+            transition: margin-left 0.3s ease;
         }
         
         /* Toolbar */
         .toolbar {
             background: var(--bg-card);
-            padding: 12px 20px;
+            padding: 10px 16px;
             display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
+            gap: 10px;
             border-bottom: 1px solid var(--border);
         }
         
         .toolbar select {
-            padding: 10px 16px;
+            flex: 1;
+            padding: 10px 12px;
             background: var(--bg-dark);
             border: 1px solid var(--border);
             border-radius: 8px;
             color: var(--text);
-            font-size: 14px;
+            font-size: 13px;
             cursor: pointer;
         }
         
@@ -353,22 +403,22 @@
             flex: 1;
             display: grid;
             grid-template-columns: 1fr 1fr;
-            min-height: calc(100vh - 120px);
+            min-height: calc(100vh - 110px);
         }
         
         .input-panel {
             background: var(--bg-card);
-            padding: 24px;
+            padding: 20px;
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
         }
         
         .input-panel h3 {
-            font-size: 14px;
+            font-size: 13px;
             color: var(--text-muted);
             margin-bottom: 12px;
-            font-weight: 500;
+            font-weight: 600;
         }
         
         .input-panel textarea {
@@ -378,10 +428,11 @@
             border-radius: 12px;
             padding: 16px;
             color: var(--text);
-            font-size: 16px;
+            font-size: 15px;
             line-height: 1.7;
             resize: none;
             font-family: 'Inter', sans-serif;
+            transition: border-color 0.2s;
         }
         
         .input-panel textarea:focus {
@@ -395,24 +446,23 @@
         
         .canvas-panel {
             background: #1a1a2e;
-            padding: 24px;
+            padding: 20px;
             overflow: auto;
             display: flex;
             justify-content: center;
             align-items: flex-start;
-            background-image: 
-                radial-gradient(circle, #2a2a4a 1px, transparent 1px);
+            background-image: radial-gradient(circle, #2a2a4a 1px, transparent 1px);
             background-size: 20px 20px;
         }
         
         #mainCanvas {
             background: white;
-            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
             max-width: 100%;
         }
 
         /* ==================== RESPONSIVE ==================== */
-        @media (max-width: 900px) {
+        @media (max-width: 768px) {
             .editor-wrapper {
                 grid-template-columns: 1fr;
             }
@@ -420,55 +470,31 @@
             .input-panel {
                 border-right: none;
                 border-bottom: 1px solid var(--border);
-                min-height: 200px;
+                min-height: 180px;
             }
             
             .canvas-panel {
-                min-height: 400px;
+                min-height: 350px;
             }
             
             .user-name { display: none; }
+            
+            .header-title { font-size: 0.9rem; }
         }
         
-        @media (max-width: 600px) {
-            .header h1 { display: none; }
-            
-            .toolbar {
-                padding: 10px;
-            }
-            
-            .toolbar select {
-                flex: 1;
-                min-width: 0;
-            }
-            
-            .input-panel, .canvas-panel {
-                padding: 16px;
-            }
+        @media (max-width: 480px) {
+            .header { padding: 0 12px; }
+            .header-title { display: none; }
+            .toolbar { padding: 8px 12px; }
+            .input-panel, .canvas-panel { padding: 12px; }
+            .sidebar { width: 280px; }
         }
 
-        /* ==================== DESKTOP SIDEBAR ==================== */
-        @media (min-width: 1200px) {
-            .sidebar {
-                transform: translateX(0);
-                top: 60px;
-                height: calc(100% - 60px);
-            }
-            
-            .sidebar-overlay { display: none; }
-            
-            .close-btn { display: none; }
-            
-            .workspace {
-                margin-left: var(--sidebar-width);
-            }
-            
-            .sidebar.collapsed {
-                transform: translateX(-100%);
-            }
-            
-            .workspace.expanded {
-                margin-left: 0;
+        /* ==================== DESKTOP ==================== */
+        @media (min-width: 1024px) {
+            .sidebar.open + .sidebar-overlay {
+                /* Masaüstünde overlay'ı biraz daha şeffaf yap */
+                background: rgba(0, 0, 0, 0.4);
             }
         }
     </style>
@@ -500,24 +526,25 @@
         <!-- Header -->
         <header class="header">
             <div class="header-left">
-                <button id="menuBtn" class="menu-btn">☰</button>
-                <h1>📝 El Yazısı Editörü</h1>
+                <button id="menuBtn" class="menu-btn" title="Ayarları Aç">☰</button>
+                <span class="header-title">📝 El Yazısı Editörü</span>
             </div>
             <div class="user-info">
                 <div class="user-avatar" id="userAvatar">U</div>
                 <span class="user-name" id="userName">Kullanıcı</span>
+                <span id="userEmail" style="display:none;"></span>
                 <button id="logoutBtn" class="logout-btn" title="Çıkış Yap">🚪</button>
             </div>
         </header>
 
-        <!-- Sidebar Overlay (Mobile) -->
+        <!-- Sidebar Overlay -->
         <div id="sidebarOverlay" class="sidebar-overlay"></div>
         
         <!-- Sidebar -->
-        <aside id="sidebar" class="sidebar active">
+        <aside id="sidebar" class="sidebar">
             <div class="sidebar-header">
                 <h2>⚙️ Ayarlar</h2>
-                <button id="closeBtn" class="close-btn">×</button>
+                <button id="closeBtn" class="close-btn" title="Kapat">✕</button>
             </div>
             
             <div class="sidebar-content">
@@ -585,14 +612,14 @@
             <!-- Toolbar -->
             <div class="toolbar">
                 <select id="paperSelect">
-                    <option value="cizgili">📝 Çizgili Kağıt</option>
-                    <option value="kareli">▦ Kareli Kağıt</option>
-                    <option value="duz">⬜ Düz Kağıt</option>
+                    <option value="cizgili">📝 Çizgili</option>
+                    <option value="kareli">▦ Kareli</option>
+                    <option value="duz">⬜ Düz</option>
                 </select>
                 <select id="colorSelect">
-                    <option value="tukenmez">⚫ Siyah Kalem</option>
-                    <option value="bic_mavi">🔵 Mavi Kalem</option>
-                    <option value="kirmizi">🔴 Kırmızı Kalem</option>
+                    <option value="tukenmez">⚫ Siyah</option>
+                    <option value="bic_mavi">🔵 Mavi</option>
+                    <option value="kirmizi">🔴 Kırmızı</option>
                 </select>
             </div>
             
@@ -627,94 +654,85 @@
         
         try { firebase.initializeApp(firebaseConfig); } catch(e) {}
 
-        // Elements
+        // ==================== ELEMENTS ====================
         const loginOverlay = document.getElementById('loginOverlay');
         const appContainer = document.getElementById('appContainer');
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
-        const workspace = document.getElementById('workspace');
+        const menuBtn = document.getElementById('menuBtn');
+        const closeBtn = document.getElementById('closeBtn');
         const metinAlani = document.getElementById('metinAlani');
         
         let editor = null;
-        let isDesktop = window.innerWidth >= 1200;
 
-        // Auth State
-        // 1. URL'den user_id kontrolü (Android'den geliyorsa)
+        // ==================== SIDEBAR FUNCTIONS ====================
+        function openSidebar() {
+            sidebar.classList.add('open');
+            sidebarOverlay.classList.add('active');
+            document.body.style.overflow = 'hidden'; // Scroll'u kapat
+        }
+        
+        function closeSidebar() {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('active');
+            document.body.style.overflow = ''; // Scroll'u aç
+        }
+        
+        // Menu Button - Aç
+        menuBtn.addEventListener('click', openSidebar);
+        
+        // Close Button - Kapat (X butonu)
+        closeBtn.addEventListener('click', closeSidebar);
+        
+        // Overlay Click - Kapat (dışarı tıklayınca)
+        sidebarOverlay.addEventListener('click', closeSidebar);
+        
+        // ESC tuşu ile kapat
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        });
+
+        // ==================== AUTH ====================
         const urlParams = new URLSearchParams(window.location.search);
         const androidUid = urlParams.get('user_id');
 
         if (androidUid) {
-            // Android Modu: Otomatik Giriş
-            console.log("Android App Modu: Otomatik giriş", androidUid);
-            loginOverlay.style.display = 'none';
-            appContainer.style.display = 'block';
-            
-            // Profil bilgisini gizle veya sahte doldur (Android'de zaten profil var)
+            // Android Modu
+            loginOverlay.classList.add('hidden');
+            appContainer.classList.add('visible');
             document.getElementById('userName').textContent = 'Mobil Kullanıcı';
-            document.getElementById('userEmail').style.display = 'none';
-            document.getElementById('logoutBtn').style.display = 'none'; // Çıkış butonu gizle
-            
+            document.getElementById('logoutBtn').style.display = 'none';
             initEditor();
             loadFontList(androidUid);
         } else {
-            // Web Modu: Firebase Auth Dinle
+            // Web Modu
             firebase.auth().onAuthStateChanged(user => {
                 if (user) {
-                    loginOverlay.style.display = 'none';
-                    appContainer.style.display = 'block';
-                    
+                    loginOverlay.classList.add('hidden');
+                    appContainer.classList.add('visible');
                     document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
                     document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
-                    
                     initEditor();
                     loadFontList(user.uid);
                 } else {
-                    loginOverlay.style.display = 'flex';
-                    appContainer.style.display = 'none';
+                    loginOverlay.classList.remove('hidden');
+                    appContainer.classList.remove('visible');
                 }
             });
         }
 
-        // Login
-        document.getElementById('googleLoginBtn').onclick = () => {
+        // Login & Logout
+        document.getElementById('googleLoginBtn').addEventListener('click', () => {
             firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
-        };
-
-        // Logout
-        document.getElementById('logoutBtn').onclick = () => {
-            firebase.auth().signOut();
-        };
-
-        // Sidebar Toggle
-        document.getElementById('menuBtn').onclick = () => {
-            sidebar.classList.toggle('active');
-            if (!isDesktop) {
-                sidebarOverlay.classList.toggle('active');
-            } else {
-                sidebar.classList.toggle('collapsed');
-                workspace.classList.toggle('expanded');
-            }
-        };
-
-        document.getElementById('closeBtn').onclick = () => {
-            sidebar.classList.remove('active');
-            sidebarOverlay.classList.remove('active');
-        };
-
-        sidebarOverlay.onclick = () => {
-            sidebar.classList.remove('active');
-            sidebarOverlay.classList.remove('active');
-        };
-
-        // Window Resize
-        window.addEventListener('resize', () => {
-            isDesktop = window.innerWidth >= 1200;
-            if (isDesktop) {
-                sidebarOverlay.classList.remove('active');
-            }
         });
 
-        // Editor Init
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            firebase.auth().signOut();
+        });
+
+        // ==================== EDITOR ====================
         async function initEditor() {
             try {
                 editor = new FinalHandwritingEditor('mainCanvas');
@@ -737,7 +755,7 @@
             }
         });
 
-        // Font List
+        // ==================== FONT LIST ====================
         async function loadFontList(uid) {
             const select = document.getElementById('fontSelector');
             try {
@@ -758,11 +776,13 @@
                     if (myGroup.children.length) select.appendChild(myGroup);
                     if (pubGroup.children.length) select.appendChild(pubGroup);
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error('Font list error:', e);
+            }
         }
 
         // Font Change
-        document.getElementById('fontSelector').onchange = (e) => {
+        document.getElementById('fontSelector').addEventListener('change', (e) => {
             const url = new URL(window.location);
             if (e.target.value) {
                 url.searchParams.set('font_id', e.target.value);
@@ -770,10 +790,10 @@
                 url.searchParams.delete('font_id');
             }
             window.location.href = url.toString();
-        };
+        });
 
-        // Sliders with value display
-        const sliderConfig = [
+        // ==================== SLIDERS ====================
+        const sliders = [
             { id: 'scaleSlider', valueId: 'scaleValue', method: 'setLetterScale' },
             { id: 'lineHeightSlider', valueId: 'lineHeightValue', method: 'setLineHeight' },
             { id: 'letterSpacingSlider', valueId: 'letterSpacingValue', method: 'setLetterSpacing' },
@@ -781,30 +801,30 @@
             { id: 'jitterSlider', valueId: 'jitterValue', method: 'setJitter' }
         ];
 
-        sliderConfig.forEach(({ id, valueId, method }) => {
+        sliders.forEach(({ id, valueId, method }) => {
             const slider = document.getElementById(id);
             const valueSpan = document.getElementById(valueId);
-            slider.oninput = (e) => {
+            slider.addEventListener('input', (e) => {
                 valueSpan.textContent = e.target.value;
                 if (editor && editor[method]) {
                     editor[method](parseInt(e.target.value));
                 }
-            };
+            });
         });
 
-        // Paper & Color
-        document.getElementById('paperSelect').onchange = (e) => {
+        // ==================== PAPER & COLOR ====================
+        document.getElementById('paperSelect').addEventListener('change', (e) => {
             if (editor) editor.setPaperType(e.target.value);
-        };
+        });
 
-        document.getElementById('colorSelect').onchange = (e) => {
+        document.getElementById('colorSelect').addEventListener('change', (e) => {
             if (editor) editor.setInkColor(e.target.value);
-        };
+        });
 
-        // PDF Export
-        document.getElementById('pdfBtn').onclick = () => {
+        // ==================== PDF EXPORT ====================
+        document.getElementById('pdfBtn').addEventListener('click', () => {
             if (editor) editor.exportPDF();
-        };
+        });
     </script>
 </body>
 </html>
