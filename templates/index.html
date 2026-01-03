@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>El Yazısı Editörü Pro</title>
+    <title>El Yazısı Pro - Editör</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
         :root {
@@ -15,464 +15,377 @@
             --bg-color: #f3f4f6;
             --text-main: #1e293b;
             --text-muted: #64748b;
-            --panel-bg: rgba(255, 255, 255, 0.7);
+            --panel-bg: rgba(255, 255, 255, 0.8);
             --border-color: rgba(255, 255, 255, 0.5);
-            --input-bg: rgba(255, 255, 255, 0.5);
-            --shadow-color: rgba(31, 38, 135, 0.15);
+            --input-bg: #ffffff;
+            --shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
         }
 
         [data-theme="dark"] {
             --primary: #818cf8;
             --primary-hover: #6366f1;
             --bg-color: #0f172a;
-            --text-main: #e2e8f0;
+            --text-main: #f1f5f9;
             --text-muted: #94a3b8;
-            --panel-bg: rgba(30, 41, 59, 0.7);
+            --panel-bg: rgba(30, 41, 59, 0.8);
             --border-color: rgba(255, 255, 255, 0.1);
-            --input-bg: rgba(0, 0, 0, 0.2);
-            --shadow-color: rgba(0, 0, 0, 0.3);
+            --input-bg: #1e293b;
+            --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
+        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; }
         
         body {
             font-family: 'Inter', sans-serif;
             background-color: var(--bg-color);
             color: var(--text-main);
-            min-height: 100vh;
-            transition: background-color 0.3s, color 0.3s;
-        }
-
-        /* Responsive Container */
-        .container {
-            max-width: 100%;
             height: 100vh;
             display: flex;
             overflow: hidden;
+            transition: all 0.3s ease;
         }
 
-        /* Sidebar */
+        /* Sidebar - Glassmorphism */
         .sidebar {
-            width: 380px;
-            padding: 30px;
-            overflow-y: auto;
+            width: 350px;
             background: var(--panel-bg);
-            backdrop-filter: blur(20px);
+            backdrop-filter: blur(15px);
             border-right: 1px solid var(--border-color);
+            padding: 25px;
             display: flex;
             flex-direction: column;
             gap: 20px;
-            z-index: 10;
+            overflow-y: auto;
+            z-index: 100;
             transition: transform 0.3s ease;
         }
 
-        /* Main Content */
+        /* Main Area */
         .main-content {
             flex: 1;
             display: flex;
             flex-direction: column;
-            position: relative;
             overflow: hidden;
         }
 
-        /* Header / Toolbar */
+        /* Toolbar */
         .toolbar {
-            padding: 15px 30px;
+            height: 70px;
             background: var(--panel-bg);
-            backdrop-filter: blur(20px);
+            backdrop-filter: blur(10px);
             border-bottom: 1px solid var(--border-color);
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            gap: 15px;
-            flex-wrap: wrap;
+            justify-content: space-between;
+            padding: 0 30px;
         }
 
-        /* Workspace (Split View) */
+        /* Split View Workspace */
         .workspace {
             flex: 1;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
+            display: flex;
             overflow: hidden;
         }
 
-        .input-area {
+        .input-container {
+            flex: 1;
             padding: 30px;
-            border-right: 1px solid var(--border-color);
-            overflow-y: auto;
+            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
         }
 
         textarea {
+            flex: 1;
             width: 100%;
-            height: 100%;
-            border: none;
-            background: transparent;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 25px;
             font-family: 'Inter', sans-serif;
             font-size: 1.1em;
             line-height: 1.6;
             color: var(--text-main);
             resize: none;
+            box-shadow: var(--shadow);
         }
 
-        .canvas-area {
+        .preview-container {
+            flex: 1;
             background: #334155;
-            padding: 40px;
-            overflow: auto;
             display: flex;
             justify-content: center;
             align-items: flex-start;
+            overflow: auto;
+            padding: 40px;
         }
 
         canvas {
             background: white;
-            box-shadow: 0 20px 50px -10px rgba(0,0,0,0.5);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
             max-width: 100%;
             height: auto;
         }
 
-        /* Mobile Styles */
-        @media (max-width: 1024px) {
-            .sidebar {
-                position: absolute;
-                left: 0; top: 0; bottom: 0;
-                transform: translateX(-100%);
-                box-shadow: 10px 0 30px rgba(0,0,0,0.2);
-            }
-            .sidebar.active { transform: translateX(0); }
-            
-            .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
-            .input-area { border-right: none; border-bottom: 1px solid var(--border-color); }
-            
-            #mobileMenuBtn { display: block; }
-        }
-
-        @media (min-width: 1025px) {
-            #mobileMenuBtn { display: none; }
-        }
-
-        /* Components */
-        .logo-area {
-            display: flex; align-items: center; gap: 12px;
-            padding-bottom: 20px; border-bottom: 1px solid var(--border-color);
-        }
-        .logo-img { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; }
+        /* UI Elements */
+        .logo-area { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .logo-img { width: 45px; height: 48px; border-radius: 10px; object-fit: cover; }
         
         .btn {
-            padding: 12px; border-radius: 12px; border: none; font-weight: 600; cursor: pointer;
-            width: 100%; text-align: center; transition: all 0.2s;
+            padding: 12px 20px; border-radius: 12px; border: none; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
         }
         .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
         .btn-secondary { background: var(--input-bg); color: var(--text-main); border: 1px solid var(--border-color); }
+
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        .control-group label { font-size: 0.85em; font-weight: 600; color: var(--text-muted); }
         
-        .toolbar-select {
-            padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color);
-            background: var(--input-bg); color: var(--text-main);
+        select, input[type=range] {
+            width: 100%; padding: 10px; border-radius: 10px; 
+            background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-main);
         }
 
-        /* Range Slider */
-        input[type=range] { width: 100%; accent-color: var(--primary); }
-        
-        /* Modal */
-        .modal {
-            position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(5px);
-            display: none; justify-content: center; align-items: center; z-index: 100;
+        /* Profile & Auth */
+        .auth-card {
+            background: linear-gradient(135deg, var(--primary), #818cf8);
+            padding: 20px; border-radius: 16px; color: white;
         }
-        .modal.active { display: flex; }
-        .modal-content {
-            background: var(--bg-color); padding: 30px; border-radius: 20px;
-            width: 90%; max-width: 400px; border: 1px solid var(--border-color);
+        .profile-info { display: flex; align-items: center; gap: 12px; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); display: grid; place-items: center; font-weight: bold; }
+
+        /* Mobile */
+        @media (max-width: 1024px) {
+            .sidebar { position: fixed; transform: translateX(-100%); height: 100%; }
+            .sidebar.active { transform: translateX(0); }
+            .workspace { flex-direction: column; }
+            .input-container { height: 40%; }
+            .preview-container { height: 60%; }
         }
 
-        /* Loading */
-        .loading-screen {
-            position: fixed; inset: 0; background: var(--bg-color); z-index: 999;
+        /* Loading Screen */
+        .loader {
+            position: fixed; inset: 0; background: var(--bg-color); z-index: 1000;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
-        
-        /* Profile Section */
-        .profile-card {
-            background: var(--input-bg); padding: 15px; border-radius: 12px;
-            display: flex; align-items: center; gap: 10px; margin-top: auto;
-        }
-        .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: white; display: grid; place-items: center; font-weight: bold; }
-
     </style>
 </head>
 <body>
 
-    <!-- Loading -->
-    <div id="loadingScreen" class="loading-screen">
-        <h1 style="color:var(--primary); margin-bottom: 20px;">✍️ Yükleniyor...</h1>
-        <div style="width: 200px; height: 4px; background: #ccc; border-radius: 2px;">
+    <!-- Loader -->
+    <div id="loadingScreen" class="loader">
+        <h1 style="font-size: 3em; margin-bottom: 20px;">✒️</h1>
+        <p id="loadStatus">Editör hazırlanıyor...</p>
+        <div style="width: 200px; height: 4px; background: #ddd; margin-top: 20px; border-radius: 2px; overflow: hidden;">
             <div id="progressFill" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.3s;"></div>
         </div>
     </div>
 
-    <div class="container">
-        <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
-            <div class="logo-area">
-                <img src="/static/logo.jpg" class="logo-img" alt="Logo" onerror="this.style.display='none'">
-                <div><h3 style="font-weight: 800;">El Yazısı Pro</h3><small>v3.0</small></div>
-                <button id="closeSidebar" class="btn-secondary" style="width: auto; margin-left: auto; display: none;">✕</button>
-            </div>
-
-            <!-- Login / Profile -->
-            <div id="authSection">
-                <button id="googleLoginBtn" class="btn btn-primary" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
-                    <svg width="18" height="18" viewBox="0 0 18 18"><path d="M17.64 9.2c0-.637-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill-rule="evenodd" fill-opacity="1" fill="#4285f4" stroke="none"></path><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.487-1.584-5.196-3.715H6.95v2.275C2.602 15.678 5.504 18 9 18z" fill-rule="evenodd" fill-opacity="1" fill="#34a853" stroke="none"></path><path d="M3.804 10.706a5.468 5.468 0 0 1-.299-1.706c0-.593.104-1.166.299-1.706V5.019H.872A9.01 9.01 0 0 0 0 9c0 1.452.348 2.827.95 4.084l2.854-2.378z" fill-rule="evenodd" fill-opacity="1" fill="#fbbc05" stroke="none"></path><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .95 4.916l2.854 2.378C4.513 5.164 6.656 3.58 9 3.58z" fill-rule="evenodd" fill-opacity="1" fill="#ea4335" stroke="none"></path></svg>
-                    Google ile Giriş
-                </button>
-            </div>
-            
-            <div id="userProfile" class="profile-card" style="display: none;">
-                <div class="avatar" id="userAvatar">U</div>
-                <div style="flex:1; overflow:hidden;">
-                    <div id="userName" style="font-weight:600; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Kullanıcı</div>
-                    <small id="userEmail" style="opacity:0.7;">...</small>
-                </div>
-                <button id="logoutBtn" style="background:none; border:none; cursor:pointer;">🚪</button>
-            </div>
-
-            <!-- Settings Trigger -->
-            <button id="openSettings" class="btn btn-secondary">⚙️ Ayarlar (Dil / Tema)</button>
-
-            <hr style="border:0; border-top:1px solid var(--border-color);">
-
-            <!-- Controls -->
-            <div class="setting-group">
-                <label>🔤 Yazı Tipi</label>
-                <select id="fontSelector" class="toolbar-select" style="width: 100%; margin-top: 5px;">
-                    <option>Yükleniyor...</option>
-                </select>
-                <button id="refreshFontBtn" class="btn btn-primary" style="margin-top: 8px; font-size: 0.9em;">Uygula</button>
-            </div>
-
-            <div class="setting-group"><label>Boyut</label><input type="range" id="scaleSlider" min="30" max="250" value="140"></div>
-            <div class="setting-group"><label>Satır Aralığı</label><input type="range" id="lineHeightSlider" min="40" max="400" value="220"></div>
-            <div class="setting-group"><label>Harf Aralığı</label><input type="range" id="letterSpacingSlider" min="-5" max="20" value="3"></div>
-            <div class="setting-group"><label>Kelime Boşluğu</label><input type="range" id="wordSlider" min="20" max="120" value="55"></div>
-            <div class="setting-group"><label>Doğallık (Jitter)</label><input type="range" id="jitterSlider" min="0" max="20" value="5"></div>
-            
-            <div style="margin-top: auto;">
-                <button id="pdfBtn" class="btn btn-primary">📄 PDF İndir</button>
-            </div>
-        </aside>
-
-        <!-- Main -->
-        <main class="main-content">
-            <header class="toolbar">
-                <button id="mobileMenuBtn" class="btn-secondary" style="width:auto; padding:8px 12px;">☰</button>
-                <div style="display:flex; gap:10px;">
-                    <select id="paperSelect" class="toolbar-select">
-                        <option value="cizgili">Çizgili Kağıt</option>
-                        <option value="kareli">Kareli Kağıt</option>
-                        <option value="duz">Düz Kağıt</option>
-                    </select>
-                    <select id="colorSelect" class="toolbar-select">
-                        <option value="tukenmez">Siyah</option>
-                        <option value="bic_mavi">Mavi</option>
-                        <option value="kirmizi">Kırmızı</option>
-                        <option value="kursun">Kurşun</option>
-                    </select>
-                </div>
-            </header>
-
-            <div class="workspace">
-                <div class="input-area">
-                    <textarea id="metinAlani" placeholder="Buraya yazın..."></textarea>
-                </div>
-                <div class="canvas-area">
-                    <canvas id="mainCanvas"></canvas>
-                </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="modal">
-        <div class="modal-content">
-            <h2>Ayarlar</h2>
-            <hr style="margin: 15px 0; border:0; border-top:1px solid var(--border-color);">
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <label>🌙 Gece Modu</label>
-                <input type="checkbox" id="darkModeCheck">
-            </div>
-            
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <label>🌐 Dil</label>
-                <select id="langSelect" class="toolbar-select">
-                    <option value="tr">Türkçe</option>
-                    <option value="en">English</option>
-                </select>
-            </div>
-
-            <button id="closeSettings" class="btn btn-secondary">Kapat</button>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="logo-area">
+            <img src="/static/logo.jpg" class="logo-img" alt="Logo" onerror="this.style.display='none'">
+            <h2 style="font-weight: 800; letter-spacing: -1px;">El Yazısı Pro</h2>
         </div>
-    </div>
+
+        <!-- Auth Section -->
+        <div id="authBox">
+            <button id="loginBtn" class="btn btn-primary">
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/action/google.svg" width="18"> Google ile Giriş Yap
+            </button>
+        </div>
+        <div id="profileBox" class="auth-card" style="display: none;">
+            <div class="profile-info">
+                <div class="avatar" id="userInitial">U</div>
+                <div style="flex:1; overflow:hidden;">
+                    <div id="userName" style="font-weight:700; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">Kullanıcı</div>
+                    <small id="userEmail" style="opacity:0.8;">...</small>
+                </div>
+                <button id="logoutBtn" style="background:none; border:none; cursor:pointer; color:white; font-size:1.2em;">🚪</button>
+            </div>
+        </div>
+
+        <button id="toggleTheme" class="btn btn-secondary">🌓 Tema Değiştir</button>
+
+        <hr style="border:0; border-top:1px solid var(--border-color);">
+
+        <div class="control-group">
+            <label>🔤 Yazı Tipi Seçimi</label>
+            <select id="fontSelector"></select>
+            <button id="applyFontBtn" class="btn btn-primary" style="margin-top: 5px;">Fontu Uygula</button>
+        </div>
+
+        <div class="control-group"><label>Yazı Boyutu</label><input type="range" id="scaleSlider" min="30" max="250" value="140"></div>
+        <div class="control-group"><label>Satır Aralığı</label><input type="range" id="lineHeightSlider" min="40" max="450" value="220"></div>
+        <div class="control-group"><label>Harf Aralığı</label><input type="range" id="letterSpacingSlider" min="-10" max="30" value="3"></div>
+        <div class="control-group"><label>Kelime Boşluğu</label><input type="range" id="wordSlider" min="10" max="150" value="55"></div>
+        <div class="control-group"><label>Doğallık (Jitter)</label><input type="range" id="jitterSlider" min="0" max="20" value="5"></div>
+
+        <button id="pdfBtn" class="btn btn-primary" style="margin-top: 20px; background: #10b981;">📄 PDF Olarak İndir</button>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <header class="toolbar">
+            <button id="menuBtn" class="btn btn-secondary" style="width: auto;">☰ Menü</button>
+            <div style="display: flex; gap: 10px;">
+                <select id="paperSelect" class="toolbar-select">
+                    <option value="cizgili">📝 Çizgili</option>
+                    <option value="kareli">▦ Kareli</option>
+                    <option value="duz">⬜ Düz Kağıt</option>
+                </select>
+                <select id="colorSelect" class="toolbar-select">
+                    <option value="tukenmez">⚫ Siyah</option>
+                    <option value="bic_mavi">🔵 Mavi</option>
+                    <option value="kirmizi">🔴 Kırmızı</option>
+                </select>
+            </div>
+        </header>
+
+        <div class="workspace">
+            <section class="input-container">
+                <textarea id="metinAlani" placeholder="Metninizi buraya yazın, sağ tarafta el yazınıza dönüşsün..."></textarea>
+            </section>
+            <section class="preview-container">
+                <canvas id="mainCanvas"></canvas>
+            </section>
+        </div>
+    </main>
 
     <!-- Scripts -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="/static/js/engine.js"></script>
-    
-    <script>
-        // --- 1. FIREBASE SETUP (Burası senin configinle dolmalı) ---
-        const firebaseConfig = {
-            // BURAYA KENDİ FIREBASE CONFIG BİLGİLERİNİ YAPIŞTIRMALISIN
-            // apiKey: "...",
-            // authDomain: "...",
-            // projectId: "...",
-            // ...
-        };
-        
-        let currentUser = null;
-        try {
-            firebase.initializeApp(firebaseConfig);
-        } catch(e) { console.log("Firebase config eksik"); }
 
-        // --- 2. EDITOR SETUP ---
+    <script>
+        // --- FIREBASE CONFIG ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
+            authDomain: "elyazisiapp.firebaseapp.com",
+            databaseURL: "https://elyazisiapp-default-rtdb.firebaseio.com",
+            projectId: "elyazisiapp",
+            storageBucket: "elyazisiapp.firebasestorage.app",
+            messagingSenderId: "823659862878",
+            appId: "1:823659862878:web:1615116c77d98f7f848dcf",
+            measurementId: "G-DYW7TZ01T9"
+        };
+        firebase.initializeApp(firebaseConfig);
+
         let editor = null;
+        let currentUser = null;
         const metinAlani = document.getElementById('metinAlani');
 
+        // --- INIT ---
         async function init() {
             const loading = document.getElementById('loadingScreen');
             const progress = document.getElementById('progressFill');
             
-            // Timeout safety
-            setTimeout(() => { if(loading.style.display!='none') loading.style.display='none'; }, 4000);
+            // GÜVENLİK: 3.5 saniye sonra ne olursa olsun aç
+            setTimeout(() => { if(loading.style.display !== 'none') hideLoader(); }, 3500);
 
             try {
                 editor = new FinalHandwritingEditor('mainCanvas');
-                const success = await editor.loadAssets(p => progress.style.width = (p*100)+'%');
-                
-                loading.style.display = 'none';
-                
-                // Kayıtlı metni geri yükle
-                const saved = localStorage.getItem('saved_text');
-                if(saved) {
-                    metinAlani.value = saved;
-                    editor.setText(saved);
-                }
-            } catch(e) {
-                console.error(e);
-                loading.style.display = 'none';
+                await editor.loadAssets(p => progress.style.width = (p*100)+'%');
+                hideLoader();
+            } catch (e) {
+                console.error("Yükleme hatası:", e);
+                hideLoader();
             }
         }
 
-        // --- 3. EVENT LISTENERS (EDITOR FIX) ---
+        function hideLoader() {
+            document.getElementById('loadingScreen').style.display = 'none';
+            // Kayıtlı metni yükle
+            const saved = localStorage.getItem('saved_text');
+            if(saved) {
+                metinAlani.value = saved;
+                editor.setText(saved);
+            }
+        }
+
+        // --- EDITOR EVENTS (MODERN FIX) ---
         metinAlani.addEventListener('input', () => {
             editor.setText(metinAlani.value);
             localStorage.setItem('saved_text', metinAlani.value);
         });
-        
-        // İmleç takibi
+
         ['click', 'keyup', 'focus'].forEach(evt => {
             metinAlani.addEventListener(evt, () => {
                 editor.setCursorIndex(metinAlani.selectionStart);
             });
         });
 
-        // --- 4. AUTH & UI LOGIC ---
-        const googleBtn = document.getElementById('googleLoginBtn');
-        const userProfile = document.getElementById('userProfile');
-        
-        if (typeof firebase !== 'undefined') {
-            firebase.auth().onAuthStateChanged(user => {
-                if (user) {
-                    currentUser = user;
-                    document.getElementById('authSection').style.display = 'none';
-                    userProfile.style.display = 'flex';
-                    document.getElementById('userName').textContent = user.displayName;
-                    document.getElementById('userEmail').textContent = user.email;
-                    document.getElementById('userAvatar').textContent = user.displayName[0];
-                    
-                    // Giriş yapınca font listesini yenile (User ID ile)
-                    loadFontList(user.uid);
-                } else {
-                    currentUser = null;
-                    document.getElementById('authSection').style.display = 'block';
-                    userProfile.style.display = 'none';
-                    loadFontList(''); // Anonim fontlar
-                }
-            });
+        // --- AUTH LOGIC ---
+        firebase.auth().onAuthStateChanged(user => {
+            if (user) {
+                currentUser = user;
+                document.getElementById('authBox').style.display = 'none';
+                document.getElementById('profileBox').style.display = 'block';
+                document.getElementById('userName').textContent = user.displayName;
+                document.getElementById('userEmail').textContent = user.email;
+                document.getElementById('userInitial').textContent = user.displayName[0];
+                loadFontList(user.uid);
+            } else {
+                document.getElementById('authBox').style.display = 'block';
+                document.getElementById('profileBox').style.display = 'none';
+                loadFontList('');
+            }
+        });
 
-            googleBtn.addEventListener('click', () => {
-                const provider = new firebase.auth.GoogleAuthProvider();
-                firebase.auth().signInWithPopup(provider);
-            });
+        document.getElementById('loginBtn').onclick = () => firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
+        document.getElementById('logoutBtn').onclick = () => firebase.auth().signOut();
 
-            document.getElementById('logoutBtn').addEventListener('click', () => {
-                firebase.auth().signOut();
-            });
-        }
-
-        // --- 5. SETTINGS & SLIDERS ---
-        // Sliders
-        const bind = (id, method) => document.getElementById(id).addEventListener('input', e => editor[method](parseInt(e.target.value)));
+        // --- CONTROLS ---
+        const bind = (id, method) => document.getElementById(id).oninput = e => editor[method](parseInt(e.target.value));
         bind('scaleSlider', 'setLetterScale');
         bind('lineHeightSlider', 'setLineHeight');
         bind('wordSlider', 'setWordSpacing');
         bind('letterSpacingSlider', 'setLetterSpacing');
         bind('jitterSlider', 'setJitter');
 
-        document.getElementById('paperSelect').addEventListener('change', e => editor.setPaperType(e.target.value));
-        document.getElementById('colorSelect').addEventListener('change', e => editor.setInkColor(e.target.value));
-        document.getElementById('pdfBtn').addEventListener('click', () => editor.exportPDF());
+        document.getElementById('paperSelect').onchange = e => editor.setPaperType(e.target.value);
+        document.getElementById('colorSelect').onchange = e => editor.setInkColor(e.target.value);
+        document.getElementById('pdfBtn').onclick = () => editor.exportPDF();
+        document.getElementById('toggleTheme').onclick = () => {
+            const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        };
 
-        // Font Loading
+        // --- FONT LIST ---
         async function loadFontList(uid) {
             const select = document.getElementById('fontSelector');
-            const urlParams = new URLSearchParams(window.location.search);
-            const currentFont = urlParams.get('font_id');
-            
+            const currentFont = new URLSearchParams(window.location.search).get('font_id');
             try {
                 const res = await fetch(`/api/list_fonts?user_id=${uid}`);
                 const data = await res.json();
-                select.innerHTML = '<option value="">Varsayılan</option>';
-                
+                select.innerHTML = '<option value="">Varsayılan (Sistem)</option>';
                 if (data.success && data.fonts) {
-                    // Optgroups
-                    const myFonts = document.createElement('optgroup'); myFonts.label = "📂 Benim Fontlarım";
-                    const pubFonts = document.createElement('optgroup'); pubFonts.label = "🌎 Paylaşılanlar";
-                    
+                    const myG = document.createElement('optgroup'); myG.label = "📂 Benim Fontlarım";
+                    const pubG = document.createElement('optgroup'); pubG.label = "🌎 Paylaşılanlar";
                     data.fonts.forEach(f => {
-                        const opt = document.createElement('option');
-                        opt.value = f.id;
-                        opt.textContent = f.name;
+                        const opt = new Option(f.name, f.id);
                         if(f.id === currentFont) opt.selected = true;
-                        (f.type === 'private' ? myFonts : pubFonts).appendChild(opt);
+                        (f.type === 'private' ? myG : pubG).appendChild(opt);
                     });
-                    
-                    select.appendChild(myFonts);
-                    select.appendChild(pubFonts);
+                    select.add(myG); select.add(pubG);
                 }
-            } catch(e) { console.log(e); }
+            } catch(e) {}
         }
-        
-        document.getElementById('refreshFontBtn').addEventListener('click', () => {
-            const val = document.getElementById('fontSelector').value;
+
+        document.getElementById('applyFontBtn').onclick = () => {
             const url = new URL(window.location);
-            if(val) url.searchParams.set('font_id', val);
-            else url.searchParams.delete('font_id');
+            const val = document.getElementById('fontSelector').value;
+            if(val) url.searchParams.set('font_id', val); else url.searchParams.delete('font_id');
             window.location.href = url.toString();
-        });
+        };
 
-        // Responsive Sidebar
-        const sidebar = document.getElementById('sidebar');
-        document.getElementById('mobileMenuBtn').addEventListener('click', () => sidebar.classList.add('active'));
-        document.getElementById('closeSidebar').addEventListener('click', () => sidebar.classList.remove('active'));
-
-        // Settings Modal
-        const modal = document.getElementById('settingsModal');
-        document.getElementById('openSettings').addEventListener('click', () => modal.classList.add('active'));
-        document.getElementById('closeSettings').addEventListener('click', () => modal.classList.remove('active'));
-        
-        // Dark Mode
-        document.getElementById('darkModeCheck').addEventListener('change', e => {
-            document.documentElement.setAttribute('data-theme', e.target.checked ? 'dark' : 'light');
-        });
+        // Mobile Menu
+        document.getElementById('menuBtn').onclick = () => document.getElementById('sidebar').classList.add('active');
+        document.body.onclick = e => {
+            if(window.innerWidth <= 1024 && !document.getElementById('sidebar').contains(e.target) && e.target.id !== 'menuBtn')
+                document.getElementById('sidebar').classList.remove('active');
+        };
 
         window.onload = init;
     </script>
