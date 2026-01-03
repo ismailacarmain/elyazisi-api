@@ -8,9 +8,24 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import traceback
+import core_generator as core_generator
 
 app = Flask(__name__)
 CORS(app)
+
+# Harfleri başlangıçta yükle
+HARFLER_KLASORU = 'static/harfler'
+HARFLER = {}
+
+def load_assets():
+    global HARFLER
+    if os.path.exists(HARFLER_KLASORU):
+        HARFLER = core_generator.harf_resimlerini_yukle(HARFLER_KLASORU)
+        print(f"✅ {len(HARFLER)} karakter grubu yüklendi")
+    else:
+        print(f"⚠️  {HARFLER_KLASORU} bulunamadı. /download çalışmayabilir.")
+
+load_assets()
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -223,6 +238,74 @@ def process_single():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/download', methods=['POST'])
+def download():
+    try:
+        metin = request.form.get('metin', '')
+        font_id = request.form.get('font_id')
+        user_id = request.form.get('user_id')
+        yazi_boyutu = int(request.form.get('yazi_boyutu', 140))
+        satir_araligi = int(request.form.get('satir_araligi', 220))
+        kelime_boslugu = int(request.form.get('kelime_boslugu', 55))
+        jitter = int(request.form.get('jitter', 3))
+        murekkep_rengi_str = request.form.get('murekkep_rengi', 'tukenmez')
+        paper_type = request.form.get('paper_type', 'cizgili')
+
+        # 1. Fontu Firebase'den Çek
+        active_harfler = {}
+        database = init_firebase()
+        if database and font_id:
+            # Önce Genel Fontlarda Ara
+            doc = database.collection('fonts').document(font_id).get()
+            
+            # Eğer orada yoksa, kullanıcının kendi 'Harflerim' (özel) klasörüne bak
+            if not doc.exists and user_id:
+                doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
+            
+            if doc.exists:
+                raw_harfler = doc.to_dict().get('harfler', {})
+                # ... (Base64 işleme kısmı devam eder)
+
+
+        # Eğer font bulunamazsa veya harf yoksa varsayılanları kullan
+        if not active_harfler:
+            if not HARFLER: load_assets()
+            active_harfler = HARFLER
+
+        renkler = {
+            'tukenmez': (27, 27, 29),
+            'bic_mavi': (0, 35, 102),
+            'pilot_mavi': (0, 51, 153),
+            'eski_murekkep': (40, 60, 120),
+            'kirmizi': (180, 20, 20),
+            'lacivert': (24, 18, 110)
+        }
+        murekkep = renkler.get(murekkep_rengi_str, renkler['tukenmez'])
+
+        config = {
+            'page_width': 2480, 'page_height': 3508,
+            'margin_top': 200, 'margin_left': 150, 'margin_right': 150,
+            'target_letter_height': yazi_boyutu,
+            'line_spacing': satir_araligi,
+            'word_spacing': kelime_boslugu,
+            'murekkep_rengi': murekkep,
+            'opacity': 0.95,
+            'jitter': jitter,
+            'paper_type': paper_type,
+            'line_slope': 5
+        }
+
+        sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
+        pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
+        
+        if pdf_buffer:
+            from flask import send_file
+            return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
+        return "Hata", 500
+    except Exception as e:
+        traceback.print_exc()
+        return str(e), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
