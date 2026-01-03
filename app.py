@@ -104,9 +104,15 @@ def get_assets():
                 key = dosya.rsplit('_', 1)[0]
                 if key not in assets: assets[key] = []
                 assets[key].append(dosya)
-        return jsonify({"success": True, "assets": assets, "source": "local"})
+        
+        if assets:
+            return jsonify({"success": True, "assets": assets, "source": "local"})
     
-    return jsonify({"error": "Harf bulunamadı"}), 404
+    # Harf bulunamadıysa bile 200 OK dönelim ki editör açılsın
+    print("⚠️ UYARI: Hiç harf bulunamadı (Ne Firebase'de ne Localde). Editör boş açılacak.")
+    return jsonify({"success": True, "assets": {}, "source": "none", "warning": "Harf yok"}), 200
+
+# --- ESKİ API ROTALARI (BOZMADIK!) ---
 
 @app.route('/api/list_fonts')
 def list_fonts():
