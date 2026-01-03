@@ -489,24 +489,48 @@
             const loading = document.getElementById('loadingScreen');
             const progress = document.getElementById('progressFill');
             
+            // GÜVENLİK: 3 Saniye sonra yükleme bitmese bile editörü zorla aç
+            const safetyTimer = setTimeout(() => {
+                if (loading.style.display !== 'none') {
+                    console.warn("Yükleme zaman aşımına uğradı, editör zorla açılıyor.");
+                    loading.style.display = 'none';
+                    showToast('Bağlantı yavaş, harfler arkada yükleniyor...', '⚠️');
+                    if (!window.controlsSetupDone) setupControls();
+                }
+            }, 3000);
+
             try {
                 progress.style.width = '20%';
                 editor = new FinalHandwritingEditor('mainCanvas');
                 
+                // Arka planda yüklemeyi başlat ama arayüzü kilitleme
                 const success = await editor.loadAssets((p) => {
                     progress.style.width = (20 + p * 80) + '%';
                 });
                 
+                clearTimeout(safetyTimer); // Zamanlayıcıyı iptal et
+                
                 if (success) {
-                    setTimeout(() => { loading.style.display = 'none'; setupControls(); }, 500);
+                    setTimeout(() => { 
+                        loading.style.display = 'none'; 
+                        if (!window.controlsSetupDone) setupControls(); 
+                    }, 500);
+                } else {
+                    // Başarısız olsa bile aç
+                    loading.style.display = 'none';
+                    showToast('Bazı harfler yüklenemedi.', '⚠️');
+                    if (!window.controlsSetupDone) setupControls();
                 }
             } catch (error) {
                 console.error(error);
-                showToast('Yükleme hatası oluştu!', '❌');
+                loading.style.display = 'none';
+                showToast('Editör başlatıldı (Hata modu)', '⚠️');
+                if (!window.controlsSetupDone) setupControls();
             }
         }
         
         function setupControls() {
+            window.controlsSetupDone = true; // Tekrar çalışmasını önle
             // Live Update
             metinAlani.addEventListener('input', () => {
                 editor.setText(metinAlani.value);
