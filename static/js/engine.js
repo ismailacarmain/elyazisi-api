@@ -402,9 +402,41 @@ class FinalHandwritingEditor {
             // GÖRSEL HESAPLAMA (Jitter burada devreye girer)
             const chaosLevel = this.config.jitter;
             
-            // 1. MİKRO BOYUT VARYASYONU
+            // --- AKILLI ÖLÇEKLENDİRME (SMART SCALING) ---
+            let typeScale = 1.0;
+            let typeYOffset = 0; // Aşağı/Yukarı kaydırma
+
+            if (/[A-ZÇĞİÖŞÜ]/.test(char)) {
+                // Büyük Harfler: Tam Boy (Referans)
+                typeScale = 1.0; 
+            } else if (/[bdfhklt]/.test(char)) {
+                // Yukarı Uzayan Küçükler (Ascenders): %95 Boy
+                typeScale = 0.95;
+            } else if (/[gjpqy]/.test(char)) {
+                // Aşağı Sarkan Küçükler (Descenders): %90 Boy + Aşağı Kayma
+                typeScale = 0.90;
+                typeYOffset = this.config.letterScale * 0.25; 
+            } else if (/[acemnorsuvwxzıüğişöç]/.test(char)) {
+                // Orta Boy Küçükler (x-height): %65 Boy + Hafif Aşağı (Ortalama)
+                typeScale = 0.65;
+                typeYOffset = this.config.letterScale * 0.15;
+            } else if (/[.,:;]/.test(char)) {
+                // Noktalama (Alt): Çok küçük + Tabana yapışık
+                typeScale = 0.35;
+                typeYOffset = this.config.letterScale * 0.35;
+            } else if (/['"`^]/.test(char)) {
+                // Noktalama (Üst): Küçük + Tavana yakın
+                typeScale = 0.35;
+                typeYOffset = -this.config.letterScale * 0.30;
+            } else if (/[-+*=/]/.test(char)) {
+                // Matematiksel / Orta
+                typeScale = 0.50;
+                typeYOffset = this.config.letterScale * 0.10;
+            }
+
+            // 1. MİKRO BOYUT VARYASYONU (TypeScale ile çarpılır)
             const sizeNoise = (Math.sin(i * 4321) * 0.01 * chaosLevel); 
-            const drawScale = this.config.letterScale * (1 + sizeNoise);
+            const drawScale = this.config.letterScale * typeScale * (1 + sizeNoise);
             
             const drawImgScale = drawScale / img.height;
             const drawWidth = img.width * drawImgScale;
@@ -422,22 +454,28 @@ class FinalHandwritingEditor {
             // 4. HARF BAZLI TİTREME
             const jitterY = Math.cos(i * 135.79) * (chaosLevel * 0.4);
             
-            // Çizim Y koordinatı (Layout Y + Efektler)
-            // drawHeight ile layoutHeight farkını ortalamak için offset ekle
-            const heightDiff = (layoutHeight - drawHeight) / 2;
-            const drawY = y - layoutHeight + this.config.baselineOffset + slopeY + lineOffset + jitterY + heightDiff;
+            // Çizim Y koordinatı (Layout Y + Efektler + TypeOffset)
+            // drawHeight ile layoutHeight farkını ortalamak yerine, TypeOffset ile manuel konumlandırıyoruz.
+            // Taban çizgisine (baseline) göre hizalama mantığı:
+            
+            // Temel Y: Satırın alt çizgisine yakın bir yer
+            const baseY = y + this.config.baselineOffset + slopeY + lineOffset + jitterY;
+            
+            // Harfin çizileceği Y: BaseY - HarfBoyu + ÖzelKaydırma
+            // (Bu formül harfleri alt çizgiye hizalar, küçükleri ortalar, sarkanları aşağı salar)
+            const drawY = baseY - drawHeight + typeYOffset;
             
             this.ctx.save();
-            // Dönme merkezi (Layout pozisyonunun ortası)
+            // Dönme merkezi (Harfin ortası)
             const centerX = x + layoutWidth / 2;
-            const centerY = y - layoutHeight / 2 + this.config.baselineOffset + slopeY + lineOffset;
+            const centerY = drawY + drawHeight / 2;
             
             this.ctx.translate(centerX, centerY);
             this.ctx.rotate(angle);
             this.ctx.translate(-centerX, -centerY);
             
             // Resmi çiz (Jitter'lı boyutlarla, ama layout merkezli)
-            // X koordinatını da ortalamak için:
+            // X koordinatını ortala
             const drawX = x + (layoutWidth - drawWidth) / 2;
             
             this.drawBoldImage(img, drawX, drawY, drawWidth, drawHeight);
