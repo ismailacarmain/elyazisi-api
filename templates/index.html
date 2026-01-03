@@ -639,21 +639,41 @@
         let isDesktop = window.innerWidth >= 1200;
 
         // Auth State
-        firebase.auth().onAuthStateChanged(user => {
-            if (user) {
-                loginOverlay.style.display = 'none';
-                appContainer.style.display = 'block';
-                
-                document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
-                document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
-                
-                initEditor();
-                loadFontList(user.uid);
-            } else {
-                loginOverlay.style.display = 'flex';
-                appContainer.style.display = 'none';
-            }
-        });
+        // 1. URL'den user_id kontrolü (Android'den geliyorsa)
+        const urlParams = new URLSearchParams(window.location.search);
+        const androidUid = urlParams.get('user_id');
+
+        if (androidUid) {
+            // Android Modu: Otomatik Giriş
+            console.log("Android App Modu: Otomatik giriş", androidUid);
+            loginOverlay.style.display = 'none';
+            appContainer.style.display = 'block';
+            
+            // Profil bilgisini gizle veya sahte doldur (Android'de zaten profil var)
+            document.getElementById('userName').textContent = 'Mobil Kullanıcı';
+            document.getElementById('userEmail').style.display = 'none';
+            document.getElementById('logoutBtn').style.display = 'none'; // Çıkış butonu gizle
+            
+            initEditor();
+            loadFontList(androidUid);
+        } else {
+            // Web Modu: Firebase Auth Dinle
+            firebase.auth().onAuthStateChanged(user => {
+                if (user) {
+                    loginOverlay.style.display = 'none';
+                    appContainer.style.display = 'block';
+                    
+                    document.getElementById('userAvatar').textContent = user.displayName ? user.displayName[0].toUpperCase() : 'U';
+                    document.getElementById('userName').textContent = user.displayName || 'Kullanıcı';
+                    
+                    initEditor();
+                    loadFontList(user.uid);
+                } else {
+                    loginOverlay.style.display = 'flex';
+                    appContainer.style.display = 'none';
+                }
+            });
+        }
 
         // Login
         document.getElementById('googleLoginBtn').onclick = () => {
