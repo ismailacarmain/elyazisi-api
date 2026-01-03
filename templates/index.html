@@ -709,45 +709,111 @@
         async function loadFontList() {
             const fontSelect = document.getElementById('fontSelector');
             const urlParams = new URLSearchParams(window.location.search);
-            const currentFontId = urlParams.get('font_id');
+            let currentFontId = urlParams.get('font_id');
             const userId = urlParams.get('user_id') || '';
+
+            // 1. Yazılan metni geri yükle (Sayfa yenilenince kaybolmasın)
+            const savedText = localStorage.getItem('saved_text');
+            if (savedText) {
+                metinAlani.value = savedText;
+                // Editor yüklendiğinde metni set etmesi için bir listener ekle veya bekle
+                // init() fonksiyonunda editor oluşunca setText yapılacak
+            }
+
+            // Metin değişince kaydet
+            metinAlani.addEventListener('input', () => {
+                localStorage.setItem('saved_text', metinAlani.value);
+            });
 
             try {
                 const res = await fetch(`/api/list_fonts?user_id=${userId}`);
                 const data = await res.json();
                 
-                fontSelect.innerHTML = '<option value="">Varsayılan Font</option>';
+                fontSelect.innerHTML = ''; 
                 
-                if (data.success && data.fonts) {
+                // Varsayılan
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = "";
+                defaultOpt.textContent = "Varsayılan (Sistem)";
+                fontSelect.appendChild(defaultOpt);
+                
+                if (data.success && data.fonts && data.fonts.length > 0) {
+                    // Grupları oluştur
+                    const groupMy = document.createElement('optgroup');
+                    groupMy.label = "📂 Benim Fontlarım";
+                    
+                    const groupPublic = document.createElement('optgroup');
+                    groupPublic.label = "🌎 Paylaşılan Fontlar";
+
+                    let hasMyFonts = false;
+                    let hasPublicFonts = false;
+
                     data.fonts.forEach(font => {
                         const option = document.createElement('option');
                         option.value = font.id;
-                        option.textContent = `${font.name} (${font.type === 'public' ? 'Genel' : 'Özel'})`;
+                        option.textContent = font.name;
                         if (font.id === currentFontId) option.selected = true;
-                        fontSelect.appendChild(option);
+
+                        if (font.type === 'private') {
+                            groupMy.appendChild(option);
+                            hasMyFonts = true;
+                        } else {
+                            groupPublic.appendChild(option);
+                            hasPublicFonts = true;
+                        }
                     });
+
+                    if (hasMyFonts) fontSelect.appendChild(groupMy);
+                    if (hasPublicFonts) fontSelect.appendChild(groupPublic);
+
+                } else {
+                    const opt = document.createElement('option');
+                    opt.textContent = "Hiç font bulunamadı";
+                    opt.disabled = true;
+                    fontSelect.appendChild(opt);
                 }
             } catch (e) {
                 console.error("Font listesi çekilemedi", e);
-                fontSelect.innerHTML = '<option>Hata oluştu</option>';
+                fontSelect.innerHTML = '<option>Bağlantı hatası</option>';
             }
 
-            // Butona tıklandığında
             document.getElementById('refreshFontBtn').addEventListener('click', () => {
                 const selectedFont = fontSelect.value;
-                if (selectedFont) {
-                    // URL'i güncelle ve yenile
-                    urlParams.set('font_id', selectedFont);
-                    window.location.search = urlParams.toString();
-                } else {
-                    // Varsayılan için parametreyi sil
-                    urlParams.delete('font_id');
-                    window.location.search = urlParams.toString();
-                }
+                if (selectedFont) urlParams.set('font_id', selectedFont);
+                else urlParams.delete('font_id');
+                
+                // Sayfa yenilenmeden önce metni kaydet (yukarıdaki listener zaten yapıyor ama garanti olsun)
+                localStorage.setItem('saved_text', metinAlani.value);
+                window.location.search = urlParams.toString();
             });
         }
         
-        // Başlangıçta listeyi çek
+        // init fonksiyonuna metin yükleme özelliği ekle
+        const originalInit = window.onload; // Mevcut init'i sakla (ama biz listener ekledik)
+        
+        // Editor yüklendikten sonra metni basmak için
+        // init fonksiyonu içindeki 'setupControls' çağrısından sonra metni set edelim.
+        // Bunun için init fonksiyonunu modifiye etmek yerine, setupControls içine bir ekleme yapabiliriz.
+        // Ancak yukarıda setupControls zaten tanımlı.
+        // En kolayı: loadAssets bitince savedText varsa editor.setText yapmaktır.
+        // Bu yüzden init fonksiyonunu slightly modifiye etmemiz gerekebilir ama replace ile zor.
+        // Çözüm: SetupControls çağrıldığında savedText'i kontrol edip editöre basacağız.
+        
+        // setupControls fonksiyonunu override edemeyiz ama input eventini tetikleyebiliriz!
+        const checkEditorReady = setInterval(() => {
+            if (editor && window.controlsSetupDone) {
+                clearInterval(checkEditorReady);
+                if (localStorage.getItem('saved_text')) {
+                    editor.setText(localStorage.getItem('saved_text'));
+                    // İstatistikleri güncelle
+                    const val = metinAlani.value;
+                    document.getElementById('charCount').textContent = val.length;
+                    document.getElementById('wordCount').textContent = val.split(/\s+/).filter(w=>w).length;
+                    document.getElementById('lineCount').textContent = val.split('\n').length;
+                }
+            }
+        }, 100);
+
         loadFontList();
     </script>
 </body>
