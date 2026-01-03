@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>El Yazısı Editörü Pro</title>
+    <!-- Modern Font: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #6366f1;       /* Indigo 500 */
+            --primary-hover: #4f46e5; /* Indigo 600 */
+            --accent: #8b5cf6;        /* Violet 500 */
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --radius-xl: 24px;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.5;
+            /* Mesh Gradient Background */
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+                radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%);
+            background: linear-gradient(-45deg, #e0e7ff, #f3e8ff, #eef2ff, #faf5ff);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* CONTAINER - Modern Floating Layout */
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 30px;
+            min-height: 100vh;
+            align-items: start;
+        }
+
+        /* GLASS PANEL (Reusable) */
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--glass-shadow);
+        }
+
+        /* SIDEBAR - Floating Dock Style */
+        .sidebar {
+            position: sticky;
+            top: 20px;
+            padding: 30px;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            z-index: 50;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--glass-shadow);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+        
+        .logo-icon {
+            font-size: 24px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: white;
+            width: 52px; height: 52px;
+            border-radius: 16px;
+            display: grid; place-items: center;
+            box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3);
+        }
+        
+        .logo-text h2 { font-size: 1.4em; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(to right, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        /* SETTINGS */
+        .setting-group { margin-bottom: 24px; }
+        .setting-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .setting-header label { font-size: 0.9em; font-weight: 600; color: #334155; }
+        
+        .value-badge {
+            background: white;
+            color: var(--primary);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 0.75em;
+            font-weight: 700;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            min-width: 45px;
+            text-align: center;
+        }
+
+        /* MODERN SLIDER */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: rgba(0,0,0,0.05);
+            border-radius: 99px;
+            cursor: pointer;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 22px; height: 22px;
+            background: white;
+            border: 2px solid var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+        input[type="range"]:active::-webkit-slider-thumb { transform: scale(0.95); background: var(--primary); }
+
+        /* SWITCH TOGGLE */
+        .checkbox-wrapper {
+            display: flex; align-items: center; gap: 12px;
+            background: rgba(255,255,255,0.5); padding: 12px 16px;
+            border-radius: var(--radius-lg); cursor: pointer;
+            border: 1px solid transparent; transition: all 0.2s;
+        }
+        .checkbox-wrapper:hover { background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        .checkbox-wrapper input { width: 20px; height: 20px; accent-color: var(--primary); }
+
+        /* BUTTONS */
+        .btn {
+            width: 100%; padding: 14px;
+            border: none; border-radius: var(--radius-lg);
+            font-size: 0.95em; font-weight: 600;
+            cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center; gap: 10px;
+            margin-bottom: 12px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: white;
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
+        }
+        
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(99, 102, 241, 0.4); }
+        
+        .btn-secondary { background: white; color: var(--text-muted); border: 1px solid rgba(0,0,0,0.1); }
+        .btn-secondary:hover { background: #f8fafc; border-color: #cbd5e1; color: var(--text-main); }
+
+        .btn-text {
+            margin-top: 10px; background: none; border: none; color: var(--primary);
+            font-size: 0.85em; font-weight: 600; cursor: pointer;
+            display: flex; align-items: center; gap: 5px; padding: 0;
+            width: 100%; text-align: left;
+        }
+        .btn-text:hover { text-decoration: underline; }
+        
+        .line-settings-container {
+            margin-top: 15px; padding-left: 15px; border-left: 2px solid var(--border-color);
+            display: flex; flex-direction: column; gap: 15px;
+            max-height: 300px; overflow-y: auto;
+            background: rgba(255,255,255,0.5);
+            border-radius: 0 10px 10px 0;
+            padding: 10px;
+        }
+        .line-settings-container::-webkit-scrollbar { width: 4px; }
+        .line-settings-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+        .line-slider-group label { font-size: 0.75em; color: var(--text-muted); display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .line-slider-group input { height: 4px; }
+
+        /* EDITOR */
+        /* WORKSPACE & TOOLBAR */
+        .editor-container { display: flex; flex-direction: column; gap: 20px; }
+
+        .editor-header {
+            background: var(--glass-bg); padding: 20px 32px; border-radius: var(--radius-xl);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--glass-border);
+            backdrop-filter: blur(20px);
+        }
+
+        .toolbar {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            padding: 10px 20px;
+            border-radius: var(--radius-xl);
+            border: 1px solid var(--glass-border);
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 15px; flex-wrap: wrap;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+            margin-bottom: 0; /* Sticky header için */
+            position: sticky; top: 20px; z-index: 40;
+        }
+
+        .toolbar-group { display: flex; align-items: center; gap: 10px; padding-right: 15px; border-right: 1px solid rgba(0,0,0,0.1); }
+        .toolbar-group:last-child { border-right: none; }
+        
+        .toolbar-btn {
+            width: 40px; height: 40px; border-radius: 10px; border: none; background: transparent;
+            font-size: 1.2em; cursor: pointer; transition: all 0.2s; color: var(--text-main);
+        }
+        .toolbar-btn:hover { background: rgba(0,0,0,0.05); transform: scale(1.1); }
+        
+        .toolbar-select {
+            padding: 8px 16px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.1);
+            background: rgba(255,255,255,0.8); font-size: 0.9em; font-weight: 500;
+            color: var(--text-main); cursor: pointer; outline: none; transition: all 0.2s;
+        }
+        .toolbar-select:hover { border-color: var(--primary); background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+
+        .workspace {
+            background: white;
+            border-radius: var(--radius-xl);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: grid; grid-template-columns: 1fr; 
+            border: 1px solid white;
+        }
+
+        .input-area { padding: 30px; background: #fafafa; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        
+        textarea {
+            width: 100%; min-height: 180px; border: none; background: transparent;
+            font-family: 'Inter', sans-serif; font-size: 1.1em; line-height: 1.7;
+            color: var(--text-main); resize: vertical; padding: 0;
+        }
+        textarea::placeholder { color: #cbd5e1; }
+        
+        .canvas-wrapper {
+            background: #334155; /* Slate 700 - Daha koyu masaüstü */
+            background-image: radial-gradient(#475569 1px, transparent 1px);
+            background-size: 20px 20px;
+            padding: 40px;
+            overflow: auto; 
+            max-height: 800px;
+            display: flex; 
+            justify-content: center;
+            align-items: flex-start; /* Kağıt yukarıdan başlar */
+        }
+        
+        #mainCanvas {
+            background: white;
+            /* A4 KAĞIT ORANI ve GÖRÜNÜMÜ */
+            aspect-ratio: 210/297; /* Fiziksel A4 Oranı */
+            width: 100%;
+            max-width: 794px; /* 96 DPI'da yaklaşık A4 genişliği (Ekranda gerçekçi durması için) */
+            height: auto;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.05), 0 20px 50px -10px rgba(0,0,0,0.5); /* Derin gölge */
+            border-radius: 2px;
+            transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1); /* Yumuşak zoom */
+        }
+
+        /* LOADING & TOAST */
+        .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.8); backdrop-filter: blur(15px); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+        .progress-container { width: 300px; height: 4px; background: rgba(0,0,0,0.1); border-radius: 99px; overflow: hidden; margin-top: 20px; }
+        .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+
+        .toast-container { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 10000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+        .toast {
+            background: rgba(30, 41, 59, 0.9); backdrop-filter: blur(10px); color: white;
+            padding: 12px 24px; border-radius: 50px; font-size: 0.95em; font-weight: 500;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            animation: slideUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex; align-items: center; gap: 10px; pointer-events: auto;
+        }
+        @keyframes slideUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        /* ZEN MODE */
+        body.zen-mode .sidebar, body.zen-mode .editor-header { display: none; }
+        body.zen-mode .container { display: block; padding: 0; margin: 0; max-width: 100%; }
+        body.zen-mode .editor-container { gap: 0; height: 100vh; }
+        body.zen-mode .toolbar { border-radius: 0; border: none; border-bottom: 1px solid rgba(0,0,0,0.1); }
+        body.zen-mode .workspace { border-radius: 0; height: calc(100vh - 70px); grid-template-columns: 40% 60%; box-shadow: none; }
+        body.zen-mode .input-area { height: 100%; border-right: 1px solid rgba(0,0,0,0.05); padding: 50px; }
+        body.zen-mode .canvas-wrapper { height: 100%; max-height: none; align-items: flex-start; }
+        
+        body.zen-mode #closeZenBtn {
+            display: flex;
+        }
+
+        #closeZenBtn {
+            display: none;
+            position: absolute;
+            top: 20px; right: 20px;
+            width: 48px; height: 48px;
+            background: white;
+            border-radius: 50%;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            align-items: center; justify-content: center;
+            font-size: 24px; cursor: pointer; z-index: 10000;
+            transition: transform 0.2s; color: #ef4444;
+        }
+        
+        @media (max-width: 1024px) {
+            .container { grid-template-columns: 1fr; }
+            .sidebar { position: relative; top: 0; order: 2; }
+            .editor-container { order: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="loadingScreen" class="loading">
+        <h1 style="font-size: 3em; color: var(--primary);">✍️</h1>
+        <div class="progress-container"><div id="progressFill" class="progress-fill"></div></div>
+        <p style="margin-top: 20px; color: var(--text-muted);">Editör hazırlanıyor...</p>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <div class="container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <div class="logo-icon">✒️</div>
+                <div class="logo-text"><h2>Pro Yazı</h2><span style="color:var(--text-muted); font-size:0.8em;">v3.0 Ultra</span></div>
+            </div>
+            
+            <div class="setting-group">
+                <div class="setting-header"><label>📍 Üst Boşluk</label><span class="value-badge" id="marginValue">250px</span></div>
+                <input type="range" id="marginSlider" min="0" max="500" value="250" step="10">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>📏 Satır Aralığı</label><span class="value-badge" id="lineHeightValue">220px</span></div>
+                <input type="range" id="lineHeightSlider" min="40" max="400" value="220" step="10">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>✏️ Yazı Boyutu</label><span class="value-badge" id="scaleValue">140px</span></div>
+                <input type="range" id="scaleSlider" min="30" max="250" value="140" step="10">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>💪 Kalınlık</label><span class="value-badge" id="boldValue">0</span></div>
+                <input type="range" id="boldSlider" min="0" max="5" value="0" step="1">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>↔️ Kelime Boşluğu</label><span class="value-badge" id="wordValue">55px</span></div>
+                <input type="range" id="wordSlider" min="20" max="120" value="55" step="5">
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label>🎯 Taban Ayarı</label><span class="value-badge" id="baselineValue">+10px</span></div>
+                <input type="range" id="baselineSlider" min="-50" max="50" value="10" step="1">
+            </div>
+            <hr style="border:0; border-top:1px solid rgba(0,0,0,0.1); margin:24px 0;">
+            <div class="setting-group">
+                <div class="setting-header"><label style="color:var(--primary);">〰️ Doğallık</label><span class="value-badge" id="jitterValue">5</span></div>
+                <input type="range" id="jitterSlider" min="0" max="20" value="5" step="1">
+                <small>Titreme ve boyut farkı</small>
+            </div>
+            <div class="setting-group">
+                <div class="setting-header"><label style="color:var(--primary);">📉 Satır Eğimi</label><span class="value-badge" id="slopeValue">5</span></div>
+                <input type="range" id="slopeSlider" min="0" max="20" value="5" step="1">
+                <small>Satırların doğal kayması</small>
+                
+                <!-- GELİŞMİŞ SATIR AYARLARI -->
+                <button id="toggleLineSettingsBtn" class="btn-text">🔽 Her satır için ayrı ayarla</button>
+                <div id="lineSettingsContainer" class="line-settings-container" style="display: none;">
+                    <!-- Dinamik olarak buraya sliderlar gelecek -->
+                </div>
+            </div>
+            <div class="setting-group">
+                <label class="checkbox-wrapper">
+                    <input type="checkbox" id="linesCheck" checked><span>📄 Kılavuz Çizgileri</span>
+                </label>
+            </div>
+            <button id="pngBtn" class="btn btn-secondary">🖼️ PNG İndir</button>
+            <button id="pdfBtn" class="btn btn-primary">📄 PDF İndir</button>
+            <button id="clearBtn" class="btn btn-secondary" style="color:#ef4444;">🗑️ Temizle</button>
+            
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:20px; text-align:center;">
+                <div style="background:rgba(255,255,255,0.6); padding:10px; border-radius:10px;"><strong id="charCount" style="display:block;">0</strong><span style="font-size:0.7em; color:#64748b;">HARF</span></div>
+                <div style="background:rgba(255,255,255,0.6); padding:10px; border-radius:10px;"><strong id="wordCount" style="display:block;">0</strong><span style="font-size:0.7em; color:#64748b;">KELİME</span></div>
+                <div style="background:rgba(255,255,255,0.6); padding:10px; border-radius:10px;"><strong id="lineCount" style="display:block;">0</strong><span style="font-size:0.7em; color:#64748b;">SATIR</span></div>
+            </div>
+        </aside>
+
+        <!-- EDITOR AREA -->
+        <main class="editor-container">
+            <header class="editor-header">
+                <div>
+                    <h1 style="font-size:1.2em; font-weight:700;">Belge Önizleme</h1>
+                    <p style="font-size:0.85em; color:var(--text-muted);">Tüm ayarlar anında güncellenir.</p>
+                </div>
+                <!-- ODAK MODU BUTONU -->
+                <button id="zenBtn" class="btn btn-primary" style="width: auto; padding: 10px 20px;">
+                    🔍 Odak Modu
+                </button>
+            </header>
+
+            <div class="toolbar">
+                <div class="toolbar-group">
+                    <button class="toolbar-btn" id="undoBtn" title="Geri Al (Ctrl+Z)">↩️</button>
+                    <button class="toolbar-btn" id="redoBtn" title="İleri Al (Ctrl+Y)" disabled>↪️</button>
+                </div>
+                
+                <div class="toolbar-group">
+                    <select id="paperSelect" class="toolbar-select">
+                        <option value="cizgili">📝 Çizgili Kağıt</option>
+                        <option value="kareli">▦ Kareli Kağıt</option>
+                        <option value="duz">⬜ Düz Kağıt</option>
+                    </select>
+                    
+                    <select id="colorSelect" class="toolbar-select">
+                        <option value="tukenmez">⚫ Siyah Tükenmez</option>
+                        <option value="bic_mavi">🖊️ Klasik BIC Mavisi</option>
+                        <option value="pilot_mavi">💧 Pilot Kalem Mavisi</option>
+                        <option value="eski_murekkep">📜 Eskiyen Mürekkep</option>
+                        <option value="kursun">✏️ Kurşun Kalem</option>
+                        <option value="kirmizi">🔴 Kırmızı Kalem</option>
+                    </select>
+                </div>
+
+                <div class="toolbar-group">
+                    <span style="font-size:0.8em; color:var(--text-muted);">🔍</span>
+                    <input type="range" id="zoomSlider" min="50" max="150" value="100" style="width: 100px;">
+                </div>
+            </div>
+
+            <div class="workspace">
+                <!-- KAPAT BUTONU -->
+                <button id="closeZenBtn" title="Odak Modundan Çık">✕</button>
+
+                <div class="input-area">
+                    <textarea id="metinAlani" placeholder="Buraya yazın... Yazdıklarınız sağ tarafta el yazısına dönüşecek."></textarea>
+                </div>
+                <div class="canvas-wrapper">
+                    <canvas id="mainCanvas"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/engine.js') }}"></script>
+    <script>
+        let editor = null;
+        const metinAlani = document.getElementById('metinAlani');
+        
+        // TOAST NOTIFICATION
+        function showToast(message, icon = '✅') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<span>${icon}</span> ${message}`;
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(20px)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        async function init() {
+            const loading = document.getElementById('loadingScreen');
+            const progress = document.getElementById('progressFill');
+            
+            try {
+                progress.style.width = '20%';
+                editor = new FinalHandwritingEditor('mainCanvas');
+                
+                const success = await editor.loadAssets((p) => {
+                    progress.style.width = (20 + p * 80) + '%';
+                });
+                
+                if (success) {
+                    setTimeout(() => { loading.style.display = 'none'; setupControls(); }, 500);
+                }
+            } catch (error) {
+                console.error(error);
+                showToast('Yükleme hatası oluştu!', '❌');
+            }
+        }
+        
+        function setupControls() {
+            // Live Update
+            metinAlani.addEventListener('input', () => {
+                editor.setText(metinAlani.value);
+                updateStats();
+                updateLineSliders(); // Satır sayısı değişince sliderları güncelle
+            });
+
+            // Gelişmiş Satır Ayarları
+            const lineSettingsBtn = document.getElementById('toggleLineSettingsBtn');
+            const lineSettingsContainer = document.getElementById('lineSettingsContainer');
+            let isLineSettingsOpen = false;
+
+            lineSettingsBtn.addEventListener('click', () => {
+                isLineSettingsOpen = !isLineSettingsOpen;
+                lineSettingsContainer.style.display = isLineSettingsOpen ? 'flex' : 'none';
+                lineSettingsBtn.textContent = isLineSettingsOpen ? '🔼 Ayarları Gizle' : '🔽 Her satır için ayrı ayarla';
+                if (isLineSettingsOpen) updateLineSliders();
+            });
+
+            function updateLineSliders() {
+                if (!isLineSettingsOpen) return;
+
+                // Görsel satır sayısını editörden al (Word-wrap dahil)
+                const count = editor.getVisualLineCount();
+                
+                // Mevcut slider sayısını kontrol et
+                if (lineSettingsContainer.children.length === count) return;
+
+                // Scroll pozisyonunu korumak için sadece eksik veya fazla varsa yeniden oluşturmuyoruz,
+                // Diffing yapmak daha iyi ama şimdilik tamamen temizleyip yeniden çiziyoruz (basitlik için)
+                lineSettingsContainer.innerHTML = ''; 
+
+                for (let i = 0; i < count; i++) {
+                    const div = document.createElement('div');
+                    div.className = 'line-slider-group';
+                    
+                    // Mevcut değeri al veya 0
+                    const currentVal = editor.getSpecificLineSlope(i) || 0;
+
+                    div.innerHTML = `
+                        <label>Satır ${i + 1} Eğim <span style="color:var(--primary);">${currentVal}</span></label>
+                        <input type="range" min="-15" max="15" value="${currentVal}" step="1" data-index="${i}">
+                    `;
+                    
+                    const input = div.querySelector('input');
+                    const span = div.querySelector('span');
+
+                    input.addEventListener('input', (e) => {
+                        const val = parseInt(e.target.value);
+                        span.textContent = (val > 0 ? '+' : '') + val;
+                        editor.setSpecificLineSlope(i, val);
+                    });
+
+                    lineSettingsContainer.appendChild(div);
+                }
+            }
+
+            function updateStats() {
+                const val = metinAlani.value;
+                document.getElementById('charCount').textContent = val.length;
+                document.getElementById('wordCount').textContent = val.split(/\s+/).filter(w=>w).length;
+                document.getElementById('lineCount').textContent = val.split('\n').length;
+            }
+
+            const bindSlider = (id, labelId, method, unit='') => {
+                document.getElementById(id).addEventListener('input', (e) => {
+                    const v = parseInt(e.target.value);
+                    document.getElementById(labelId).textContent = (labelId==='baselineValue'&&v>0?'+':'')+v+unit;
+                    editor[method](v);
+                });
+            };
+            
+            bindSlider('marginSlider', 'marginValue', 'setMarginTop', 'px');
+            bindSlider('lineHeightSlider', 'lineHeightValue', 'setLineHeight', 'px');
+            // bindSlider('scaleSlider', 'scaleValue', 'setLetterScale', 'px'); // REMOVED -> Custom logic below
+            
+            // YAZI BOYUTU DEĞİŞİNCE SATIR ARALIĞINI OTOMATİK AYARLA (WORD GİBİ)
+            document.getElementById('scaleSlider').addEventListener('input', (e) => {
+                const fontSize = parseInt(e.target.value);
+                document.getElementById('scaleValue').textContent = fontSize + 'px';
+                editor.setLetterScale(fontSize);
+                
+                // Otomatik Satır Aralığı (x1.6)
+                const newLineHeight = Math.floor(fontSize * 1.6);
+                const lhSlider = document.getElementById('lineHeightSlider');
+                const lhLabel = document.getElementById('lineHeightValue');
+                
+                // Slider sınırlarını kontrol et
+                if (newLineHeight >= lhSlider.min && newLineHeight <= lhSlider.max) {
+                    lhSlider.value = newLineHeight;
+                    lhLabel.textContent = newLineHeight + 'px';
+                    editor.setLineHeight(newLineHeight);
+                }
+            });
+
+            bindSlider('boldSlider', 'boldValue', 'setBoldness');
+            bindSlider('wordSlider', 'wordValue', 'setWordSpacing', 'px');
+            bindSlider('baselineSlider', 'baselineValue', 'setBaselineOffset', 'px');
+            bindSlider('jitterSlider', 'jitterValue', 'setJitter');
+            bindSlider('slopeSlider', 'slopeValue', 'setLineSlope');
+            
+            document.getElementById('linesCheck').addEventListener('change', e => editor.setShowLines(e.target.checked));
+            
+            document.getElementById('pngBtn').addEventListener('click', () => {
+                editor.exportPNG();
+                showToast('PNG indiriliyor...');
+            });
+            
+            document.getElementById('pdfBtn').addEventListener('click', () => {
+                editor.exportPDF();
+                showToast('PDF oluşturuluyor, lütfen bekleyin...');
+            });
+            
+            document.getElementById('clearBtn').addEventListener('click', () => { 
+                if(confirm('Tüm metni silmek istediğinize emin misiniz?')) { 
+                    metinAlani.value=''; 
+                    editor.clear(); 
+                    updateStats(); 
+                    showToast('Editör temizlendi', '🗑️');
+                }
+            });
+
+            // TOOLBAR
+            document.getElementById('undoBtn').addEventListener('click', () => {
+                editor.undo();
+                showToast('Geri alındı', '↩️');
+            });
+            
+            document.getElementById('paperSelect').addEventListener('change', (e) => {
+                editor.setPaperType(e.target.value);
+            });
+            
+            document.getElementById('colorSelect').addEventListener('change', (e) => {
+                editor.setInkColor(e.target.value);
+            });
+            
+            document.getElementById('zoomSlider').addEventListener('input', (e) => {
+                const scale = e.target.value / 100;
+                document.getElementById('mainCanvas').style.transform = `scale(${scale})`;
+            });
+
+            // ZEN MODE
+            const zenBtn = document.getElementById('zenBtn');
+            const closeZenBtn = document.getElementById('closeZenBtn');
+            
+            zenBtn.addEventListener('click', () => {
+                document.body.classList.add('zen-mode');
+                showToast('Odak modu aktif', '🔍');
+            });
+
+            closeZenBtn.addEventListener('click', () => {
+                document.body.classList.remove('zen-mode');
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && document.body.classList.contains('zen-mode')) {
+                    document.body.classList.remove('zen-mode');
+                }
+            });
+            
+            updateStats();
+        }
+        
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

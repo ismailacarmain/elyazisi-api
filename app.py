@@ -1,17 +1,17 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import cv2
-import numpy as np
+from flask import Flask, request, jsonify, render_template, send_file
 import os
-import base64
-import firebase_admin
-from firebase_admin import credentials, firestore
-import json
-import traceback
-import core_generator as core_generator
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
+
+@app.route('/')
+def index():
+    # Android'den gelen font_id ve user_id'yi yakala
+    font_id = request.args.get('font_id', '')
+    user_id = request.args.get('user_id', '')
+    return render_template('index.html', font_id=font_id, user_id=user_id)
+
+# ... (load_assets ve diğer kısımlar aynı kalacak)
 
 # Harfleri başlangıçta yükle
 HARFLER_KLASORU = 'static/harfler'
