@@ -806,9 +806,14 @@
             </div>
             
             <div class="sidebar-footer">
-                <button id="pdfBtn" class="btn-primary-gradient">
-                    <i class="bi bi-file-earmark-pdf"></i> PDF İndir
-                </button>
+                <div class="d-grid gap-2">
+                    <button id="pdfBtn" class="btn-primary-gradient">
+                        <i class="bi bi-file-earmark-pdf"></i> PDF İndir
+                    </button>
+                    <button id="pngBtn" class="btn-primary-gradient" style="background: linear-gradient(135deg, var(--secondary), var(--primary));">
+                        <i class="bi bi-file-image"></i> PNG İndir
+                    </button>
+                </div>
             </div>
         </aside>
 
@@ -955,7 +960,7 @@
         async function loadFontList(uid) {
             const select = document.getElementById('fontSelector');
             try {
-                const res = await fetch(`/api/list_fonts?user_id=${uid}`);
+                const res = await fetch(`https://elyazisi-api.onrender.com/api/list_fonts?user_id=${uid}`);
                 const data = await res.json();
                 select.innerHTML = '<option value="">Varsayılan Font</option>';
                 if (data.success && data.fonts) {
@@ -1008,6 +1013,10 @@
 
         document.getElementById('pdfBtn').addEventListener('click', () => {
             if (editor) editor.exportPDF();
+        });
+
+        document.getElementById('pngBtn').addEventListener('click', () => {
+            if (editor) editor.exportPNG();
         });
     </script>
 </body>

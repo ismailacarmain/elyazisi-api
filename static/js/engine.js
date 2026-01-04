@@ -390,12 +390,18 @@ class FinalHandwritingEditor {
     }
     
     async exportPDF() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const fontId = urlParams.get('font_id') || '';
+        const userId = urlParams.get('user_id') || '';
+
         const form = document.createElement('form');
         form.method = 'POST';
         form.action = '/download';
         form.style.display = 'none';
         const params = {
             metin: this.textContent,
+            font_id: fontId,
+            user_id: userId,
             yazi_boyutu: this.config.letterScale,
             satir_araligi: this.config.lineHeight,
             kelime_boslugu: this.config.wordSpacing,
