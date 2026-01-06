@@ -61,10 +61,17 @@ class HarfSistemi:
         return res
 
     def detect_markers(self, img):
+        # OpenCV Versiyon Uyumluluğu (Aruco)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        parameters = cv2.aruco.DetectorParameters()
-        detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-        corners, ids, _ = detector.detectMarkers(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+        try:
+            # Yeni OpenCV (4.7+)
+            parameters = cv2.aruco.DetectorParameters()
+            detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+            corners, ids, _ = detector.detectMarkers(gray)
+        except:
+            # Eski OpenCV
+            corners, ids, _ = cv2.aruco.detectMarkers(gray, aruco_dict)
         return corners, ids
 
     def process_single_page(self, img, section_id):
@@ -74,9 +81,19 @@ class HarfSistemi:
         base = int(min(ids))
         bid = int(base // 4)
         scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
-        src = np.float32([np.mean(corners[i][0], axis=0) for i in range(len(ids)) if ids[i] in [bid*4, bid*4+1, bid*4+2, bid*4+3]])
-        if len(src) < 4: return None, "Eksik marker."
-        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])), (sw, sh))
+        
+        target_ids = [bid*4, bid*4+1, bid*4+2, bid*4+3]
+        src_points = []
+        for tid in target_ids:
+            found = False
+            for i in range(len(ids)):
+                if ids[i] == tid:
+                    src_points.append(np.mean(corners[i][0], axis=0))
+                    found = True
+                    break
+            if not found: return None, f"Eksik marker: {tid}"
+            
+        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(np.float32(src_points), np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])), (sw, sh))
         
         b_px, start_idx = 150, bid * 60
         page_results = {}
@@ -95,6 +112,9 @@ sistem = HarfSistemi()
 
 # --- ROTALAR ---
 
+@app.route('/health')
+def health(): return "OK", 200
+
 @app.route('/api/generate_form')
 def generate_form():
     try:
@@ -102,7 +122,9 @@ def generate_form():
         sistem.refresh_char_list(v)
         pdf = core_generator.FormOlusturucu().tum_formu_olustur(v, False)
         return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name='form.pdf')
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except Exception as e: 
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/generate_example')
 def generate_example():
@@ -111,7 +133,9 @@ def generate_example():
         assets = core_generator.harf_resimlerini_yukle('static/harfler')
         pdf = core_generator.FormOlusturucu().tum_formu_olustur(v, True, assets)
         return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name='ornek.pdf')
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    except Exception as e: 
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/get_assets')
 def get_assets():
@@ -132,26 +156,30 @@ def get_assets():
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
-    data = request.get_json()
-    u_id, f_name, b64, s_id, v_count = data.get('user_id'), data.get('font_name'), data.get('image_base64'), data.get('section_id', 0), data.get('variation_count', 3)
-    sistem.refresh_char_list(v_count)
-    img = cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
-    res, err = sistem.process_single_page(img, s_id)
-    if err: return jsonify({'success': False, 'message': err}), 400
-    
-    database = init_firebase()
-    if database:
-        fid = f"{u_id}_{f_name.replace(' ', '_')}"
-        ref = database.collection('fonts').document(fid)
-        doc = ref.get()
-        if not doc.exists: 
-            ref.set({'harfler': res['harfler'], 'owner_id': u_id, 'font_name': f_name, 'variation_count': v_count})
-        else:
-            h = doc.to_dict().get('harfler', {})
-            h.update(res['harfler'])
-            ref.update({'harfler': h})
-        database.collection('temp_scans').document(fid).set({f'section_{res["section_id"]}': True}, merge=True)
-    return jsonify({'success': True, 'detected_chars': res['detected']})
+    try:
+        data = request.get_json()
+        u_id, f_name, b64, s_id, v_count = data.get('user_id'), data.get('font_name'), data.get('image_base64'), data.get('section_id', 0), data.get('variation_count', 3)
+        sistem.refresh_char_list(v_count)
+        img = cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
+        res, err = sistem.process_single_page(img, s_id)
+        if err: return jsonify({'success': False, 'message': err}), 400
+        
+        database = init_firebase()
+        if database:
+            fid = f"{u_id}_{f_name.replace(' ', '_')}"
+            ref = database.collection('fonts').document(fid)
+            doc = ref.get()
+            if not doc.exists: 
+                ref.set({'harfler': res['harfler'], 'owner_id': u_id, 'font_name': f_name, 'variation_count': v_count})
+            else:
+                h = doc.to_dict().get('harfler', {})
+                h.update(res['harfler'])
+                ref.update({'harfler': h})
+            database.collection('temp_scans').document(fid).set({f'section_{res["section_id"]}': True}, merge=True)
+        return jsonify({'success': True, 'detected_chars': len(res['harfler'])})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -181,7 +209,9 @@ def download():
         
         pdf = core_generator.sayfalari_pdf_olustur(core_generator.metni_sayfaya_yaz(request.form.get('metin', ''), active_harfler, config))
         return send_file(pdf, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
-    except Exception as e: return str(e), 500
+    except Exception as e: 
+        traceback.print_exc()
+        return str(e), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
