@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgl1 \
-    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -16,7 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Klasörleri oluştur (502 hatasını önler)
-RUN mkdir -p static/harfler templates
-
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile - app:app
+CMD gunicorn --bind 0.0.0.0:$PORT app:app
