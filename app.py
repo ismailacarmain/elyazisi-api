@@ -11,11 +11,12 @@ import traceback
 import io
 import core_generator as core_generator
 from pdf2image import convert_from_bytes
+from PIL import Image
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app, resources={r"/*": {"origins": "*", "expose_headers": ["Content-Disposition"]}})
 
-# --- FIREBASE BAĞLANTISI ---
+# --- FIREBASE CONNECTION ---
 db = None
 def init_firebase():
     global db
@@ -23,24 +24,30 @@ def init_firebase():
     try:
         cred = None
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
-        if env_creds: cred = credentials.Certificate(json.loads(env_creds.strip()))
+        if env_creds:
+            cred = credentials.Certificate(json.loads(env_creds.strip()))
+        
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
                     cred = credentials.Certificate(p)
                     break
+        
         if cred:
-            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app(cred)
             db = firestore.client()
-    except Exception as e: print(f"Firebase Hatası: {e}")
+    except Exception as e:
+        print(f"Firebase Error: {e}")
     return db
 
 init_firebase()
 
-# --- HARF TARAMA MOTORU ---
+# --- SCANNING ENGINE ---
 class HarfSistemi:
     def __init__(self):
+        self.char_list = []
         self.refresh_char_list(3)
 
     def refresh_char_list(self, variation_count=3):
@@ -66,26 +73,35 @@ class HarfSistemi:
 
     def detect_markers(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         try:
             params = cv2.aruco.DetectorParameters()
-            detector = cv2.aruco.ArucoDetector(dict, params)
+            detector = cv2.aruco.ArucoDetector(aruco_dict, params)
             corners, ids, _ = detector.detectMarkers(gray)
         except:
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, dict)
+            corners, ids, _ = cv2.aruco.detectMarkers(gray, aruco_dict)
         return corners, ids
 
     def process_single_page(self, img, s_id):
         corners, ids = self.detect_markers(img)
-        if ids is None or len(ids) < 4: return None, "Marker bulunamadı."
+        if ids is None or len(ids) < 4: return None, "Markerlar bulunamadı."
         ids = ids.flatten()
         base = int(min(ids))
         bid = int(base // 4)
         m = 175; sw, sh = 2100, 1480
+        
         target_ids = [bid*4, bid*4+1, bid*4+2, bid*4+3]
-        src = np.float32([np.mean(corners[i][0], axis=0) for tid in target_ids for i in range(len(ids)) if ids[i] == tid])
-        if len(src) < 4: return None, "Eksik marker."
-        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])), (sw, sh))
+        src_points = []
+        for tid in target_ids:
+            found = False
+            for i in range(len(ids)):
+                if ids[i] == tid:
+                    src_points.append(np.mean(corners[i][0], axis=0))
+                    found = True
+                    break
+            if not found: return None, f"Eksik marker: {tid}"
+            
+        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(np.float32(src_points), np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])), (sw, sh))
         
         b_px, start_idx = 150, bid * 30
         page_results = {}
@@ -101,6 +117,8 @@ class HarfSistemi:
         return {'harfler': page_results, 'detected': len(page_results), 'section_id': bid}, None
 
 sistem = HarfSistemi()
+
+# --- ROUTES ---
 
 @app.route('/health')
 def health(): return "OK", 200
@@ -126,18 +144,27 @@ def generate_example():
 @app.route('/api/get_assets')
 def get_assets():
     f_id, u_id = request.args.get('font_id'), request.args.get('user_id')
-    db = init_firebase()
-    if db and f_id:
-        doc = db.collection('fonts').document(f_id).get()
-        if not doc.exists and u_id: doc = db.collection('users').document(u_id).collection('fonts').document(f_id).get()
+    database = init_firebase()
+    if database and f_id:
+        doc = database.collection('fonts').document(f_id).get()
+        if not doc.exists and u_id: doc = database.collection('users').document(u_id).collection('fonts').document(f_id).get()
         if doc.exists:
-            harfler = doc.to_dict().get('harfler', {})
+            data = doc.to_dict().get('harfler', {})
             assets = {}
-            for k, v in harfler.items():
+            for k, v in data.items():
                 base = k.rsplit('_', 1)[0]
                 if base not in assets: assets[base] = []
                 assets[base].append(v)
             return jsonify({"success": True, "assets": assets, "source": "firebase"})
+    
+    local_assets = {}
+    if os.path.exists('static/harfler'):
+        for f in os.listdir('static/harfler'):
+            if f.endswith('.png'):
+                key = f.rsplit('_', 1)[0]
+                if key not in local_assets: local_assets[key] = []
+                local_assets[key].append(f)
+        return jsonify({"success": True, "assets": local_assets, "source": "local"})
     return jsonify({"success": False}), 404
 
 @app.route('/process_single', methods=['POST'])
@@ -151,7 +178,7 @@ def process_single():
         raw_bytes = base64.b64decode(b64)
         if 'pdf' in file_type.lower():
             images = convert_from_bytes(raw_bytes)
-            if not images: return jsonify({'success': False, 'message': 'PDF işlenemedi'}), 400
+            if not images: return jsonify({'success': False, 'message': 'PDF error'}), 400
             img = cv2.cvtColor(np.array(images[0].convert('RGB')), cv2.COLOR_RGB2BGR)
         else:
             img = cv2.imdecode(np.frombuffer(raw_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -199,4 +226,5 @@ def download():
     except Exception as e: return str(e), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
