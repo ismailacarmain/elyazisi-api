@@ -20,11 +20,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Tüm dosyaları kopyala
 COPY . .
 
-# Static klasörü oluştur
-RUN mkdir -p static/harfler templates
+# Startup script'e çalıştırma izni ver
+RUN chmod +x start.sh
+
+# Gerekli klasörleri oluştur (hata önleme)
+RUN mkdir -p static/harfler templates temp
 
 # Port
 ENV PORT=8080
 
-# Gunicorn ile başlat
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"
+
+# Startup script ile başlat
+CMD ["./start.sh"]

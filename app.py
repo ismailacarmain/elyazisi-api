@@ -239,18 +239,20 @@ def generate_form():
 
 @app.route('/api/generate_example')
 def generate_example():
-    """Örnek dolu form PDF'i oluştur"""
+    """Örnek dolu form PDF'i oluştur - static klasör olmadan"""
     try:
         variation_count = int(request.args.get('variation_count', 3))
         
-        # Örnek harfleri yükle
-        assets = core_generator.harf_resimlerini_yukle('static/harfler')
+        # Örnek harfleri yükle - static klasör yoksa boş form oluştur
+        assets = None
+        if os.path.exists('static/harfler'):
+            assets = core_generator.harf_resimlerini_yukle('static/harfler')
         
-        if not assets:
-            return jsonify({"error": "Örnek harfler bulunamadı"}), 404
+        # Assets yoksa sadece boş form oluştur
+        is_example = assets is not None and len(assets) > 0
         
         pdf_buffer = core_generator.FormOlusturucu().tum_formu_olustur(
-            variation_count, True, assets
+            variation_count, is_example, assets
         )
         
         if pdf_buffer is None:
@@ -394,6 +396,9 @@ def download():
         user_id = request.form.get('user_id')
         metin = request.form.get('metin', '')
         
+        if not metin or not metin.strip():
+            return jsonify({"error": "Metin boş olamaz"}), 400
+        
         # Parametreler
         yazi_boyutu = int(request.form.get('yazi_boyutu', 140))
         satir_araligi = int(request.form.get('satir_araligi', 220))
@@ -411,25 +416,37 @@ def download():
                 doc = db.collection('fonts').document(font_id).get()
                 
                 if doc.exists:
-                    for key, value in doc.to_dict().get('harfler', {}).items():
+                    print(f"✓ Font bulundu: {font_id}")
+                    harfler_data = doc.to_dict().get('harfler', {})
+                    print(f"✓ Toplam harf: {len(harfler_data)}")
+                    
+                    for key, value in harfler_data.items():
                         base = key.rsplit('_', 1)[0]
                         if base not in active_harfler:
                             active_harfler[base] = []
                         
                         # Base64'ü Image'e çevir
-                        img_bytes = base64.b64decode(value)
-                        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                        active_harfler[base].append(img)
+                        try:
+                            img_bytes = base64.b64decode(value)
+                            img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+                            active_harfler[base].append(img)
+                        except Exception as e:
+                            print(f"⚠ Harf yükleme hatası ({key}): {e}")
+                else:
+                    print(f"⚠ Font bulunamadı: {font_id}")
             except Exception as e:
-                print(f"Harf yükleme hatası: {e}")
+                print(f"⚠ Firebase hatası: {e}")
                 traceback.print_exc()
         
-        # Fallback: örnek harfler
+        # Fallback: Basit harf oluştur (eğer hiç harf yoksa)
         if not active_harfler:
-            active_harfler = core_generator.harf_resimlerini_yukle('static/harfler')
+            print("⚠ Harf bulunamadı, varsayılan font oluşturuluyor...")
+            # Basit harf seti oluştur (boş)
+            return jsonify({
+                "error": "Font yüklenmedi. Lütfen önce formunuzu tarayın."
+            }), 404
         
-        if not active_harfler:
-            return jsonify({"error": "Harf bulunamadı"}), 404
+        print(f"✓ Aktif harf grupları: {len(active_harfler)}")
         
         # Konfigürasyon
         config = {
@@ -444,18 +461,23 @@ def download():
             'jitter': jitter,
             'paper_type': paper_type,
             'murekkep_rengi': (27, 27, 29),
-            'kalinlik': kalinlik
+            'kalinlik': kalinlik,
+            'opacity': 0.95
         }
         
         # Sayfaları oluştur
+        print("📄 Sayfalar oluşturuluyor...")
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
+        print(f"✓ {len(sayfalar)} sayfa oluşturuldu")
         
         # PDF oluştur
+        print("📦 PDF oluşturuluyor...")
         pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
         
         if pdf_buffer is None:
             return jsonify({"error": "PDF oluşturulamadı"}), 500
         
+        print("✓ PDF hazır, gönderiliyor...")
         return send_file(
             pdf_buffer, 
             mimetype='application/pdf', 
@@ -464,10 +486,43 @@ def download():
         )
         
     except Exception as e:
-        print(f"Download hatası: {e}")
+        print(f"❌ Download hatası: {e}")
         traceback.print_exc()
-        return str(e), 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
+    print("=" * 50)
+    print("🚀 Fontify API Starting...")
+    print("=" * 50)
+    
+    # Startup checks
+    print("📦 Python version:", os.sys.version)
+    print("📦 OpenCV version:", cv2.__version__)
+    print("📦 Pillow version:", Image.__version__)
+    print("📦 NumPy version:", np.__version__)
+    
+    # Check directories
+    print("\n📁 Directory checks:")
+    for dir_path in ['static', 'static/harfler', 'templates', 'temp']:
+        if os.path.exists(dir_path):
+            print(f"  ✓ {dir_path} exists")
+        else:
+            os.makedirs(dir_path, exist_ok=True)
+            print(f"  ✓ {dir_path} created")
+    
+    # Firebase check
+    print("\n🔥 Firebase connection:")
+    db_conn = init_firebase()
+    if db_conn:
+        print("  ✓ Firebase connected")
+    else:
+        print("  ⚠ Firebase not configured (optional)")
+    
+    print("\n" + "=" * 50)
+    print("✅ All systems ready!")
+    print("=" * 50)
+    print()
+    
     port = int(os.environ.get('PORT', 8080))
+    print(f"🌐 Starting server on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
