@@ -5,3 +5,4 @@ gunicorn
 opencv-contrib-python-headless
 numpy
 Pillow
+pdf2image
