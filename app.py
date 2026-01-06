@@ -87,10 +87,11 @@ class HarfSistemi:
         if len(src) < 4: return None, "Eksik marker."
         warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])), (sw, sh))
         
+        b_px, start_idx = 150, bid * 30
         page_results = {}
-        for r in range(6):
+        for r in range(3):
             for c in range(10):
-                idx = bid * 60 + (r * 10 + c)
+                idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): break
                 roi = warped[290+r*150+15 : 290+r*150+135, 300+c*150+15 : 300+c*150+135]
                 res = self.process_roi(roi)
