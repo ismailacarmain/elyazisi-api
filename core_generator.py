@@ -117,7 +117,7 @@ def metni_sayfaya_yaz(metin, harfler, config):
     descenders = "gjpyqğ_"
     smalls = "aceimnorsuvwxzçöüşiı-+*=< >%^#~"
     ascenders = "bdfhklt"
-    punctuation = ".,:;'"
+    punctuation = ".,:;''"
     tall_punctuation = "!?()[]{} /\|@$€₺&"
 
     def create_page():
