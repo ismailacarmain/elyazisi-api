@@ -9,520 +9,309 @@ from firebase_admin import credentials, firestore
 import json
 import traceback
 import io
-from PIL import Image
-import core_generator
+import core_generator as core_generator
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
-CORS(app, resources={r"/*": {"origins": "*", "expose_headers": ["Content-Disposition"]}})
+CORS(app)
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
+connected_project_id = "BILINMIYOR"
+init_error = None
 
 def init_firebase():
-    """Firebase bağlantısını başlatır"""
-    global db
-    if db is not None:
-        return db
-    
+    global db, init_error, connected_project_id
+    if db is not None: return db
     try:
         cred = None
-        
-        # Environment variable'dan credentials al
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         if env_creds:
-            cred = credentials.Certificate(json.loads(env_creds.strip()))
+            cred_dict = json.loads(env_creds.strip())
+            cred = credentials.Certificate(cred_dict)
+            connected_project_id = cred_dict.get('project_id', 'EnvJson')
         
-        # Dosyadan credentials al
+        if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
+            try:
+                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
+                    "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID'),
+                    "private_key": private_key,
+                    "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL'),
+                    "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+                cred = credentials.Certificate(cred_dict)
+                connected_project_id = cred_dict.get('project_id')
+            except Exception as e: init_error = f"Env Vars Hatası: {e}"
+
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
                     cred = credentials.Certificate(p)
+                    with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                     break
         
-        # Firebase başlat
         if cred:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            print("✓ Firebase başarıyla bağlandı")
+            print(f"Firestore BAĞLANDI: {connected_project_id}")
         else:
-            print("⚠ Firebase credentials bulunamadı, devam ediliyor...")
-            
+            print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
+        init_error = str(e)
+        db = None
         print(f"Firebase Hatası: {e}")
-        traceback.print_exc()
-    
     return db
 
 init_firebase()
 
-# --- HARF TARAMA MOTORU ---
+# --- HARF TARAMA MOTORU (ARUCO SYSTEM) ---
 class HarfSistemi:
-    """Harf tanıma ve işleme sistemi"""
-    
     def __init__(self):
-        self.refresh_char_list(3)
-
-    def refresh_char_list(self, variation_count=3):
-        """Karakter listesini yenile"""
         self.char_list = []
-        for _, key in core_generator.KARAKTER_HARITASI.items():
-            for i in range(1, variation_count + 1):
-                self.char_list.append(f"{key}_{i}")
+        low = "abcçdefgğhıijklmnoöprsştuüvyz"
+        upp = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ"
+        num = "0123456789"
+        punc = {".":"nokta", ",":"virgul", ":":"ikiknokta", ";":"noktalivirgul", "?":"soru", "!":"unlem", "-":"tire", "(":"parantezac", ")":"parantezkapama"}
+        for c in low: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1,4)]
+        for c in upp: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1,4)]
+        for c in num: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1,4)]
+        for c, n in punc.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1,4)]
 
     def crop_tight(self, binary_img):
-        """Beyaz alanları kırp"""
         coords = cv2.findNonZero(binary_img)
-        if coords is None:
-            return None
+        if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
         return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
-        """Tek bir kutucuktaki harfi işle"""
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 25, 12
-        )
-        
-        # Morfolojik işlem
-        kernel = np.ones((2, 2), np.uint8)
-        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        
-        # Kırp
-        tight = self.crop_tight(opened)
-        if tight is None:
-            return None
-        
-        # Renkli hale getir
-        result = np.full((tight.shape[0], tight.shape[1], 3), 255, dtype=np.uint8)
-        result[tight == 255] = [0, 0, 0]
-        
-        return result
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+        kernel = np.ones((2,2), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        tight = self.crop_tight(thresh)
+        if tight is None: return None
+        h, w = tight.shape
+        image_with_bg = np.full((h, w, 3), 255, dtype=np.uint8) 
+        image_with_bg[tight == 255] = [0, 0, 0]
+        return image_with_bg
 
     def detect_markers(self, img):
-        """Aruco markerları tespit et"""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-        
         try:
-            # Yeni OpenCV API (4.7+)
-            params = cv2.aruco.DetectorParameters()
-            detector = cv2.aruco.ArucoDetector(aruco_dict, params)
-            corners, ids, _ = detector.detectMarkers(gray)
-        except AttributeError:
-            # Eski OpenCV API
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, aruco_dict)
-        
-        return corners, ids
+            aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            parameters = cv2.aruco.DetectorParameters()
+            parameters.adaptiveThreshWinSizeMin = 3; parameters.adaptiveThreshWinSizeMax = 23; parameters.adaptiveThreshWinSizeStep = 5; parameters.minMarkerPerimeterRate = 0.01
+            detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            variations = [gray, clahe.apply(gray), cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1], cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]]
+            best_corners, best_ids = None, None
+            for v in variations:
+                corners, ids, _ = detector.detectMarkers(v)
+                if ids is not None:
+                    if best_ids is None or len(ids) > len(best_ids): best_corners, best_ids = corners, ids
+                    if len(ids) >= 4: break
+            return best_corners, best_ids
+        except: return None, None
 
     def process_single_page(self, img, section_id):
-        """Tek bir sayfa görüntüsünü işle"""
-        # Marker tespiti
         corners, ids = self.detect_markers(img)
-        
-        if ids is None or len(ids) < 4:
-            return None, "Marker bulunamadı."
-        
+        if ids is None or len(ids) < 4: return None, f"Markerlar bulunamadı ({len(ids) if ids else 0}/4)."
         ids = ids.flatten()
-        base_id = int(min(ids))
-        block_id = int(base_id // 4)
-        
-        # Perspektif düzeltme
-        scale = 10
-        margin = 175
-        src_width = 2100
-        src_height = 1480
-        
-        # Marker köşelerini sırala
+        base = int(min(ids))
+        bid = int(base // 4)
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
         src_points = []
-        for target_id in [block_id * 4, block_id * 4 + 1, block_id * 4 + 2, block_id * 4 + 3]:
+        for target in targets:
+            found = False
             for i in range(len(ids)):
-                if ids[i] == target_id:
-                    src_points.append(np.mean(corners[i][0], axis=0))
-                    break
-        
-        if len(src_points) < 4:
-            return None, "Markerlar eksik."
-        
-        src_points = np.float32(src_points)
-        dst_points = np.float32([
-            [margin, margin],
-            [src_width - margin, margin],
-            [margin, src_height - margin],
-            [src_width - margin, src_height - margin]
-        ])
-        
-        # Perspektif dönüşümü
-        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-        warped = cv2.warpPerspective(img, matrix, (src_width, src_height))
-        
-        # Karakterleri çıkar
-        page_results = {}
-        for row in range(6):
-            for col in range(10):
-                idx = block_id * 60 + (row * 10 + col)
-                if idx >= len(self.char_list):
-                    break
-                
-                # ROI koordinatları
-                x1 = 300 + col * 150 + 15
-                y1 = 290 + row * 150 + 15
-                x2 = x1 + 120
-                y2 = y1 + 120
-                
-                roi = warped[y1:y2, x1:x2]
-                processed = self.process_roi(roi)
-                
-                if processed is not None:
-                    _, buffer = cv2.imencode(".png", processed)
-                    page_results[self.char_list[idx]] = base64.b64encode(buffer).decode('utf-8')
-        
-        return {
-            'harfler': page_results, 
-            'detected': len(page_results), 
-            'section_id': block_id
-        }, None
+                if int(ids[i]) == target: src_points.append(np.mean(corners[i][0], axis=0)); found = True; break
+            if not found: return None, f"Marker {target} eksik."
+        src = np.float32(src_points)
+        dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
+        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
+        b_px = 150; sx, sy = int((sw - 1500)/2), int((sh - 900)/2); start_idx = bid * 60
+        page_results = {}; detected_count = 0; missing_chars = []
+        for r in range(6):
+            for c in range(10):
+                idx = start_idx + (r * 10 + c)
+                if idx >= len(self.char_list): break
+                p = 15; roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                res = self.process_roi(roi)
+                if res is not None:
+                    _, buffer = cv2.imencode(".png", res)
+                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
+                    page_results[self.char_list[idx]] = b64_str
+                    detected_count += 1
+                else: missing_chars.append(self.char_list[idx])
+        return {'harfler': page_results, 'detected': detected_count, 'total': min(60, len(self.char_list)-start_idx), 'missing': missing_chars, 'section_id': bid}, None
 
 sistem = HarfSistemi()
 
-# --- API ENDPOINTS ---
+# --- WEB ROTALARI ---
 
 @app.route('/')
 def index():
-    """Ana sayfa"""
-    return jsonify({
-        "service": "Fontify API",
-        "version": "2.0",
-        "status": "running",
-        "endpoints": [
-            "/health",
-            "/api/generate_form",
-            "/api/generate_example",
-            "/api/get_assets",
-            "/process_single",
-            "/download"
-        ]
-    })
+    font_id = request.args.get('font_id', '')
+    user_id = request.args.get('user_id', '')
+    return render_template('index.html', font_id=font_id, user_id=user_id)
 
-@app.route('/health')
-def health():
-    """Sağlık kontrolü"""
-    return "OK", 200
-
-@app.route('/api/generate_form')
-def generate_form():
-    """Boş form PDF'i oluştur"""
+@app.route('/api/list_fonts')
+def list_fonts():
+    user_id = request.args.get('user_id')
+    fonts = []
+    database = init_firebase()
+    if not database: return jsonify({"success": False, "error": "Veritabanı bağlantısı yok"})
     try:
-        variation_count = int(request.args.get('variation_count', 3))
-        sistem.refresh_char_list(variation_count)
-        
-        pdf_buffer = core_generator.FormOlusturucu().tum_formu_olustur(variation_count, False)
-        
-        if pdf_buffer is None:
-            return jsonify({"error": "PDF oluşturulamadı"}), 500
-        
-        return send_file(
-            pdf_buffer, 
-            mimetype='application/pdf', 
-            as_attachment=True, 
-            download_name='form.pdf'
-        )
-    except Exception as e:
-        print(f"Form oluşturma hatası: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/generate_example')
-def generate_example():
-    """Örnek dolu form PDF'i oluştur - static klasör olmadan"""
-    try:
-        variation_count = int(request.args.get('variation_count', 3))
-        
-        # Örnek harfleri yükle - static klasör yoksa boş form oluştur
-        assets = None
-        if os.path.exists('static/harfler'):
-            assets = core_generator.harf_resimlerini_yukle('static/harfler')
-        
-        # Assets yoksa sadece boş form oluştur
-        is_example = assets is not None and len(assets) > 0
-        
-        pdf_buffer = core_generator.FormOlusturucu().tum_formu_olustur(
-            variation_count, is_example, assets
-        )
-        
-        if pdf_buffer is None:
-            return jsonify({"error": "PDF oluşturulamadı"}), 500
-        
-        return send_file(
-            pdf_buffer, 
-            mimetype='application/pdf', 
-            as_attachment=True, 
-            download_name='ornek.pdf'
-        )
-    except Exception as e:
-        print(f"Örnek oluşturma hatası: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        public_fonts = database.collection('fonts').stream()
+        for doc in public_fonts:
+            d = doc.to_dict()
+            f_name = d.get('font_name') or d.get('font_id') or doc.id
+            fonts.append({'id': d.get('font_id', doc.id), 'name': f_name, 'type': 'public'})
+        if user_id:
+            private_fonts = database.collection('users').document(user_id).collection('fonts').stream()
+            for doc in private_fonts:
+                d = doc.to_dict()
+                fid = d.get('font_id', doc.id)
+                f_name = d.get('font_name') or fid
+                if not any(f['id'] == fid for f in fonts):
+                    fonts.append({'id': fid, 'name': f_name, 'type': 'private'})
+        return jsonify({"success": True, "fonts": fonts})
+    except Exception as e: return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/get_assets')
 def get_assets():
-    """Firebase'den font assetlerini getir"""
     font_id = request.args.get('font_id')
     user_id = request.args.get('user_id')
-    
+    assets = {}
     database = init_firebase()
-    
     if database and font_id:
-        try:
-            # Önce genel fonts koleksiyonundan dene
-            doc = database.collection('fonts').document(font_id).get()
-            
-            # Bulunamazsa kullanıcıya özel koleksiyondan dene
-            if not doc.exists and user_id:
-                doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
-            
-            if doc.exists:
-                data = doc.to_dict().get('harfler', {})
-                
-                # Varyasyonları grupla
-                assets = {}
-                for key, value in data.items():
-                    base = key.rsplit('_', 1)[0]
-                    if base not in assets:
-                        assets[base] = []
-                    assets[base].append(value)
-                
-                return jsonify({
-                    "success": True, 
-                    "assets": assets, 
-                    "source": "firebase"
-                })
-        except Exception as e:
-            print(f"Asset getirme hatası: {e}")
-            traceback.print_exc()
+        doc = database.collection('fonts').document(font_id).get()
+        if not doc.exists and user_id:
+            doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
+        if doc.exists:
+            harfler_data = doc.to_dict().get('harfler', {})
+            for key, b64 in harfler_data.items():
+                base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                if base_key not in assets: assets[base_key] = []
+                assets[base_key].append(b64)
+            return jsonify({"success": True, "assets": assets, "source": "firebase"})
     
-    return jsonify({"success": False, "error": "Font bulunamadı"}), 404
+    HARFLER_KLASORU = 'static/harfler'
+    if os.path.exists(HARFLER_KLASORU):
+        for dosya in os.listdir(HARFLER_KLASORU):
+            if dosya.endswith('.png'):
+                key = dosya.rsplit('_', 1)[0]
+                if key not in assets: assets[key] = []
+                assets[key].append(dosya)
+        if assets: return jsonify({"success": True, "assets": assets, "source": "local"})
+    return jsonify({"success": True, "assets": {}, "source": "none", "warning": "Harf yok"}), 200
+
+# --- TARAMA VE PDF ROTALARI ---
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
-    """Tek sayfa tarama işle"""
+    global init_error
     try:
         data = request.get_json()
-        
-        user_id = data['user_id']
-        font_name = data['font_name']
-        image_base64 = data['image_base64']
-        section_id = data.get('section_id', 0)
-        variation_count = data.get('variation_count', 3)
-        
-        # Karakter listesini güncelle
-        sistem.refresh_char_list(variation_count)
-        
-        # Base64'ü görüntüye çevir
-        img_bytes = base64.b64decode(image_base64)
-        img_array = np.frombuffer(img_bytes, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        
-        # İşle
-        result, error = sistem.process_single_page(img, section_id)
-        
-        if error:
-            return jsonify({'success': False, 'message': error}), 400
-        
-        # Firebase'e kaydet
+        u_id, f_name, b64 = data.get('user_id'), data.get('font_name'), data.get('image_base64')
+        if not u_id or not b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
+        nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        res, err = sistem.process_single_page(img, 0)
+        if err: return jsonify({'success': False, 'message': err}), 400
+
         database = init_firebase()
         if database:
             try:
-                font_id = f"{user_id}_{font_name.replace(' ', '_')}"
-                
-                # Ana fonts koleksiyonu
-                ref = database.collection('fonts').document(font_id)
-                # Kullanıcıya özel koleksiyon
-                user_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
-                
-                # Döküman var mı kontrol et
-                doc = ref.get()
-                
+                fid = f"{u_id}_{f_name.replace(' ', '_')}"
+                d_ref = database.collection('fonts').document(fid)
+                u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
+                doc = d_ref.get()
+                payload = {'harfler': res['harfler'], 'harf_sayisi': len(res['harfler']), 'sections_completed': [res['section_id']]}
                 if not doc.exists:
-                    # Yeni döküman oluştur
-                    payload = {
-                        'harfler': result['harfler'],
-                        'owner_id': user_id,
-                        'font_name': font_name,
-                        'font_id': font_id,
-                        'variation_count': variation_count,
-                        'created_at': firestore.SERVER_TIMESTAMP
-                    }
-                    ref.set(payload)
-                    user_ref.set(payload)
+                    payload.update({'owner_id': u_id, 'user_id': u_id, 'font_name': f_name, 'font_id': fid, 'created_at': firestore.SERVER_TIMESTAMP})
+                    d_ref.set(payload); u_ref.set(payload)
                 else:
-                    # Mevcut harfleri güncelle
-                    existing_harfler = doc.to_dict().get('harfler', {})
-                    existing_harfler.update(result['harfler'])
-                    ref.update({'harfler': existing_harfler})
-                    user_ref.update({'harfler': existing_harfler})
-                
-                # Tarama durumunu kaydet
-                database.collection('temp_scans').document(font_id).set({
-                    f'section_{result["section_id"]}': True,
-                    'last_update': firestore.SERVER_TIMESTAMP
-                }, merge=True)
-                
-            except Exception as e:
-                print(f"Firebase kayıt hatası: {e}")
-                traceback.print_exc()
-        
+                    curr = doc.to_dict()
+                    h = curr.get('harfler', {}); h.update(res['harfler'])
+                    s = curr.get('sections_completed', []); 
+                    if res['section_id'] not in s: s.append(res['section_id'])
+                    payload = {'harfler': h, 'harf_sayisi': len(h), 'sections_completed': s, 'font_id': fid}
+                    d_ref.update(payload); u_ref.update(payload)
+            except Exception as e: print(f"DB Kayıt Hatası: {e}")
+
         return jsonify({
-            'success': True, 
-            'detected_chars': len(result['harfler']),
-            'section_id': result['section_id']
+            'success': True,
+            'section_id': res['section_id'],
+            'detected_chars': res['detected'],
+            'db_project_id': connected_project_id
         })
-        
     except Exception as e:
-        print(f"İşleme hatası: {e}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
-    """El yazısı PDF indir"""
     try:
+        metin = request.form.get('metin', '')
         font_id = request.form.get('font_id')
         user_id = request.form.get('user_id')
-        metin = request.form.get('metin', '')
-        
-        if not metin or not metin.strip():
-            return jsonify({"error": "Metin boş olamaz"}), 400
-        
-        # Parametreler
         yazi_boyutu = int(request.form.get('yazi_boyutu', 140))
         satir_araligi = int(request.form.get('satir_araligi', 220))
         kelime_boslugu = int(request.form.get('kelime_boslugu', 55))
         jitter = int(request.form.get('jitter', 3))
-        kalinlik = int(float(request.form.get('kalinlik', 0)))
-        paper_type = request.form.get('paper_type', 'duz')
-        
-        # Harfleri yükle
+        murekkep_rengi_str = request.form.get('murekkep_rengi', 'tukenmez')
+        paper_type = request.form.get('paper_type', 'cizgili')
+
         active_harfler = {}
-        
-        db = init_firebase()
-        if db and font_id:
-            try:
-                doc = db.collection('fonts').document(font_id).get()
-                
-                if doc.exists:
-                    print(f"✓ Font bulundu: {font_id}")
-                    harfler_data = doc.to_dict().get('harfler', {})
-                    print(f"✓ Toplam harf: {len(harfler_data)}")
-                    
-                    for key, value in harfler_data.items():
-                        base = key.rsplit('_', 1)[0]
-                        if base not in active_harfler:
-                            active_harfler[base] = []
-                        
-                        # Base64'ü Image'e çevir
-                        try:
-                            img_bytes = base64.b64decode(value)
-                            img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-                            active_harfler[base].append(img)
-                        except Exception as e:
-                            print(f"⚠ Harf yükleme hatası ({key}): {e}")
-                else:
-                    print(f"⚠ Font bulunamadı: {font_id}")
-            except Exception as e:
-                print(f"⚠ Firebase hatası: {e}")
-                traceback.print_exc()
-        
-        # Fallback: Basit harf oluştur (eğer hiç harf yoksa)
+        database = init_firebase()
+        if database and font_id:
+            doc = database.collection('fonts').document(font_id).get()
+            if not doc.exists and user_id:
+                doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
+            
+            if doc.exists:
+                raw_harfler = doc.to_dict().get('harfler', {})
+                for key, b64_data in raw_harfler.items():
+                    try:
+                        if "," in b64_data: b64_data = b64_data.split(",")[1]
+                        img_data = base64.b64decode(b64_data)
+                        img = core_generator.Image.open(io.BytesIO(img_data)).convert("RGBA")
+                        base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                        if base_key not in active_harfler: active_harfler[base_key] = []
+                        active_harfler[base_key].append(img)
+                    except: continue
+
         if not active_harfler:
-            print("⚠ Harf bulunamadı, varsayılan font oluşturuluyor...")
-            # Basit harf seti oluştur (boş)
-            return jsonify({
-                "error": "Font yüklenmedi. Lütfen önce formunuzu tarayın."
-            }), 404
-        
-        print(f"✓ Aktif harf grupları: {len(active_harfler)}")
-        
-        # Konfigürasyon
+            HARFLER_KLASORU = 'static/harfler'
+            if os.path.exists(HARFLER_KLASORU):
+                active_harfler = core_generator.harf_resimlerini_yukle(HARFLER_KLASORU)
+
+        renkler = {'tukenmez':(27,27,29), 'bic_mavi':(0,35,102), 'pilot_mavi':(0,51,153), 'eski_murekkep':(40,60,120), 'kirmizi':(180,20,20), 'lacivert':(24,18,110)}
+        murekkep = renkler.get(murekkep_rengi_str, renkler['tukenmez'])
+
         config = {
-            'page_width': 2480,
-            'page_height': 3508,
-            'margin_top': 200,
-            'margin_left': 150,
-            'margin_right': 150,
-            'target_letter_height': yazi_boyutu,
-            'line_spacing': satir_araligi,
-            'word_spacing': kelime_boslugu,
-            'jitter': jitter,
-            'paper_type': paper_type,
-            'murekkep_rengi': (27, 27, 29),
-            'kalinlik': kalinlik,
-            'opacity': 0.95
+            'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150,
+            'target_letter_height': yazi_boyutu, 'line_spacing': satir_araligi, 'word_spacing': kelime_boslugu,
+            'murekkep_rengi': murekkep, 'opacity': 0.95, 'jitter': jitter, 'paper_type': paper_type, 'line_slope': 5
         }
-        
-        # Sayfaları oluştur
-        print("📄 Sayfalar oluşturuluyor...")
+
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
-        print(f"✓ {len(sayfalar)} sayfa oluşturuldu")
-        
-        # PDF oluştur
-        print("📦 PDF oluşturuluyor...")
         pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
         
-        if pdf_buffer is None:
-            return jsonify({"error": "PDF oluşturulamadı"}), 500
-        
-        print("✓ PDF hazır, gönderiliyor...")
-        return send_file(
-            pdf_buffer, 
-            mimetype='application/pdf', 
-            as_attachment=True, 
-            download_name='yazi.pdf'
-        )
-        
+        if pdf_buffer:
+            return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
+        return "Hata", 500
     except Exception as e:
-        print(f"❌ Download hatası: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return str(e), 500
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("🚀 Fontify API Starting...")
-    print("=" * 50)
-    
-    # Startup checks
-    print("📦 Python version:", os.sys.version)
-    print("📦 OpenCV version:", cv2.__version__)
-    print("📦 Pillow version:", Image.__version__)
-    print("📦 NumPy version:", np.__version__)
-    
-    # Check directories
-    print("\n📁 Directory checks:")
-    for dir_path in ['static', 'static/harfler', 'templates', 'temp']:
-        if os.path.exists(dir_path):
-            print(f"  ✓ {dir_path} exists")
-        else:
-            os.makedirs(dir_path, exist_ok=True)
-            print(f"  ✓ {dir_path} created")
-    
-    # Firebase check
-    print("\n🔥 Firebase connection:")
-    db_conn = init_firebase()
-    if db_conn:
-        print("  ✓ Firebase connected")
-    else:
-        print("  ⚠ Firebase not configured (optional)")
-    
-    print("\n" + "=" * 50)
-    print("✅ All systems ready!")
-    print("=" * 50)
-    print()
-    
-    port = int(os.environ.get('PORT', 8080))
-    print(f"🌐 Starting server on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

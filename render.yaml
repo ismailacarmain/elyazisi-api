@@ -1,9 +1,6 @@
 services:
   - type: web
-    name: fontify-api
+    name: elyazisi-api
     env: docker
     plan: free
     healthCheckPath: /health
-    envVars:
-      - key: PORT
-        value: 8080
