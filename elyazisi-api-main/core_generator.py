@@ -7,6 +7,7 @@ import io
 import cv2
 import numpy as np
 
+# Karakter haritasını en güvenli (Unicode) şekilde tanımlıyoruz
 KARAKTER_HARITASI = {
     'a': 'kucuk_a', 'b': 'kucuk_b', 'c': 'kucuk_c', 'ç': 'kucuk_cc', 'd': 'kucuk_d', 'e': 'kucuk_e', 
     'f': 'kucuk_f', 'g': 'kucuk_g', 'ğ': 'kucuk_gg', 'h': 'kucuk_h', 'ı': 'kucuk_ii', 'i': 'kucuk_i', 
@@ -92,6 +93,7 @@ def metni_sayfaya_yaz(metin, harfler, config):
     jitter = config.get('jitter', 3)
     target_h = config['target_letter_height']
     
+    # Karakter grupları (JS Motoruyla tam uyumlu)
     descenders = "gjpyqğ_"
     smalls = "aceimnorsuvwxzçöüşiı-+*=< >%^#~"
     ascenders = "bdfhklt"
@@ -136,7 +138,7 @@ def metni_sayfaya_yaz(metin, harfler, config):
                 gw, gh = resim.size
                 if x + gw > max_x:
                     x = config['margin_left']; curr_line += 1
-                    if config['margin_top'] + (curr_line * config['line_spacing']) > max_y:
+                    if config['margin_top'] + (current_line * config['line_spacing']) > max_y:
                         sayfalar.append(sayfa); sayfa = create_page(); curr_line = 0
                 
                 y_pos = int(config['margin_top'] + (curr_line * config['line_spacing']) + random.uniform(-jitter, jitter)*0.5 + baseline_shift - gh)
