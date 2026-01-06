@@ -193,9 +193,9 @@ class FormOlusturucu:
         self.W, self.H = 2480, 3508
         self.GRID_W, self.GRID_H, self.CELL_SIZE = 10, 6, 150
         self.OFFSET_X = (self.W - (self.GRID_W * self.CELL_SIZE)) // 2
-        self.OFFSET_Y = (self.H - (self.GRID_H * self.CELL_SIZE)) // 2
+        self.OFFSET_Y = (self.H - (self.GRID_H * self.CELL_SIZE)) // 2 + 100
         
-    def marker_olustur(self, marker_id, size=150):
+    def marker_olustur(self, marker_id, size=200):
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         try: marker_img = cv2.aruco.generateImageMarker(aruco_dict, marker_id, size)
         except: marker_img = cv2.aruco.drawMarker(aruco_dict, marker_id, size)
@@ -204,10 +204,10 @@ class FormOlusturucu:
     def form_sayfasi_olustur(self, page_id, characters, total_pages, example_images=None):
         img = Image.new("RGBA", (self.W, self.H), (255, 255, 255, 255))
         draw = ImageDraw.Draw(img)
-        draw.text((self.W//2, 50), "FONTIFY - EL YAZISI TASARIM FORMU", fill=(100, 100, 100, 255), anchor="mm")
+        draw.text((self.W//2, 80), "FONTIFY - TASARIM FORMU", fill=(100, 100, 100, 255), anchor="mm")
         
         m_ids = [page_id*4, page_id*4+1, page_id*4+2, page_id*4+3]
-        positions = [(100, 100), (self.W-250, 100), (100, self.H-250), (self.W-250, self.H-250)]
+        positions = [(50, 50), (self.W-250, 50), (50, self.H-250), (self.W-250, self.H-250)]
         for mid, pos in zip(m_ids, positions): img.paste(self.marker_olustur(mid), pos)
 
         for r in range(self.GRID_H):

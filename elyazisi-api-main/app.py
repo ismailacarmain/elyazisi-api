@@ -12,7 +12,7 @@ import io
 import core_generator as core_generator
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*", "expose_headers": ["Content-Disposition"]}})
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
