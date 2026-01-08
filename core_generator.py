@@ -30,52 +30,15 @@ def harf_resimlerini_yukle(klasor_yolu="static/harfler"):
     return harfler
 
 def karakter_anahtarini_bul(karakter):
-    """107 KARAKTER DESTEĞİ"""
     ozel_karakterler = {
-        ' ': 'ozel_bosluk',
-        '.': 'ozel_nokta',
-        ',': 'ozel_virgul',
-        ':': 'ozel_ikiknokta',
-        ';': 'ozel_noktalivirgul',
-        '?': 'ozel_soru',
-        '!': 'ozel_unlem',
-        '-': 'ozel_tire',
-        '_': 'ozel_alt_tire',
-        '"': 'ozel_tirnak',
-        "'": 'ozel_tektirnak',
-        '(': 'ozel_parantezac',
-        ')': 'ozel_parantezkapama',
-        '[': 'ozel_koseli_ac',
-        ']': 'ozel_koseli_kapa',
-        '{': 'ozel_suslu_ac',
-        '}': 'ozel_suslu_kapa',
-        '/': 'ozel_slash',
-        '\\': 'ozel_backslash',
-        '|': 'ozel_pipe',
-        '+': 'ozel_arti',
-        '*': 'ozel_carpi',
-        '=': 'ozel_esit',
-        '<': 'ozel_kucuktur',
-        '>': 'ozel_buyuktur',
-        '%': 'ozel_yuzde',
-        '^': 'ozel_sapka',
-        '~': 'ozel_yaklasik',
-        '@': 'ozel_at',
-        '$': 'ozel_dolar',
-        '€': 'ozel_euro',
-        '₺': 'ozel_tl',
-        '&': 'ozel_ampersand',
-        '#': 'ozel_diyez',
+        ' ': 'ozel_bosluk', '.': 'ozel_nokta', ',': 'ozel_virgul',
+        ':': 'ozel_ikiknokta', ';': 'ozel_noktalivirgul', '?': 'ozel_soru',
+        '!': 'ozel_unlem', '-': 'ozel_tire', '(': 'ozel_parantezac', ')': 'ozel_parantezkapama',
     }
-    
-    if karakter in ozel_karakterler:
-        return ozel_karakterler[karakter]
-    elif karakter.isdigit():
-        return f"rakam_{karakter}"
-    elif karakter.isupper():
-        return f"buyuk_{karakter}"
-    elif karakter.islower():
-        return f"kucuk_{karakter}"
+    if karakter in ozel_karakterler: return ozel_karakterler[karakter]
+    elif karakter.isdigit(): return f"rakam_{karakter}"
+    elif karakter.isupper(): return f"buyuk_{karakter}"
+    elif karakter.islower(): return f"kucuk_{karakter}"
     return None
 
 def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95, kalinlik=0):
@@ -97,10 +60,8 @@ def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95
             alpha = img_array[:, :, 3]
             kernel_size = abs(kalinlik) + 1
             kernel = np.ones((kernel_size, kernel_size), np.uint8)
-            if kalinlik > 0:
-                alpha = cv2.dilate(alpha, kernel, iterations=kalinlik)
-            else:
-                alpha = cv2.erode(alpha, kernel, iterations=abs(kalinlik))
+            if kalinlik > 0: alpha = cv2.dilate(alpha, kernel, iterations=kalinlik) 
+            else: alpha = cv2.erode(alpha, kernel, iterations=abs(kalinlik))
             img_array[:, :, 3] = alpha
             harf_resmi = Image.fromarray(img_array)
         return harf_resmi
@@ -146,21 +107,14 @@ def yeni_sayfa_olustur(page_width, page_height, print_background, background_pat
             if arka_plan.size != (page_width, page_height):
                 arka_plan = arka_plan.resize((page_width, page_height), Image.Resampling.LANCZOS)
             return arka_plan.copy()
-        except:
-            pass
+        except: pass
     return Image.new("RGBA", (page_width, page_height), (255, 255, 255, 255))
 
 def metni_sayfaya_yaz(metin, harfler, config):
     sayfalar = []
     jitter = config.get('jitter', 3)
-    
     def create_page():
-        p = yeni_sayfa_olustur(
-            config['page_width'],
-            config['page_height'],
-            config.get('print_background', False),
-            config.get('background_path')
-        )
+        p = yeni_sayfa_olustur(config['page_width'], config['page_height'], config.get('print_background', False), config.get('background_path'))
         return cizgileri_ciz(p, config)
     
     sayfa = create_page()
@@ -185,56 +139,38 @@ def metni_sayfaya_yaz(metin, harfler, config):
             line_slope, line_offset = get_line_params(current_line)
             y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
             if y_base + config['target_letter_height'] > max_y:
-                sayfalar.append(sayfa)
-                sayfa = create_page()
-                current_line = 0
+                sayfalar.append(sayfa); sayfa = create_page(); current_line = 0
                 line_slope, line_offset = get_line_params(current_line)
                 y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
-            x = config['margin_left']
-            continue
+            x = config['margin_left']; continue
         
         for kelime in satir.split(' '):
             tahmini_w = len(kelime) * 50
             if x + tahmini_w > max_x and x > config['margin_left']:
-                x = config['margin_left']
-                current_line += 1
+                x = config['margin_left']; current_line += 1
                 line_slope, line_offset = get_line_params(current_line)
                 y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
                 if y_base + config['target_letter_height'] > max_y:
-                    sayfalar.append(sayfa)
-                    sayfa = create_page()
-                    current_line = 0
+                    sayfalar.append(sayfa); sayfa = create_page(); current_line = 0
                     line_slope, line_offset = get_line_params(current_line)
                     y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
             
             for harf in kelime:
-                harf_resmi = harf_resmini_al(
-                    harfler,
-                    harf,
-                    config.get('murekkep_rengi'),
-                    config.get('opacity', 0.95),
-                    config.get('kalinlik', 0)
-                )
+                harf_resmi = harf_resmini_al(harfler, harf, config.get('murekkep_rengi'), config.get('opacity', 0.95), config.get('kalinlik', 0))
                 if not harf_resmi: continue
                 
                 scale_noise = random.uniform(-0.01 * jitter, 0.01 * jitter)
-                harf_resmi = harfi_boyutlandir(
-                    harf_resmi,
-                    int(config['target_letter_height'] * (1 + scale_noise))
-                )
+                harf_resmi = harfi_boyutlandir(harf_resmi, int(config['target_letter_height'] * (1 + scale_noise)))
                 angle = random.uniform(-0.2 * jitter, 0.2 * jitter)
                 harf_resmi = harf_resmi.rotate(angle, resample=Image.BICUBIC, expand=True)
                 
                 gw, gh = harf_resmi.size
                 if x + gw > max_x:
-                    x = config['margin_left']
-                    current_line += 1
+                    x = config['margin_left']; current_line += 1
                     line_slope, line_offset = get_line_params(current_line)
                     y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
                     if y_base + config['target_letter_height'] > max_y:
-                        sayfalar.append(sayfa)
-                        sayfa = create_page()
-                        current_line = 0
+                        sayfalar.append(sayfa); sayfa = create_page(); current_line = 0
                         line_slope, line_offset = get_line_params(current_line)
                         y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
                 
@@ -244,8 +180,7 @@ def metni_sayfaya_yaz(metin, harfler, config):
                 sayfa.paste(harf_resmi, (x, final_y), harf_resmi)
                 x += gw + random.randint(0, 4)
             x += config.get('word_spacing', 55)
-        x = config['margin_left']
-        current_line += 1
+        x = config['margin_left']; current_line += 1
         line_slope, line_offset = get_line_params(current_line)
         y_base = config['margin_top'] + (current_line * config['line_spacing']) - config['target_letter_height']
     
@@ -260,13 +195,6 @@ def sayfalari_pdf_olustur(sayfalar):
         rgb.paste(sayfa, mask=sayfa.split()[3])
         rgb_sayfalar.append(rgb)
     buf = io.BytesIO()
-    rgb_sayfalar[0].save(
-        buf,
-        'PDF',
-        resolution=300.0,
-        save_all=True,
-        append_images=rgb_sayfalar[1:],
-        quality=95
-    )
+    rgb_sayfalar[0].save(buf, 'PDF', resolution=300.0, save_all=True, append_images=rgb_sayfalar[1:], quality=95)
     buf.seek(0)
     return buf

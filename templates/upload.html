@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fontify - Kendi El Yazını Font Yap</title>
+    <!-- Modern Font: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 24px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            width: 100%;
+            max-width: 600px;
+        }
+        
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            text-align: center;
+            color: var(--primary);
+            margin-bottom: 30px;
+            letter-spacing: -0.025em;
+        }
+        
+        .step {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .step:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        
+        .step-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .step-number {
+            background: var(--primary);
+            color: white;
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.9rem;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        
+        select, input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.2s;
+            background: #f9fafb;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--primary);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .btn {
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 600;
+            text-align: center;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            font-size: 0.95rem;
+            width: 100%;
+            display: block;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
+        }
+        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; transform: none; }
+        
+        .btn-outline {
+            background: white;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover { border-color: var(--text-muted); background: #f9fafb; }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2);
+        }
+        .btn-success:hover { background: #059669; }
+        
+        .progress-area {
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 99px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: #10b981;
+            transition: width 0.3s ease;
+        }
+        
+        .status-text {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        
+        .info-box {
+            background: #eff6ff;
+            border: 1px solid #dbeafe;
+            color: #1e40af;
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✒️ Fontify</h1>
+        
+        <div class="info-box">
+            Yeni sistemimiz artık <strong>Q, W, X</strong> harflerini ve <strong>€, ₺, @</strong> gibi sembolleri de destekliyor!
+        </div>
+
+        <!-- ADIM 1: ŞABLON -->
+        <div class="step">
+            <div class="step-title"><span class="step-number">1</span> Şablon Oluştur</div>
+            
+            <label>Kalite Seviyesi (Ne kadar çok, o kadar doğal):</label>
+            <select id="variationSelect">
+                <option value="1">1 Örnek (Hızlı - 2 Sayfa)</option>
+                <option value="2">2 Örnek (İyi - 3 Sayfa)</option>
+                <option value="3" selected>3 Örnek (Standart - 5 Sayfa)</option>
+                <option value="5">5 Örnek (Profesyonel - 7 Sayfa)</option>
+                <option value="10">10 Örnek (Ultra - 14 Sayfa)</option>
+            </select>
+            
+            <div class="btn-group">
+                <a href="#" id="dlBos" class="btn btn-outline" target="_blank">📄 Boş Şablon İndir</a>
+                <a href="#" id="dlOrnek" class="btn btn-outline" target="_blank">👁️ Örnek (Rehber)</a>
+            </div>
+        </div>
+
+        <!-- ADIM 2: YÜKLEME -->
+        <div class="step">
+            <div class="step-title"><span class="step-number">2</span> Dijitalleştir</div>
+            
+            <label>Kullanıcı ID (Benzersiz bir isim):</label>
+            <input type="text" id="userId" placeholder="örn: ahmet_yilmaz" value="user_01">
+            
+            <label>Font Adı:</label>
+            <input type="text" id="fontName" placeholder="örn: El Yazım" value="El Yazım">
+            
+            <label>Doldurduğunuz Form (PDF veya Fotoğraflar):</label>
+            <input type="file" id="fileInput" accept=".pdf, .jpg, .jpeg, .png" multiple>
+            
+            <button id="uploadBtn" class="btn btn-primary">🚀 Yükle ve Başlat</button>
+            
+            <!-- İşlem bitince görünecek -->
+            <a href="/editor" id="goToEditorBtn" class="btn btn-success" style="display: none; margin-top: 15px;">
+                ✨ Yazı Editörüne Git
+            </a>
+            
+            <div class="progress-area" id="progressArea">
+                <div class="progress-bar"><div class="progress-fill" id="pFill"></div></div>
+                <p class="status-text" id="statusText">Yükleniyor...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- FIREBASE MODULE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
+        // Backend'den gelen Project ID
+        const firebaseConfig = {
+            projectId: "{{ firebase }}"
+        };
+
+        let db;
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            console.log("Firebase initialized");
+        } catch(e) {
+            console.error("Firebase Hatası:", e);
+            document.getElementById('statusText').innerText = "Firebase bağlantı hatası (Listener çalışmayacak).";
+        }
+
+        // --- ŞABLON LİNKLERİ ---
+        const varSelect = document.getElementById('variationSelect');
+        const dlBos = document.getElementById('dlBos');
+        const dlOrnek = document.getElementById('dlOrnek');
+
+        function updateLinks() {
+            const v = varSelect.value;
+            // Backend'deki rota: /forms/form_5x_BOS.pdf
+            dlBos.href = `/forms/form_${v}x_BOS.pdf`;
+            dlOrnek.href = `/forms/form_${v}x_ORNEK.pdf`;
+        }
+        varSelect.addEventListener('change', updateLinks);
+        updateLinks(); // Başlangıçta çalıştır
+
+        // --- UPLOAD ---
+        const uploadBtn = document.getElementById('uploadBtn');
+        const goToEditorBtn = document.getElementById('goToEditorBtn');
+        
+        uploadBtn.addEventListener('click', async () => {
+            const files = document.getElementById('fileInput').files;
+            const uid = document.getElementById('userId').value.trim();
+            const fname = document.getElementById('fontName').value.trim();
+            
+            if(files.length === 0) return alert("Lütfen en az bir dosya seçin!");
+            if(!uid) return alert("Kullanıcı ID girin!");
+
+            // UI Kilitle
+            uploadBtn.disabled = true;
+            uploadBtn.innerText = "Yükleniyor...";
+            document.getElementById('progressArea').style.display = 'block';
+            goToEditorBtn.style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('user_id', uid);
+            formData.append('font_name', fname);
+            formData.append('variation_count', varSelect.value);
+            
+            for(let i=0; i<files.length; i++) {
+                formData.append('files', files[i]);
+            }
+
+            try {
+                // API'ye gönder
+                const res = await fetch('/api/upload_form', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await res.json();
+                
+                if(data.success) {
+                    const jobId = data.job_id;
+                    console.log("Job Started:", jobId);
+                    
+                    if(db) {
+                        // Firebase Listener Başlat
+                        const unsub = onSnapshot(doc(db, "operations", jobId), (docSnap) => {
+                            if(docSnap.exists()) {
+                                const d = docSnap.data();
+                                const p = d.progress || 0;
+                                const msg = d.message || "İşleniyor...";
+                                
+                                // UI Güncelle
+                                document.getElementById('pFill').style.width = p + '%';
+                                document.getElementById('statusText').innerText = `${msg} (%${p})`;
+                                
+                                if(d.status === 'completed') {
+                                    document.getElementById('statusText').innerText = "✅ İŞLEM TAMAMLANDI!";
+                                    document.getElementById('pFill').style.background = "#059669";
+                                    
+                                    uploadBtn.innerText = "Tekrar Yükle";
+                                    uploadBtn.disabled = false;
+                                    
+                                    // EDİTÖRE GİT BUTONUNU GÖSTER
+                                    goToEditorBtn.style.display = 'block';
+                                    goToEditorBtn.href = `/editor?user_id=${uid}`;
+                                    
+                                    unsub(); // Dinlemeyi bırak
+                                }
+                                else if(d.status === 'error') {
+                                    document.getElementById('statusText').innerText = "❌ HATA: " + d.error;
+                                    document.getElementById('pFill').style.background = "#dc2626";
+                                    uploadBtn.disabled = false;
+                                    unsub();
+                                }
+                            }
+                        });
+                    } else {
+                        document.getElementById('statusText').innerText = "İşlem başladı (Takip edilemiyor).";
+                        uploadBtn.disabled = false;
+                    }
+                } else {
+                    throw new Error(data.error || "Bilinmeyen sunucu hatası");
+                }
+            } catch(e) {
+                alert("Yükleme Hatası: " + e.message);
+                uploadBtn.disabled = false;
+                uploadBtn.innerText = "🚀 Yükle ve Başlat";
+            }
+        });
+    </script>
+</body>
+</html>

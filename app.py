@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 import cv2
@@ -33,7 +32,7 @@ def init_firebase():
         
         if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
             try:
-                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\\n', '\n')
+                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
                 cred_dict = {
                     "type": "service_account",
                     "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
@@ -59,205 +58,267 @@ def init_firebase():
         if cred:
             if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            print(f"✅ Firestore BAĞLANDI: {connected_project_id}")
+            print(f"Firestore BAĞLANDI: {connected_project_id}")
         else:
-            print("⚠️  UYARI: Firebase credentials bulunamadı.")
+            print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
         init_error = str(e)
         db = None
-        print(f"❌ Firebase Hatası: {e}")
+        print(f"Firebase Hatası: {e}")
     return db
 
 init_firebase()
 
-# --- YENİ HARF SİSTEMİ (107 KARAKTER) ---
+# --- HARF TARAMA MOTORU (GELİŞMİŞ ARUCO SİSTEMİ) ---
 class HarfSistemi:
-    def __init__(self):
+    def __init__(self, repetition=3):
+        self.repetition = repetition
         self.char_list = []
+        self.generate_char_list()
+
+    def generate_char_list(self):
+        # Web uyumlu ASCII isimlendirme
+        lowers = "abcçdefgğhıijklmnoöpqrsştuüvwxyz"
+        uppers = "ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZ"
+        digits = "0123456789"
+        symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺&#"
+        symbols_str = symbols_str.replace(" ", "")
         
-        # 1. Küçük harfler (İngilizce + Türkçe)
-        lowercase_en = "abcdefghijklmnopqrstuvwxyz"
-        lowercase_tr = "çğıöşü"
-        
-        # 2. Büyük harfler (İngilizce + Türkçe)
-        uppercase_en = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        uppercase_tr = "ÇĞİÖŞÜ"
-        
-        # 3. Rakamlar
-        numbers = "0123456789"
-        
-        # 4. Noktalama
-        punctuation = {
-            '.': 'nokta', ',': 'virgul', ':': 'ikiknokta', ';': 'noktalivirgul',
-            '?': 'soru', '!': 'unlem', '-': 'tire', '_': 'alt_tire', 
-            '"': 'tirnak', "'": 'tektirnak',
-            '(': 'parantezac', ')': 'parantezkapama',
-            '[': 'koseli_ac', ']': 'koseli_kapa',
-            '{': 'suslu_ac', '}': 'suslu_kapa',
-            '/': 'slash', '\\': 'backslash', '|': 'pipe'
+        # Türkçe karakter haritası
+        tr_map = {
+            'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu',
+            'Ç': 'cc', 'Ğ': 'gg', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'
         }
         
-        # 5. Matematiksel
-        math_chars = {
-            '+': 'arti', '*': 'carpi', '=': 'esit', 
-            '<': 'kucuktur', '>': 'buyuktur',
-            '%': 'yuzde', '^': 'sapka', '~': 'yaklasik'
+        # Sembol haritası
+        sym_map = {
+            ".": "nokta", ",": "virgul", ":": "ikiknokta", ";": "noktalivirgul", 
+            "?": "soru", "!": "unlem", "-": "tire", "_": "alt_tire",
+            "\"": "cift_tirnak", "'": "tek_tirnak", 
+            "(": "parantezac", ")": "parantezkapama",
+            "[": "koseli_ac", "]": "koseli_kapa",
+            "{": "suslu_ac", "}": "suslu_kapa",
+            "/": "slash", "\\": "backslas", "|": "pipe",
+            "+": "arti", "*": "carpi", "=": "esit",
+            "<": "kucuktur", ">": "buyuktur",
+            "%": "yuzde", "^": "sapka", "~": "yaklasik",
+            "@": "at", "$": "dolar", "€": "euro", "₺": "tl",
+            "&": "ampersand", "#": "diyez"
         }
-        
-        # 6. Sosyal medya
-        social_chars = {
-            '@': 'at', '$': 'dolar', '€': 'euro', 
-            '₺': 'tl', '&': 'ampersand', '#': 'diyez'
-        }
-        
+
         # Listeyi oluştur
-        for c in lowercase_en: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1, 4)]
-        for c in lowercase_tr: [self.char_list.append(f"kucuk_{c}_{i}") for i in range(1, 4)]
-        for c in uppercase_en: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1, 4)]
-        for c in uppercase_tr: [self.char_list.append(f"buyuk_{c}_{i}") for i in range(1, 4)]
-        for c in numbers: [self.char_list.append(f"rakam_{c}_{i}") for i in range(1, 4)]
-        for c, n in punctuation.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1, 4)]
-        for c, n in math_chars.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1, 4)]
-        for c, n in social_chars.items(): [self.char_list.append(f"ozel_{n}_{i}") for i in range(1, 4)]
+        # Küçük harfler
+        for char in lowers:
+            base = tr_map.get(char, char)
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"kucuk_{base}_{i}")
         
-        print(f"📝 Sistem başlatıldı: {len(self.char_list)} karakter tanımlı")
+        # Büyük harfler
+        for char in uppers:
+            base = tr_map.get(char, char.lower()) # Büyük harfleri de küçük harf gibi kodla ama prefix farklı
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"buyuk_{base}_{i}")
+        
+        # Rakamlar
+        for char in digits:
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"rakam_{char}_{i}")
+        
+        # Semboller (Tekrarsız sıralama)
+        seen = set()
+        unique_symbols = ""
+        for char in symbols_str:
+            if char not in seen:
+                unique_symbols += char
+                seen.add(char)
+
+        for char in unique_symbols:
+            safe = sym_map.get(char, f"sembol_{ord(char)}")
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"ozel_{safe}_{i}")
 
     def crop_tight(self, binary_img):
         coords = cv2.findNonZero(binary_img)
         if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
+        # Çok küçük gürültüleri ele
+        if w < 10 or h < 10: return None
         return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
+        if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (3,3), 0)
+        # Adaptive threshold ile binary yap
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
+        # Gürültü temizle
         kernel = np.ones((2,2), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        
         tight = self.crop_tight(thresh)
         if tight is None: return None
+        
         h, w = tight.shape
-        image_with_bg = np.full((h, w, 3), 255, dtype=np.uint8)
-        image_with_bg[tight == 255] = [0, 0, 0]
-        return image_with_bg
+        # Şeffaf arka plan, siyah yazı (RGBA)
+        # Web için PNG formatında base64 dönecek, o yüzden burada siyah-beyaz maskeyi hazırlıyoruz.
+        # Frontend'de kullanırken siyah pikseller görünür, diğerleri şeffaf olacak.
+        
+        # Siyah zemin üzerine beyaz yazı var şu an (thresh_inv yaptık)
+        # Bunu: Siyah yazı, şeffaf zemin yapalım.
+        
+        # Create an RGBA image
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        
+        # Set RGB to black (0,0,0)
+        rgba[:, :, 0] = 0
+        rgba[:, :, 1] = 0
+        rgba[:, :, 2] = 0
+        
+        # Set Alpha based on the thresholded image (White pixels in thresh -> Opaque in output)
+        rgba[:, :, 3] = tight
+        
+        return rgba
 
-    def detect_markers(self, img):
-        try:
-            aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-            parameters = cv2.aruco.DetectorParameters()
-            parameters.adaptiveThreshWinSizeMin = 3
-            parameters.adaptiveThreshWinSizeMax = 23
-            parameters.adaptiveThreshWinSizeStep = 5
-            parameters.minMarkerPerimeterRate = 0.01
-            detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-            variations = [
-                gray,
-                clahe.apply(gray),
-                cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1],
-                cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            ]
-            best_corners, best_ids = None, None
-            for v in variations:
-                corners, ids, _ = detector.detectMarkers(v)
-                if ids is not None:
-                    if best_ids is None or len(ids) > len(best_ids):
-                        best_corners, best_ids = corners, ids
-                    if len(ids) >= 4: break
-            return best_corners, best_ids
-        except:
-            return None, None
-
-    def process_section(self, img, section_id):
-        """Tek bölüm işle (40 karakter - 8x5 grid)"""
-        corners, ids = self.detect_markers(img)
+    def process_single_page(self, img, forced_section_id=None):
+        # 1. Marker Tespiti
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.adaptiveThreshWinSizeMin = 3
+        parameters.adaptiveThreshWinSizeMax = 23
+        parameters.adaptiveThreshWinSizeStep = 5
+        
+        detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+        
+        # Görüntü iyileştirme varyasyonları (Daha iyi tespit için)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        
+        variations = [
+            gray, 
+            clahe.apply(gray), 
+            cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1]
+        ]
+        
+        corners, ids = None, None
+        for v in variations:
+            c, i, _ = detector.detectMarkers(v)
+            if i is not None and (ids is None or len(i) > len(ids)):
+                corners, ids = c, i
+            if ids is not None and len(ids) >= 4:
+                break
+        
         if ids is None or len(ids) < 4:
-            return None, f"Markerlar bulunamadı ({len(ids) if ids else 0}/4)."
+            return None, f"Yetersiz marker ({0 if ids is None else len(ids)}/4). Lütfen fotoğrafı dik ve net çekin."
         
         ids = ids.flatten()
-        base = int(min(ids))
-        bid = int(base // 4)
         
-        # A4 boyut (2480x3508) -> 8x5 grid = 40 karakter
-        scale = 10
-        sw, sh = 248 * scale, 350 * scale
-        m = 175
+        # 2. Bölüm Tespiti
+        if forced_section_id is not None:
+            bid = forced_section_id
+            start_id = bid * 4
+            expected = [(start_id + k) % 50 for k in range(4)]
+        else:
+            # Otomatik tespit (En küçük ID'ye göre)
+            base = int(min(ids))
+            bid = base // 4
+            start_id = bid * 4
+            expected = [start_id, start_id+1, start_id+2, start_id+3]
         
-        targets = [bid*4, bid*4+1, bid*4+2, bid*4+3]
+        # 3. Perspektif Düzeltme Noktaları
         src_points = []
-        for target in targets:
-            found = False
-            for i in range(len(ids)):
-                if int(ids[i]) == target:
-                    src_points.append(np.mean(corners[i][0], axis=0))
-                    found = True
-                    break
-            if not found:
-                return None, f"Marker {target} eksik."
+        found_centers = {}
         
+        for idx in range(len(ids)):
+            curr_id = ids[idx]
+            # Marker merkezi
+            center = np.mean(corners[idx][0], axis=0)
+            found_centers[curr_id] = center
+            
+        # Beklenen 4 marker'ı sırayla (Sol-Üst, Sağ-Üst, Sol-Alt, Sağ-Alt) bul
+        missing = []
+        for target in expected:
+            if target in found_centers:
+                src_points.append(found_centers[target])
+            else:
+                missing.append(target)
+                
+        if missing:
+            return None, f"Bölüm {bid} için markerlar eksik: {missing}"
+            
         src = np.float32(src_points)
-        dst = np.float32([[m,m], [sw-m,m], [m,sh-m], [sw-m,sh-m]])
-        warped = cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (sw, sh))
         
-        # Grid ayarları (8x5 = 40 karakter)
-        CELL_SIZE = 200
-        GRID_COLS = 8
-        GRID_ROWS = 5
-        GRID_WIDTH = GRID_COLS * CELL_SIZE
-        OFFSET_X = (sw - GRID_WIDTH) // 2
-        OFFSET_Y = 250  # Sabit, tek bölüm işliyoruz
+        # Hedef koordinatlar (A5 boyutuna yakın yüksek çözünürlük)
+        scale = 10
+        sw, sh = 210 * scale, 148 * scale
+        m = 175 # Margin
         
-        start_idx = bid * 40
-        section_results = {}
+        dst = np.float32([
+            [m, m], 
+            [sw-m, m], 
+            [m, sh-m], 
+            [sw-m, sh-m]
+        ])
+        
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, M, (sw, sh))
+        
+        # 4. Izgara Kesimi
+        b_px = 150 # Kutu boyutu
+        # Izgarayı ortala
+        sx = int((sw - 10*b_px)/2)
+        sy = int((sh - 6*b_px)/2)
+        
+        start_idx = bid * 60
+        page_results = {}
         detected_count = 0
-        missing_chars = []
         
-        for r in range(GRID_ROWS):
-            for c in range(GRID_COLS):
-                idx = start_idx + (r * GRID_COLS + c)
-                if idx >= len(self.char_list): break
+        for r in range(6):
+            for c in range(10):
+                idx = start_idx + (r * 10 + c)
                 
-                x = OFFSET_X + c * CELL_SIZE
-                y = OFFSET_Y + r * CELL_SIZE
+                # Liste sınırını kontrol et
+                if idx >= len(self.char_list):
+                    continue
                 
-                # Padding
+                # ROI al (Padding ile)
                 p = 15
-                roi = warped[y+p:y+CELL_SIZE-p, x+p:x+CELL_SIZE-p]
+                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
-                res = self.process_roi(roi)
-                if res is not None:
-                    _, buffer = cv2.imencode(".png", res)
+                processed_img = self.process_roi(roi)
+                
+                if processed_img is not None:
+                    # PNG'ye çevir ve Base64 yap
+                    _, buffer = cv2.imencode(".png", processed_img)
                     b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
-                    section_results[self.char_list[idx]] = b64_str
+                    
+                    char_key = self.char_list[idx]
+                    page_results[char_key] = b64_str
                     detected_count += 1
-                else:
-                    missing_chars.append(self.char_list[idx])
-        
+                    
         return {
-            'harfler': section_results,
-            'detected': detected_count,
-            'total': min(40, len(self.char_list) - start_idx),
-            'missing': missing_chars,
-            'section_id': bid
+            'harfler': page_results, 
+            'detected': detected_count, 
+            'section_id': bid,
+            'total_in_section': min(60, len(self.char_list)-start_idx)
         }, None
 
-sistem = HarfSistemi()
-
-# --- HEALTH CHECK ---
-@app.route('/health')
-def health():
-    return "OK", 200
+# Varsayılan sistem (3x) - İstek üzerine değişebilir
+default_sistem = HarfSistemi(repetition=3)
 
 # --- WEB ROTALARI ---
+
 @app.route('/')
 def index():
-    return jsonify({
-        "status": "running",
-        "service": "Fontify API",
-        "character_count": len(sistem.char_list),
-        "firebase": connected_project_id
-    })
+    font_id = request.args.get('font_id', '')
+    user_id = request.args.get('user_id', '')
+    return render_template('index.html', font_id=font_id, user_id=user_id)
+
+@app.route('/mobil_yukle.html')
+def mobil_page():
+    # Statik dosya olarak sunmak yerine template render edebiliriz ama 
+    # dosya yapısına göre statik sunum daha kolay olabilir.
+    # Şimdilik template klasöründe olduğunu varsayalım ya da direkt static'den okuyalım.
+    return send_file('web/mobil_yukle.html')
 
 @app.route('/api/list_fonts')
 def list_fonts():
@@ -310,97 +371,108 @@ def get_assets():
         if assets: return jsonify({"success": True, "assets": assets, "source": "local"})
     return jsonify({"success": True, "assets": {}, "source": "none", "warning": "Harf yok"}), 200
 
-# --- YENİ TARAMA ENDPOINTİ (2 BÖLÜM) ---
-@app.route('/process_dual', methods=['POST'])
-def process_dual():
-    """Her sayfada 2 bölüm tara (üst + alt)"""
+# --- TARAMA VE UPLOAD ---
+
+@app.route('/process_single', methods=['POST'])
+def process_single():
     global init_error
     try:
         data = request.get_json()
         u_id = data.get('user_id')
         f_name = data.get('font_name')
-        image1_b64 = data.get('image1')  # Üst bölüm
-        image2_b64 = data.get('image2')  # Alt bölüm
+        b64 = data.get('image_base64')
         
-        if not u_id or not image1_b64 or not image2_b64:
-            return jsonify({'success': False, 'message': 'Eksik veri (2 görsel gerekli)'}), 400
+        # Repetition parametresini al (Yoksa 3 varsay)
+        # Frontend'den gönderilmesi iyi olur ama gönderilmezse varsayılanı kullanırız.
+        # Mobil uygulamadan henüz gönderilmiyor, o yüzden 3 varsayıyoruz.
+        repetition = int(data.get('variation_count', 3))
         
-        # İki bölümü işle
-        results = []
-        all_harfler = {}
+        # Dinamik sistem oluştur (Eğer varsayılan 3'ten farklıysa)
+        current_sistem = default_sistem
+        if repetition != 3:
+            current_sistem = HarfSistemi(repetition=repetition)
+
+        if not u_id or not b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
         
-        for idx, b64_data in enumerate([image1_b64, image2_b64], 1):
-            nparr = np.frombuffer(base64.b64decode(b64_data), np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            res, err = sistem.process_section(img, idx-1)
-            if err:
-                return jsonify({
-                    'success': False,
-                    'message': f'Bölüm {idx} hatası: {err}'
-                }), 400
-            
-            results.append(res)
-            all_harfler.update(res['harfler'])
+        nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        # Firebase'e kaydet
+        if img is None: return jsonify({'success': False, 'message': 'Resim okunamadı'}), 400
+
+        res, err = current_sistem.process_single_page(img)
+        
+        if err: return jsonify({'success': False, 'message': err}), 400
+
         database = init_firebase()
         if database:
             try:
                 fid = f"{u_id}_{f_name.replace(' ', '_')}"
                 d_ref = database.collection('fonts').document(fid)
                 u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
+                
                 doc = d_ref.get()
                 
-                section_ids = [r['section_id'] for r in results]
+                # Toplam karakter sayısını hesapla
+                total_chars = len(current_sistem.char_list)
                 
-                payload = {
-                    'harfler': all_harfler,
-                    'harf_sayisi': len(all_harfler),
-                    'sections_completed': section_ids
-                }
+                # Yeni veriyi hazırla
+                new_harfler = res['harfler']
+                new_section = res['section_id']
                 
                 if not doc.exists:
-                    payload.update({
-                        'owner_id': u_id,
-                        'user_id': u_id,
-                        'font_name': f_name,
-                        'font_id': fid,
+                    payload = {
+                        'harfler': new_harfler, 
+                        'harf_sayisi': len(new_harfler), 
+                        'sections_completed': [new_section],
+                        'owner_id': u_id, 
+                        'user_id': u_id, 
+                        'font_name': f_name, 
+                        'font_id': fid, 
+                        'repetition': repetition,
+                        'total_expected': total_chars,
                         'created_at': firestore.SERVER_TIMESTAMP
-                    })
+                    }
                     d_ref.set(payload)
                     u_ref.set(payload)
                 else:
                     curr = doc.to_dict()
                     h = curr.get('harfler', {})
-                    h.update(all_harfler)
+                    h.update(new_harfler)
+                    
                     s = curr.get('sections_completed', [])
-                    for sid in section_ids:
-                        if sid not in s: s.append(sid)
+                    if new_section not in s: s.append(new_section)
+                    s.sort()
                     
                     payload = {
-                        'harfler': h,
-                        'harf_sayisi': len(h),
-                        'sections_completed': s,
+                        'harfler': h, 
+                        'harf_sayisi': len(h), 
+                        'sections_completed': s, 
                         'font_id': fid
                     }
                     d_ref.update(payload)
                     u_ref.update(payload)
-                    
-            except Exception as e:
-                print(f"❌ DB Kayıt Hatası: {e}")
-        
+            except Exception as e: print(f"DB Kayıt Hatası: {e}")
+
         return jsonify({
             'success': True,
-            'section_ids': section_ids,
-            'detected_chars': sum(r['detected'] for r in results),
-            'total_chars': len(all_harfler),
+            'section_id': res['section_id'],
+            'detected_chars': res['detected'],
+            'total_chars_found': len(res['harfler']),
             'db_project_id': connected_project_id
         })
-        
     except Exception as e:
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/upload_form', methods=['POST'])
+def upload_form():
+    # PDF Upload Endpoint'i (Gelecekte PDF'ten ayırma eklenebilir)
+    # Şimdilik basitçe process_single'a yönlendirmek zor çünkü PDF çok sayfalı.
+    # PDF'i görüntülere ayırıp tek tek process_single çağırmak gerekir.
+    # Bu özellik şu an prompt'ta istenmedi ama 'ekle.html'de var. 
+    # O yüzden basit bir "Yapım aşamasında" veya PDF split mantığı gerekebilir.
+    # Ancak kullanıcı "Telefondan foto çekecek" dediği için şimdilik mobil odaklı gidiyoruz.
+    return jsonify({'success': False, 'message': 'PDF yükleme sunucu tarafında henüz aktif değil. Lütfen mobil taramayı kullanın.'})
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -429,7 +501,14 @@ def download():
                         if "," in b64_data: b64_data = b64_data.split(",")[1]
                         img_data = base64.b64decode(b64_data)
                         img = core_generator.Image.open(io.BytesIO(img_data)).convert("RGBA")
-                        base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                        
+                        # Key formatını kontrol et (kucuk_a_1 -> kucuk_a)
+                        parts = key.rsplit('_', 1)
+                        if len(parts) > 1 and parts[1].isdigit():
+                            base_key = parts[0]
+                        else:
+                            base_key = key
+                            
                         if base_key not in active_harfler: active_harfler[base_key] = []
                         active_harfler[base_key].append(img)
                     except: continue
@@ -439,30 +518,13 @@ def download():
             if os.path.exists(HARFLER_KLASORU):
                 active_harfler = core_generator.harf_resimlerini_yukle(HARFLER_KLASORU)
 
-        renkler = {
-            'tukenmez': (27, 27, 29),
-            'bic_mavi': (0, 35, 102),
-            'pilot_mavi': (0, 51, 153),
-            'eski_murekkep': (40, 60, 120),
-            'kirmizi': (180, 20, 20),
-            'lacivert': (24, 18, 110)
-        }
+        renkler = {'tukenmez':(27,27,29), 'bic_mavi':(0,35,102), 'pilot_mavi':(0,51,153), 'eski_murekkep':(40,60,120), 'kirmizi':(180,20,20), 'lacivert':(24,18,110)}
         murekkep = renkler.get(murekkep_rengi_str, renkler['tukenmez'])
 
         config = {
-            'page_width': 2480,
-            'page_height': 3508,
-            'margin_top': 200,
-            'margin_left': 150,
-            'margin_right': 150,
-            'target_letter_height': yazi_boyutu,
-            'line_spacing': satir_araligi,
-            'word_spacing': kelime_boslugu,
-            'murekkep_rengi': murekkep,
-            'opacity': 0.95,
-            'jitter': jitter,
-            'paper_type': paper_type,
-            'line_slope': 5
+            'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150,
+            'target_letter_height': yazi_boyutu, 'line_spacing': satir_araligi, 'word_spacing': kelime_boslugu,
+            'murekkep_rengi': murekkep, 'opacity': 0.95, 'jitter': jitter, 'paper_type': paper_type, 'line_slope': 5
         }
 
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
