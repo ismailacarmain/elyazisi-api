@@ -146,46 +146,51 @@ class HarfSistemi:
         coords = cv2.findNonZero(binary_img)
         if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
-        # Çok küçük gürültüleri ele
-        if w < 10 or h < 10: return None
+        # Çok küçük gürültüleri ele (Daha hassas ayar: 5px)
+        if w < 5 or h < 5: return None
         return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
         if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3,3), 0)
-        # Adaptive threshold ile binary yap
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12)
-        # Gürültü temizle
-        kernel = np.ones((2,2), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         
-        tight = self.crop_tight(thresh)
+        # 1. Kontrast Artırma (Silik yazılar için)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray = clahe.apply(gray)
+        
+        # 2. Daha Hassas Eşikleme (C sabiti 12 -> 10 yaptık, daha fazla detay yakalar)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+        
+        # 3. Gürültü Temizleme (Agresif MORPH_OPEN yerine Kontur Alanı Bazlı Temizleme)
+        # Bu yöntem harfi inceltmez, sadece tozları siler.
+        cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = np.zeros_like(thresh)
+        for c in cnts:
+            if cv2.contourArea(c) > 10: # 10 pikselden büyük her şeyi koru (Noktalar silinmez)
+                cv2.drawContours(mask, [c], -1, 255, -1)
+        
+        # 4. Hafif Kalınlaştırma (Silik görüntüyü düzeltir)
+        # 2x2 kernel ile 1 iterasyon genişletme
+        kernel = np.ones((2,2), np.uint8)
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        
+        tight = self.crop_tight(mask)
         if tight is None: return None
         
         h, w = tight.shape
-        # Şeffaf arka plan, siyah yazı (RGBA)
-        # Web için PNG formatında base64 dönecek, o yüzden burada siyah-beyaz maskeyi hazırlıyoruz.
-        # Frontend'de kullanırken siyah pikseller görünür, diğerleri şeffaf olacak.
-        
-        # Siyah zemin üzerine beyaz yazı var şu an (thresh_inv yaptık)
-        # Bunu: Siyah yazı, şeffaf zemin yapalım.
-        
-        # Create an RGBA image
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        
-        # Set RGB to black (0,0,0)
         rgba[:, :, 0] = 0
         rgba[:, :, 1] = 0
         rgba[:, :, 2] = 0
-        
-        # Set Alpha based on the thresholded image (White pixels in thresh -> Opaque in output)
         rgba[:, :, 3] = tight
         
         return rgba
 
     def process_single_page(self, img, forced_section_id=None):
-        # 1. Marker Tespiti
+        # ... (Marker tespit kodları aynı kalıyor) ...
+        # Marker tespiti için grayscale yap
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         parameters = cv2.aruco.DetectorParameters()
         parameters.adaptiveThreshWinSizeMin = 3
@@ -194,23 +199,13 @@ class HarfSistemi:
         
         detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
         
-        # Görüntü iyileştirme varyasyonları (Daha iyi tespit için)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        corners, ids, _ = detector.detectMarkers(gray_full)
         
-        variations = [
-            gray, 
-            clahe.apply(gray), 
-            cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)[1]
-        ]
-        
-        corners, ids = None, None
-        for v in variations:
-            c, i, _ = detector.detectMarkers(v)
-            if i is not None and (ids is None or len(i) > len(ids)):
-                corners, ids = c, i
-            if ids is not None and len(ids) >= 4:
-                break
+        # Eğer bulunamazsa kontrast artırıp tekrar dene
+        if ids is None or len(ids) < 4:
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray_full)
+            corners, ids, _ = detector.detectMarkers(enhanced)
         
         if ids is None or len(ids) < 4:
             return None, f"Yetersiz marker ({0 if ids is None else len(ids)}/4). Lütfen fotoğrafı dik ve net çekin."
@@ -223,56 +218,34 @@ class HarfSistemi:
             start_id = bid * 4
             expected = [(start_id + k) % 50 for k in range(4)]
         else:
-            # Otomatik tespit (En küçük ID'ye göre)
             base = int(min(ids))
             bid = base // 4
             start_id = bid * 4
             expected = [start_id, start_id+1, start_id+2, start_id+3]
         
-        # 3. Perspektif Düzeltme Noktaları
+        # 3. Perspektif
         src_points = []
         found_centers = {}
-        
         for idx in range(len(ids)):
-            curr_id = ids[idx]
-            # Marker merkezi
-            center = np.mean(corners[idx][0], axis=0)
-            found_centers[curr_id] = center
+            found_centers[ids[idx]] = np.mean(corners[idx][0], axis=0)
             
-        # Beklenen 4 marker'ı sırayla (Sol-Üst, Sağ-Üst, Sol-Alt, Sağ-Alt) bul
         missing = []
         for target in expected:
-            if target in found_centers:
-                src_points.append(found_centers[target])
-            else:
-                missing.append(target)
+            if target in found_centers: src_points.append(found_centers[target])
+            else: missing.append(target)
                 
-        if missing:
-            return None, f"Bölüm {bid} için markerlar eksik: {missing}"
+        if missing: return None, f"Bölüm {bid} için markerlar eksik: {missing}"
             
         src = np.float32(src_points)
-        
-        # Hedef koordinatlar (A5 boyutuna yakın yüksek çözünürlük)
-        scale = 10
-        sw, sh = 210 * scale, 148 * scale
-        m = 175 # Margin
-        
-        dst = np.float32([
-            [m, m], 
-            [sw-m, m], 
-            [m, sh-m], 
-            [sw-m, sh-m]
-        ])
-        
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
         M = cv2.getPerspectiveTransform(src, dst)
         warped = cv2.warpPerspective(img, M, (sw, sh))
         
         # 4. Izgara Kesimi
-        b_px = 150 # Kutu boyutu
-        # Izgarayı ortala
+        b_px = 150
         sx = int((sw - 10*b_px)/2)
         sy = int((sh - 6*b_px)/2)
-        
         start_idx = bid * 60
         page_results = {}
         detected_count = 0
@@ -280,32 +253,20 @@ class HarfSistemi:
         for r in range(6):
             for c in range(10):
                 idx = start_idx + (r * 10 + c)
+                if idx >= len(self.char_list): continue
                 
-                # Liste sınırını kontrol et
-                if idx >= len(self.char_list):
-                    continue
-                
-                # ROI al (Padding ile)
-                p = 15
+                # Padding'i azalttım (15 -> 8). Kutunun kenarına yazılanlar artık kesilmez.
+                p = 8 
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
-                
                 if processed_img is not None:
-                    # PNG'ye çevir ve Base64 yap
                     _, buffer = cv2.imencode(".png", processed_img)
                     b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
-                    
-                    char_key = self.char_list[idx]
-                    page_results[char_key] = b64_str
+                    page_results[self.char_list[idx]] = b64_str
                     detected_count += 1
                     
-        return {
-            'harfler': page_results, 
-            'detected': detected_count, 
-            'section_id': bid,
-            'total_in_section': min(60, len(self.char_list)-start_idx)
-        }, None
+        return {'harfler': page_results, 'detected': detected_count, 'section_id': bid, 'total_in_section': min(60, len(self.char_list)-start_idx)}, None
 
 # Varsayılan sistem (3x) - İstek üzerine değişebilir
 default_sistem = HarfSistemi(repetition=3)
