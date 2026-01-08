@@ -160,16 +160,6 @@ class HarfSistemi:
         # Adaptive Threshold
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
         
-        # --- ÇERÇEVE SIZINTISI TEMİZLEME ---
-        # Kutunun en dış çeperindeki 5 pikseli sıfırlıyoruz. 
-        # Eğer çerçeve çizgisi içeri sızdıysa, bu işlem o çizgiyi harften koparır.
-        h_roi, w_roi = thresh.shape
-        b_margin = 5
-        thresh[0:b_margin, :] = 0 # Üst kenar
-        thresh[h_roi-b_margin:h_roi, :] = 0 # Alt kenar
-        thresh[:, 0:b_margin] = 0 # Sol kenar
-        thresh[:, w_roi-b_margin:w_roi] = 0 # Sağ kenar
-        
         tight = self.crop_tight(thresh)
         if tight is None: return None
         
@@ -251,8 +241,8 @@ class HarfSistemi:
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): continue
                 
-                # Padding ayarı: 10px (Kutu çizgilerinden güvenli uzaklık)
-                p = 10 
+                # Padding: 22px (Merkeze odaklan, yanlardan ve çerçeveden uzak dur)
+                p = 22 
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
