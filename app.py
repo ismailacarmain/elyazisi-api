@@ -84,17 +84,18 @@ class HarfSistemi:
         symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺&#"
         symbols_str = symbols_str.replace(" ", "")
         
-        # Türkçe karakter haritası
+        # Türkçe ve Özel Karakter Haritası (engine.js ile %100 uyumlu olmalı)
+        # Önemli: I -> buyuk_ii, İ -> buyuk_i, ı -> kucuk_ii, i -> kucuk_i
         tr_map = {
             'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu',
-            'Ç': 'cc', 'Ğ': 'gg', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'
+            'Ç': 'cc', 'Ğ': 'gg', 'I': 'ii', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'
         }
         
         # Sembol haritası
         sym_map = {
             ".": "nokta", ",": "virgul", ":": "ikiknokta", ";": "noktalivirgul", 
             "?": "soru", "!": "unlem", "-": "tire", "_": "alt_tire",
-            "\"": "cift_tirnak", "'": "tek_tirnak", 
+            "\"": "tirnak", "'": "tektirnak", 
             "(": "parantezac", ")": "parantezkapama",
             "[": "koseli_ac", "]": "koseli_kapa",
             "{": "suslu_ac", "}": "suslu_kapa",
@@ -106,7 +107,6 @@ class HarfSistemi:
             "&": "ampersand", "#": "diyez"
         }
 
-        # Listeyi oluştur
         # Küçük harfler
         for char in lowers:
             base = tr_map.get(char, char)
@@ -115,7 +115,12 @@ class HarfSistemi:
         
         # Büyük harfler
         for char in uppers:
-            base = tr_map.get(char, char.lower()) # Büyük harfleri de küçük harf gibi kodla ama prefix farklı
+            # tr_map içinde varsa onu kullan (I->ii gibi), yoksa lowercase yap
+            if char in tr_map:
+                base = tr_map[char]
+            else:
+                base = char.lower()
+            
             for i in range(1, self.repetition + 1):
                 self.char_list.append(f"buyuk_{base}_{i}")
         
@@ -124,7 +129,7 @@ class HarfSistemi:
             for i in range(1, self.repetition + 1):
                 self.char_list.append(f"rakam_{char}_{i}")
         
-        # Semboller (Tekrarsız sıralama)
+        # Semboller
         seen = set()
         unique_symbols = ""
         for char in symbols_str:
