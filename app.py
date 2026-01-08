@@ -358,22 +358,99 @@ def list_fonts():
     fonts = []
     database = init_firebase()
     if not database: return jsonify({"success": False, "error": "Veritabanı bağlantısı yok"})
+    
     try:
-        public_fonts = database.collection('fonts').stream()
-        for doc in public_fonts:
-            d = doc.to_dict()
-            f_name = d.get('font_name') or d.get('font_id') or doc.id
-            fonts.append({'id': d.get('font_id', doc.id), 'name': f_name, 'type': 'public'})
-        if user_id:
-            private_fonts = database.collection('users').document(user_id).collection('fonts').stream()
-            for doc in private_fonts:
+        # Fontları benzersiz yapmak için dict kullan
+        fonts_dict = {}
+
+        # 1. Public Fontları Çek
+        try:
+            public_fonts = database.collection('fonts').stream()
+            for doc in public_fonts:
                 d = doc.to_dict()
                 fid = d.get('font_id', doc.id)
-                f_name = d.get('font_name') or fid
-                if not any(f['id'] == fid for f in fonts):
-                    fonts.append({'id': fid, 'name': f_name, 'type': 'private'})
+                # Eğer fontun sahibi bu kullanıcıysa, bunu 'private' olarak işaretleyeceğiz aşağıda
+                fonts_dict[fid] = {
+                    'id': fid,
+                    'name': d.get('font_name') or fid,
+                    'type': 'public',
+                    'repetition': d.get('repetition', d.get('variation_count', 3)),
+                    'char_count': d.get('harf_sayisi', 0),
+                    'owner_id': d.get('owner_id', '')
+                }
+        except Exception as e: print(f"Public font hatası: {e}")
+
+        # 2. Kullanıcının Fontlarını Çek (User ID varsa)
+        if user_id:
+            # Yöntem A: Users koleksiyonundan çek
+            try:
+                user_fonts_ref = database.collection('users').document(user_id).collection('fonts').stream()
+                for doc in user_fonts_ref:
+                    d = doc.to_dict()
+                    fid = d.get('font_id', doc.id)
+                    fonts_dict[fid] = {
+                        'id': fid,
+                        'name': d.get('font_name') or fid,
+                        'type': 'private',
+                        'repetition': d.get('repetition', d.get('variation_count', 3)),
+                        'char_count': d.get('harf_sayisi', 0),
+                        'owner_id': user_id
+                    }
+            except: pass
+
+            # Yöntem B: Ana koleksiyonda owner_id araması yap (Garanti Yöntem)
+            try:
+                owner_query = database.collection('fonts').where('owner_id', '==', user_id).stream()
+                for doc in owner_query:
+                    d = doc.to_dict()
+                    fid = d.get('font_id', doc.id)
+                    # Zaten ekliyse güncelle, değilse ekle
+                    fonts_dict[fid] = {
+                        'id': fid,
+                        'name': d.get('font_name') or fid,
+                        'type': 'private',
+                        'repetition': d.get('repetition', d.get('variation_count', 3)),
+                        'char_count': d.get('harf_sayisi', 0),
+                        'owner_id': user_id
+                    }
+            except: pass
+
+        # Dict'i listeye çevir
+        fonts = list(fonts_dict.values())
         return jsonify({"success": True, "fonts": fonts})
-    except Exception as e: return jsonify({"success": False, "error": str(e)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/add_to_library', methods=['POST'])
+def add_to_library():
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        font_id = data.get('font_id')
+        
+        database = init_firebase()
+        if not database: return jsonify({'success': False, 'message': 'Veritabanı yok'}), 500
+
+        # 1. Kaynak fontu bul (Public listesinden)
+        source_doc = database.collection('fonts').document(font_id).get()
+        if not source_doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+            
+        font_data = source_doc.to_dict()
+        
+        # 2. Kullanıcının listesine kopyala
+        # (owner_id'yi değiştirmiyoruz ki orijinal sahibi belli olsun, ama koleksiyona ekliyoruz)
+        target_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
+        
+        # Kullanıcı kütüphanesine eklendiği için bir işaret koyabiliriz
+        font_data['added_from_public'] = True
+        font_data['added_at'] = firestore.SERVER_TIMESTAMP
+        
+        target_ref.set(font_data)
+        
+        return jsonify({'success': True, 'message': 'Font kütüphaneye eklendi'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/get_assets')
 def get_assets():
