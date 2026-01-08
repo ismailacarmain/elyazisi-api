@@ -421,35 +421,46 @@ def list_fonts():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/add_to_library', methods=['POST'])
+@app.route('/api/add_to_library', methods=['POST', 'OPTIONS'])
 def add_to_library():
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True}), 200
+        
     try:
-        data = request.get_json()
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({'success': False, 'message': 'Geçersiz veri formatı'}), 400
+            
         user_id = data.get('user_id')
         font_id = data.get('font_id')
         
+        if not user_id or not font_id:
+            return jsonify({'success': False, 'message': 'Eksik parametre'}), 400
+        
         database = init_firebase()
-        if not database: return jsonify({'success': False, 'message': 'Veritabanı yok'}), 500
+        if not database: return jsonify({'success': False, 'message': 'Veritabanı bağlantısı yok'}), 500
 
         # 1. Kaynak fontu bul (Public listesinden)
         source_doc = database.collection('fonts').document(font_id).get()
         if not source_doc.exists:
+            # Belki users koleksiyonunda başkasının private fontudur (Link ile paylaşılmışsa)
+            # Şimdilik sadece ana koleksiyona bakıyoruz.
             return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
             
         font_data = source_doc.to_dict()
         
         # 2. Kullanıcının listesine kopyala
-        # (owner_id'yi değiştirmiyoruz ki orijinal sahibi belli olsun, ama koleksiyona ekliyoruz)
         target_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
         
-        # Kullanıcı kütüphanesine eklendiği için bir işaret koyabiliriz
-        font_data['added_from_public'] = True
+        # Gereksiz büyük veriyi temizle (Opsiyonel)
+        # font_data['added_from_public'] = True
         font_data['added_at'] = firestore.SERVER_TIMESTAMP
         
         target_ref.set(font_data)
         
         return jsonify({'success': True, 'message': 'Font kütüphaneye eklendi'})
     except Exception as e:
+        print(f"Add Library Error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/get_assets')
