@@ -154,15 +154,21 @@ class HarfSistemi:
         if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # Hafif bir yumuşatma (Gürültüyü azaltır ama harfi bozmaz)
+        # Hafif bir yumuşatma
         gray = cv2.GaussianBlur(gray, (3,3), 0)
         
-        # Adaptive Threshold (C=10: Dengeli. Harfleri yutmaz, gürültüyü de abartmaz)
-        # BlockSize=21: Geniş alan analizi yapar, gölgelerden etkilenmez.
+        # Adaptive Threshold
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
         
-        # MORPH_OPEN işlemini kaldırdım çünkü ince harfleri ve noktaları siliyordu.
-        # Bunun yerine sadece crop_tight içinde çok minik tozları (1px) eliyoruz.
+        # --- ÇERÇEVE SIZINTISI TEMİZLEME ---
+        # Kutunun en dış çeperindeki 5 pikseli sıfırlıyoruz. 
+        # Eğer çerçeve çizgisi içeri sızdıysa, bu işlem o çizgiyi harften koparır.
+        h_roi, w_roi = thresh.shape
+        b_margin = 5
+        thresh[0:b_margin, :] = 0 # Üst kenar
+        thresh[h_roi-b_margin:h_roi, :] = 0 # Alt kenar
+        thresh[:, 0:b_margin] = 0 # Sol kenar
+        thresh[:, w_roi-b_margin:w_roi] = 0 # Sağ kenar
         
         tight = self.crop_tight(thresh)
         if tight is None: return None
@@ -177,6 +183,86 @@ class HarfSistemi:
         return rgba
 
     def process_single_page(self, img, forced_section_id=None):
+        # ... (Marker tespit kodları aynı kalıyor) ...
+        # Marker tespiti için grayscale yap
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.adaptiveThreshWinSizeMin = 3
+        parameters.adaptiveThreshWinSizeMax = 23
+        parameters.adaptiveThreshWinSizeStep = 5
+        
+        detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+        
+        corners, ids, _ = detector.detectMarkers(gray_full)
+        
+        # Eğer bulunamazsa kontrast artırıp tekrar dene
+        if ids is None or len(ids) < 4:
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray_full)
+            corners, ids, _ = detector.detectMarkers(enhanced)
+        
+        if ids is None or len(ids) < 4:
+            return None, f"Yetersiz marker ({0 if ids is None else len(ids)}/4). Lütfen fotoğrafı dik ve net çekin."
+        
+        ids = ids.flatten()
+        
+        # 2. Bölüm Tespiti
+        if forced_section_id is not None:
+            bid = forced_section_id
+            start_id = bid * 4
+            expected = [(start_id + k) % 50 for k in range(4)]
+        else:
+            base = int(min(ids))
+            bid = base // 4
+            start_id = bid * 4
+            expected = [start_id, start_id+1, start_id+2, start_id+3]
+        
+        # 3. Perspektif
+        src_points = []
+        found_centers = {}
+        for idx in range(len(ids)):
+            found_centers[ids[idx]] = np.mean(corners[idx][0], axis=0)
+            
+        missing = []
+        for target in expected:
+            if target in found_centers: src_points.append(found_centers[target])
+            else: missing.append(target)
+                
+        if missing: return None, f"Bölüm {bid} için markerlar eksik: {missing}"
+            
+        src = np.float32(src_points)
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, M, (sw, sh))
+        
+        # 4. Izgara Kesimi
+        b_px = 150
+        sx = int((sw - 10*b_px)/2)
+        sy = int((sh - 6*b_px)/2)
+        start_idx = bid * 60
+        page_results = {}
+        detected_count = 0
+        
+        for r in range(6):
+            for c in range(10):
+                idx = start_idx + (r * 10 + c)
+                if idx >= len(self.char_list): continue
+                
+                # Padding ayarı: 10px (Kutu çizgilerinden güvenli uzaklık)
+                p = 10 
+                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                
+                processed_img = self.process_roi(roi)
+                if processed_img is not None:
+                    _, buffer = cv2.imencode(".png", processed_img)
+                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
+                    page_results[self.char_list[idx]] = b64_str
+                    detected_count += 1
+                    
+        return {'harfler': page_results, 'detected': detected_count, 'section_id': bid, 'total_in_section': min(60, len(self.char_list)-start_idx)}, None
         # ... (Marker tespit kodları aynı kalıyor) ...
         # Marker tespiti için grayscale yap
         gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
