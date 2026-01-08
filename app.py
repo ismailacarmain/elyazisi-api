@@ -223,13 +223,13 @@ class HarfSistemi:
         if missing: return None, f"Bölüm {bid} için markerlar eksik: {missing}"
             
         src = np.float32(src_points)
-        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        scale = 4; sw, sh = 210 * scale, 148 * scale; m = 70
         dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
         M = cv2.getPerspectiveTransform(src, dst)
         warped = cv2.warpPerspective(img, M, (sw, sh))
         
         # 4. Izgara Kesimi
-        b_px = 150
+        b_px = 60 # 150 -> 60 (Scale ile orantılı)
         sx = int((sw - 10*b_px)/2)
         sy = int((sh - 6*b_px)/2)
         start_idx = bid * 60
@@ -241,8 +241,8 @@ class HarfSistemi:
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): continue
                 
-                # Padding: 22px (Merkeze odaklan, yanlardan ve çerçeveden uzak dur)
-                p = 22 
+                # Padding: 8px (Küçültülmüş kutu için yeterli)
+                p = 8 
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
