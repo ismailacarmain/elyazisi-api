@@ -146,35 +146,25 @@ class HarfSistemi:
         coords = cv2.findNonZero(binary_img)
         if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
-        # Çok küçük gürültüleri ele (Daha hassas ayar: 5px)
-        if w < 5 or h < 5: return None
+        # Çok küçük gürültüleri ele (Noktalama işaretleri için limiti düşürdüm: 2px)
+        if w < 2 or h < 2: return None
         return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
         if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # 1. Kontrast Artırma (Silik yazılar için)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
+        # Hafif bir yumuşatma (Gürültüyü azaltır ama harfi bozmaz)
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
         
-        # 2. Daha Hassas Eşikleme (C sabiti 12 -> 10 yaptık, daha fazla detay yakalar)
+        # Adaptive Threshold (C=10: Dengeli. Harfleri yutmaz, gürültüyü de abartmaz)
+        # BlockSize=21: Geniş alan analizi yapar, gölgelerden etkilenmez.
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
         
-        # 3. Gürültü Temizleme (Agresif MORPH_OPEN yerine Kontur Alanı Bazlı Temizleme)
-        # Bu yöntem harfi inceltmez, sadece tozları siler.
-        cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros_like(thresh)
-        for c in cnts:
-            if cv2.contourArea(c) > 10: # 10 pikselden büyük her şeyi koru (Noktalar silinmez)
-                cv2.drawContours(mask, [c], -1, 255, -1)
+        # MORPH_OPEN işlemini kaldırdım çünkü ince harfleri ve noktaları siliyordu.
+        # Bunun yerine sadece crop_tight içinde çok minik tozları (1px) eliyoruz.
         
-        # 4. Hafif Kalınlaştırma (Silik görüntüyü düzeltir)
-        # 2x2 kernel ile 1 iterasyon genişletme
-        kernel = np.ones((2,2), np.uint8)
-        mask = cv2.dilate(mask, kernel, iterations=1)
-        
-        tight = self.crop_tight(mask)
+        tight = self.crop_tight(thresh)
         if tight is None: return None
         
         h, w = tight.shape
