@@ -2,20 +2,22 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Sistem bağımlılıklarını kur (OpenCV ve PDF için gerekli)
-RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1-mesa-glx \
-    poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Sadece PDF için gerekli olan poppler'ı kur (En sade hali)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends poppler-utils && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
+# Bağımlılıkları kur
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Tüm dosyaları kopyala
 COPY . .
 
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-10000} --workers 1 --threads 8 --timeout 0 app:app"]
+# Port ayarı
+ENV PORT=10000
+EXPOSE 10000
+
+# Uygulamayı başlat
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
