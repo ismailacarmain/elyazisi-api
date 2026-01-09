@@ -200,6 +200,16 @@ def init_firebase():
 
 init_firebase()
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Log the error
+    logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
+    return jsonify({
+        "success": False,
+        "message": "Sunucu tarafında bir hata oluştu.",
+        "error": str(e) if app.debug else None
+    }), 500
+
 @app.before_request
 def before_request():
     """HTTPS zorunluluğu (production)"""
