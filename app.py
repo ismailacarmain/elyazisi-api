@@ -170,43 +170,59 @@ def init_firebase():
     global db, init_error, connected_project_id
     if db is not None: return db
     try:
+        # HATA AYIKLAMA: Render'daki tüm değişken isimlerini yazdır (İçeriklerini değil!)
+        logger.info(f"Mevcut Environment Değişkenleri: {list(os.environ.keys())}")
+        
         cred = None
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         
         if env_creds:
-            logger.info("FIREBASE_CREDENTIALS environment variable found.")
-            cred_dict = json.loads(env_creds.strip())
-            cred = credentials.Certificate(cred_dict)
-            connected_project_id = cred_dict.get('project_id', 'EnvJson')
+            env_creds = env_creds.strip()
+            logger.info(f"FIREBASE_CREDENTIALS bulundu. Uzunluk: {len(env_creds)} karakter.")
+            
+            # JSON formatını zorla düzeltmeye çalış (Render kopyalama hataları için)
+            try:
+                cred_dict = json.loads(env_creds)
+                cred = credentials.Certificate(cred_dict)
+                connected_project_id = cred_dict.get('project_id', 'EnvJson')
+            except json.JSONDecodeError as je:
+                logger.error(f"!!! KRİTİK: JSON Formatı Hatalı !!! Hata: {je}")
+                # Eğer JSON tırnak hatası varsa basit bir tamir dene
+                try:
+                    import ast
+                    cred_dict = ast.literal_eval(env_creds)
+                    cred = credentials.Certificate(cred_dict)
+                    connected_project_id = cred_dict.get('project_id', 'AstFixed')
+                    logger.info("JSON hatası ast.literal_eval ile tamir edildi.")
+                except:
+                    logger.error("JSON tamir edilemedi. Lütfen Render'daki içeriği kontrol edin.")
         else:
-            logger.error("!!! HATA: FIREBASE_CREDENTIALS environment variable BULUNAMADI !!!")
-            logger.error("Lütfen Render panelinden Environment Variable ekleyin.")
+            logger.error("!!! HATA: FIREBASE_CREDENTIALS bulunamadı. Render panelini kontrol edin !!!")
         
         if not cred:
-            # Yerel dosya denemesi
-            paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
+            # Yedek plan: Gizli dosya olarak eklenmiş olabilir mi?
+            paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json', 'firebase_key.json']
             for p in paths:
                 if os.path.exists(p):
-                    logger.info(f"Firebase key found at local path: {p}")
+                    logger.info(f"Firebase anahtarı dosyada bulundu: {p}")
                     cred = credentials.Certificate(p)
-                    with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
+                    with open(p, 'r') as f:
+                        data = json.load(f)
+                        connected_project_id = data.get('project_id', 'File')
                     break
         
         if cred:
-            if not firebase_admin._apps: 
+            if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred)
-                logger.info("Firebase Admin SDK initialized successfully.")
             db = firestore.client()
-            print("\n" + "!"*60)
-            print(f"!!! FIREBASE BAĞLANDI | PROJE: {connected_project_id} !!!")
-            print("!"*60 + "\n")
+            logger.info(f"✅ FIREBASE BAŞARIYLA BAĞLANDI | Proje: {connected_project_id}")
         else:
-            logger.error("Firebase başlatılamadı: Hiçbir kimlik bilgisi (credential) bulunamadı.")
+            logger.error("❌ Firebase başlatılamadı: Geçerli bir anahtar yok.")
             
     except Exception as e:
         init_error = str(e)
         db = None
-        logger.error(f"Firebase Başlatma Hatası: {e}", exc_info=True)
+        logger.error(f"🔥 Firebase Hatası: {str(e)}", exc_info=True)
     return db
 
 init_firebase()
