@@ -18,11 +18,10 @@ from PIL import Image as PILImage
 import requests
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
-# CORS Sıkılaştırması (Sadece kendi domainimizden gelen isteklere izin ver)
-CORS(app, resources={r"/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com", "http://localhost:5000"]}})
+# CORS Sıkılaştırması (Gevşetildi - Debug için)
+CORS(app) # resources={r"/*": {"origins": "*"}})
 
 # --- FIREBASE BAĞLANTISI ---
-
 db = None
 connected_project_id = "BILINMIYOR"
 init_error = None
@@ -33,7 +32,8 @@ RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY', "6LfEIUUsAAAAANamE
 def verify_recaptcha(token):
     if not token: 
         print("reCAPTCHA Token yok!")
-        return False # Production'da False olmalı
+        # return False # Production'da False olmalı
+        return True # Debug için geçici izin
     try:
         url = "https://www.google.com/recaptcha/api/siteverify"
         data = {'secret': RECAPTCHA_SECRET_KEY, 'response': token}
@@ -93,6 +93,41 @@ def init_firebase():
     return db
 
 init_firebase()
+
+# --- KREDİ SİSTEMİ ---
+def check_and_deduct_credit(user_id):
+    try:
+        if not db: return False, "Veritabanı hatası"
+        user_ref = db.collection('users').document(user_id)
+        doc = user_ref.get() 
+        
+        current_credits = 10 # Varsayılan başlangıç kredisi
+        
+        if doc.exists:
+            data = doc.to_dict()
+            current_credits = data.get('credits', 10)
+        else:
+            user_ref.set({'credits': 10}, merge=True)
+            
+        if current_credits <= 0:
+            return False, "Yetersiz kredi! Yeni font oluşturmak için hakkınız kalmadı."
+            
+        user_ref.update({'credits': firestore.Increment(-1)})
+        return True, current_credits - 1
+    except Exception as e:
+        print(f"Kredi Hatası: {e}")
+        return False, str(e)
+
+@app.route('/api/get_user_credits')
+def get_user_credits():
+    user_id = request.args.get('user_id')
+    if not user_id or not db: return jsonify({'credits': 0})
+    try:
+        doc = db.collection('users').document(user_id).get()
+        if doc.exists:
+            return jsonify({'credits': doc.to_dict().get('credits', 10)})
+        return jsonify({'credits': 10})
+    except: return jsonify({'credits': 0})
 
 # --- HARF TARAMA MOTORU ---
 class HarfSistemi:
@@ -177,6 +212,10 @@ class HarfSistemi:
         gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         parameters = cv2.aruco.DetectorParameters()
+        parameters.adaptiveThreshWinSizeMin = 3
+        parameters.adaptiveThreshWinSizeMax = 23
+        parameters.adaptiveThreshWinSizeStep = 5
+        
         detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
         corners, ids, _ = detector.detectMarkers(gray_full)
         
@@ -199,8 +238,8 @@ class HarfSistemi:
         src = np.float32([found_centers[target] for target in expected])
         scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
         dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
-        M = cv2.getPerspectiveTransform(src, dst)
-        warped = cv2.warpPerspective(img, M, (sw, sh))
+        matrix = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, matrix, (sw, sh))
         
         b_px = 150; sx = int((sw - 10*b_px)/2); sy = int((sh - 6*b_px)/2)
         start_idx = bid * 60; page_results = {}; detected_count = 0
@@ -293,44 +332,6 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         traceback.print_exc()
         op_ref.update({'status': 'error', 'error': str(e), 'progress': 0})
 
-# --- KREDİ SİSTEMİ ---
-def check_and_deduct_credit(user_id):
-    try:
-        if not db: return False, "Veritabanı hatası"
-        user_ref = db.collection('users').document(user_id)
-        doc = user_ref.get()
-        
-        current_credits = 10 # Varsayılan başlangıç kredisi
-        
-        if doc.exists:
-            data = doc.to_dict()
-            # Eğer kayıtlı kredi varsa onu al, yoksa 10 varsay
-            current_credits = data.get('credits', 10)
-        else:
-            # Kullanıcı dokümanı yoksa oluştur (İlk giriş)
-            user_ref.set({'credits': 10}, merge=True)
-            
-        if current_credits <= 0:
-            return False, "Yetersiz kredi! Yeni font oluşturmak için hakkınız kalmadı."
-            
-        # Krediyi düş
-        user_ref.update({'credits': firestore.Increment(-1)})
-        return True, current_credits - 1
-    except Exception as e:
-        print(f"Kredi Hatası: {e}")
-        return False, str(e)
-
-@app.route('/api/get_user_credits')
-def get_user_credits():
-    user_id = request.args.get('user_id')
-    if not user_id or not db: return jsonify({'credits': 0})
-    try:
-        doc = db.collection('users').document(user_id).get()
-        if doc.exists:
-            return jsonify({'credits': doc.to_dict().get('credits', 10)})
-        return jsonify({'credits': 10}) # Yeni kullanıcı
-    except: return jsonify({'credits': 0})
-
 # --- WEB ROTALARI ---
 
 @app.route('/')
@@ -353,8 +354,7 @@ def upload_form():
         
         # Kredi Kontrolü
         allowed, msg = check_and_deduct_credit(user_id)
-        if not allowed:
-            return jsonify({'success': False, 'message': msg}), 402 # 402 Payment Required
+        if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
         font_name = request.form.get('font_name')
         variation_count = int(request.form.get('variation_count', 3))
@@ -376,16 +376,14 @@ def process_single():
     try:
         data = request.get_json()
         
-        # Güvenlik Kontrolü
         if not verify_recaptcha(data.get('recaptcha_token')):
-            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız (Bot şüphesi).'}), 403
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
         u_id = data.get('user_id')
         
         # Kredi Kontrolü
         allowed, msg = check_and_deduct_credit(u_id)
-        if not allowed:
-            return jsonify({'success': False, 'message': msg}), 402
+        if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
         f_name = data.get('font_name')
         b64 = data.get('image_base64')
@@ -519,12 +517,28 @@ def get_assets():
     assets = {}
     database = init_firebase()
     if database and font_id:
-        char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
+        doc_ref = database.collection('fonts').document(font_id)
+        
+        # 1. YÖNTEM: Alt Koleksiyondan Çek (Yeni Sistem - Limitsiz)
+        char_docs = doc_ref.collection('chars').stream()
+        found_in_sub = False
         for doc in char_docs:
+            found_in_sub = True
             key, val = doc.id, doc.to_dict().get('data')
             base_key = key.rsplit('_', 1)[0] if '_' in key else key
             if base_key not in assets: assets[base_key] = []
             assets[base_key].append(val)
+            
+        # 2. YÖNTEM: Ana Dokümandan Çek (Eski Sistem - Geriye Dönük Uyumluluk)
+        if not found_in_sub:
+            main_doc = doc_ref.get()
+            if main_doc.exists:
+                harfler_data = main_doc.to_dict().get('harfler', {})
+                for key, val in harfler_data.items():
+                    base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                    if base_key not in assets: assets[base_key] = []
+                    assets[base_key].append(val)
+
         return jsonify({"success": True, "assets": assets, "source": "firebase"})
     return jsonify({"success": True, "assets": {}}), 200
 
@@ -535,13 +549,36 @@ def download():
         active_harfler = {}
         database = init_firebase()
         if database and font_id:
+            # Önce alt koleksiyonu dene
             char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
+            has_chars = False
             for doc in char_docs:
+                has_chars = True
                 key, b64 = doc.id, doc.to_dict().get('data')
                 img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
                 base_key = key.rsplit('_', 1)[0] if '_' in key else key
                 if base_key not in active_harfler: active_harfler[base_key] = []
                 active_harfler[base_key].append(img)
+            
+            # Alt koleksiyon boşsa eski sistemi dene
+            if not has_chars:
+                doc = database.collection('fonts').document(font_id).get()
+                if doc.exists:
+                    raw = doc.to_dict().get('harfler', {})
+                    for key, val in raw.items():
+                        try:
+                            # Val base64 veya URL olabilir (Eski Storage denemesi)
+                            if val.startswith('http'):
+                                resp = requests.get(val)
+                                img = core_generator.Image.open(io.BytesIO(resp.content)).convert("RGBA")
+                            else:
+                                b64 = val.split(",")[1] if "," in val else val
+                                img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
+                            
+                            base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                            if base_key not in active_harfler: active_harfler[base_key] = []
+                            active_harfler[base_key].append(img)
+                        except: continue
         
         config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': 140, 'line_spacing': 220, 'word_spacing': 55, 'murekkep_rengi': (27,27,29), 'opacity': 0.95, 'jitter': 3, 'paper_type': 'cizgili', 'line_slope': 5}
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
