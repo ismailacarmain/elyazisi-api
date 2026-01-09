@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ayarlar - Fontify</title>
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688541/favicon-32x32_q5k9p1.png">
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #ec4899;
+            --bg-dark: #0a0a0f;
+            --bg-card: #16161d;
+            --bg-light: #1e1e28;
+            --text: #f8fafc;
+            --text-muted: #a1a1aa;
+            --border: #2d2d3a;
+            --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+        }
+
+        [data-theme="light"] {
+            --primary: #4f46e5;
+            --primary-dark: #4338ca;
+            --secondary: #db2777;
+            --bg-dark: #f1f5f9;
+            --bg-card: #ffffff;
+            --bg-light: #e2e8f0;
+            --text: #0f172a;
+            --text-muted: #475569;
+            --border: #cbd5e1;
+        }
+
+        .text-muted { color: var(--text-muted) !important; }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .settings-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .settings-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .settings-header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 1rem;
+            transition: color 0.2s;
+        }
+
+        .back-btn:hover {
+            color: var(--primary);
+        }
+
+        /* Header Nav */
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .nav-link-custom {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .nav-link-custom:hover {
+            color: var(--primary);
+        }
+
+        @media (max-width: 768px) {
+            .header-nav { display: none; }
+        }
+
+        .settings-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .settings-card h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .profile-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .profile-avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: var(--gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 700;
+            color: white;
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .profile-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        .profile-avatar:hover .edit-overlay {
+            opacity: 1;
+        }
+
+        .edit-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .edit-overlay i {
+            color: white;
+            font-size: 1.5rem;
+        }
+
+        .profile-info h4 {
+            margin: 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .profile-info p {
+            margin: 5px 0 0;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .form-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .form-select, .form-control {
+            background-color: var(--bg-light);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 12px;
+            padding: 12px;
+        }
+
+        .form-select:focus, .form-control:focus {
+            background-color: var(--bg-light);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+            color: var(--text);
+        }
+
+        .btn-primary-gradient {
+            padding: 12px 24px;
+            background: var(--gradient);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn-primary-gradient:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
+        }
+
+        .logout-btn {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .logout-btn:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .settings-container { padding: 20px; }
+            .profile-section { flex-direction: column; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="settings-container">
+        <!-- Header -->
+        <div class="settings-header">
+            <a href="editor.html" class="back-btn">
+                <i class="bi bi-arrow-left"></i> Editöre Dön
+            </a>
+            <div class="d-flex align-items-center gap-3">
+                <img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688649/logo_fg9wjn.png" style="height: 50px; border-radius: 10px;">
+                <h1 class="m-0">Ayarlar</h1>
+            </div>
+            
+            <nav class="header-nav">
+                <a href="index.html" class="nav-link-custom"><i class="bi bi-house"></i> Anasayfa</a>
+                <a href="destek.html" class="nav-link-custom"><i class="bi bi-headset"></i> Destek</a>
+            </nav>
+        </div>
+
+        <!-- Profil -->
+        <div class="settings-card">
+            <h3><i class="bi bi-person-circle"></i> Profil Bilgileri</h3>
+            <div class="p-4 text-center">
+                <!-- Avatar -->
+                <div class="d-inline-flex align-items-center justify-content-center bg-gradient text-white rounded-circle mb-3 position-relative" 
+                     style="width: 80px; height: 80px; font-size: 32px; font-weight: bold; cursor: pointer; box-shadow: 0 10px 20px rgba(0,0,0,0.3);" 
+                     id="avatarWrapper" onclick="document.getElementById('fileInput').click()">
+                    <span id="avatarInitial">U</span>
+                    <img id="avatarImg" src="" style="width:100%; height:100%; object-fit:cover; border-radius:50%; display:none;">
+                    <div class="edit-overlay rounded-circle"><i class="bi bi-camera"></i></div>
+                </div>
+                <input type="file" id="fileInput" accept="image/*" style="display: none;">
+                
+                <!-- Bilgiler -->
+                <h5 class="mb-1 text-white fw-bold" id="settingsName">Yükleniyor...</h5>
+                <p class="text-muted mb-0" id="settingsEmail">...</p>
+                <p class="text-muted small mt-2 d-none" id="uidContainer">ID: <span id="settingsUid"></span></p>
+            </div>
+            
+            <div class="mt-4 pt-4 border-top border-secondary" style="border-color: var(--border) !important;">
+                 <button id="logoutBtn" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i> Hesaptan Çıkış Yap
+                </button>
+            </div>
+        </div>
+
+        <!-- Genel Ayarlar -->
+        <div class="settings-card">
+            <h3><i class="bi bi-gear"></i> Genel Ayarlar</h3>
+            
+            <div class="mb-4">
+                <label class="form-label">Uygulama Dili / Language</label>
+                <select class="form-select" id="languageSelect">
+                    <option value="tr">Türkçe (Turkish)</option>
+                    <option value="en">English (İngilizce)</option>
+                </select>
+                <div class="form-text text-muted mt-2">
+                    Dil değişikliği anında uygulanır. / Language change applies instantly.
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Tema</label>
+                <select class="form-select" id="themeSelect">
+                    <option value="dark">Karanlık Mod</option>
+                    <option value="light">Aydınlık Mod</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Hakkında -->
+        <div class="settings-card">
+            <h3><i class="bi bi-info-circle"></i> Hakkında</h3>
+            <p class="text-muted">
+                Fontify v1.0.0<br>
+                El yazınızı dijitale dönüştürmenin en kolay yolu.
+            </p>
+            <div class="d-flex gap-3 mt-3">
+                <a href="#" class="text-muted text-decoration-none"><i class="bi bi-github"></i> GitHub</a>
+                <a href="#" class="text-muted text-decoration-none"><i class="bi bi-globe"></i> Web Sitesi</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase -->
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
+            authDomain: "elyazisiapp.firebaseapp.com",
+            projectId: "elyazisiapp",
+            storageBucket: "elyazisiapp.firebasestorage.app",
+            messagingSenderId: "823659862878",
+            appId: "1:823659862878:web:1615116c77d98f7f848dcf"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+
+        // Güvenlik Zamanlayıcısı: 4 saniye içinde veri gelmezse yenile
+        const safetyTimeout = setTimeout(() => {
+            if (document.getElementById('settingsName').textContent === 'Yükleniyor...') {
+                console.warn("Veri gelmedi, sayfa yenileniyor...");
+                window.location.reload();
+            }
+        }, 4000);
+
+        // 1. ÖNCE CACHE'DEN YÜKLE (HIZLI AÇILIŞ)
+        try {
+            const cachedUser = JSON.parse(localStorage.getItem('user_cache'));
+            if (cachedUser) {
+                clearTimeout(safetyTimeout); // Cache varsa yenilemeye gerek yok
+                updateUI(cachedUser);
+            }
+        } catch(e) {}
+
+        // 2. SONRA FIREBASE'DEN GÜNCELLE (KESİN VERİ)
+        firebase.auth().onAuthStateChanged(user => {
+            clearTimeout(safetyTimeout); // Firebase bağlandı, iptal et
+            if (user) {
+                // İsim Düzeltme Mantığı
+                let display = user.displayName;
+                const email = user.email || '';
+                
+                if (!display || display.includes('@')) {
+                    let namePart = email.split('@')[0];
+                    namePart = namePart.replace(/[._0-9]/g, ' ').trim();
+                    display = namePart.replace(/\b\w/g, l => l.toUpperCase());
+                    if (!display) display = "Kullanıcı";
+                }
+                
+                // Objeyi oluştur ve UI güncelle
+                const userData = {
+                    displayName: display,
+                    email: email,
+                    uid: user.uid,
+                    photoURL: user.photoURL
+                };
+                
+                // Cache'i tazele
+                localStorage.setItem('user_cache', JSON.stringify(userData));
+                
+                updateUI(userData);
+
+            } else {
+                // Sadece cache de yoksa yönlendir, belki offline'dır
+                if (!localStorage.getItem('user_cache')) {
+                    window.location.href = 'login.html';
+                }
+            }
+        });
+        
+        function updateUI(data) {
+            document.getElementById('settingsName').innerHTML = data.displayName; // innerHTML çünkü spinner vardı
+            document.getElementById('settingsEmail').textContent = data.email;
+            
+            const uidSpan = document.getElementById('settingsUid');
+            const uidContainer = document.getElementById('uidContainer');
+            if (uidSpan && uidContainer) {
+                uidSpan.textContent = data.uid;
+                uidContainer.classList.remove('d-none');
+            }
+            
+            // Avatar
+            const img = document.getElementById('avatarImg');
+            const initial = document.getElementById('avatarInitial');
+            
+            if (data.photoURL) {
+                img.src = data.photoURL;
+                img.style.display = 'block';
+                initial.style.display = 'none';
+            } else {
+                initial.textContent = (data.displayName || 'U').charAt(0).toUpperCase();
+                img.style.display = 'none';
+                initial.style.display = 'block';
+            }
+        }
+
+        // Profil Resmi Değiştirme
+        const fileInput = document.getElementById('fileInput');
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const user = firebase.auth().currentUser;
+            if (!user) return;
+
+            // Önizleme göster (Yüklenirken)
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('avatarImg');
+                img.src = e.target.result;
+                img.style.display = 'block';
+                document.getElementById('avatarInitial').style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+
+            try {
+                // Storage Referansı
+                const storageRef = firebase.storage().ref();
+                const fileRef = storageRef.child(`profile_images/${user.uid}`);
+                
+                // Yükle
+                await fileRef.put(file);
+                
+                // URL Al
+                const photoURL = await fileRef.getDownloadURL();
+                
+                // Profili Güncelle
+                await user.updateProfile({ photoURL: photoURL });
+                
+                // Firestore'u Güncelle (Varsa)
+                const db = firebase.firestore();
+                try {
+                    await db.collection('users').doc(user.uid).set({ photoURL: photoURL }, { merge: true });
+                } catch(err) { /* Firestore update skipped */ }
+                
+                alert("Profil resmi güncellendi!");
+                
+            } catch (error) {
+                console.error("Resim yüklenirken hata oluştu:", error);
+                alert("Resim yüklenirken hata oluştu: " + error.message);
+                // Hata olursa eski haline döndürmek gerekebilir ama şimdilik kalsın
+            }
+        });
+
+        // Çıkış Butonu
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            if(confirm('Çıkış yapmak istediğinize emin misiniz?')) {
+                firebase.auth().signOut().then(() => {
+                    window.location.href = 'login.html';
+                });
+            }
+        });
+
+        // Dil Seçimi (Basit LocalStorage Mantığı)
+        const langSelect = document.getElementById('languageSelect');
+        
+        // Kayıtlı dili yükle
+        const savedLang = localStorage.getItem('fontify_lang') || 'tr';
+        langSelect.value = savedLang;
+
+        langSelect.addEventListener('change', (e) => {
+            const lang = e.target.value;
+            localStorage.setItem('fontify_lang', lang);
+            window.location.reload();
+        });
+
+        // Tema Seçimi
+        const themeSelect = document.getElementById('themeSelect');
+        const savedTheme = localStorage.getItem('fontify_theme') || 'dark';
+        
+        // Uygula
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        themeSelect.value = savedTheme;
+
+        themeSelect.addEventListener('change', (e) => {
+            const theme = e.target.value;
+            localStorage.setItem('fontify_theme', theme);
+            document.documentElement.setAttribute('data-theme', theme);
+        });
+    </script>
+</body>
+</html>

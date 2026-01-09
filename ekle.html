@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fontify - Yeni Font Ekle</title>
+    <meta name="description" content="Kendi el yazısı fontunuzu oluşturun.">
+    <meta name="robots" content="noindex, nofollow">
+    
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688541/favicon-32x32_q5k9p1.png">
+    <link rel="canonical" href="https://fontify.online/ekle.html">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://www.google.com/recaptcha/api.js?render=6LfEIUUsAAAAAE3hpG_hGfi3PxHOAdK8KSkNirRm"></script>
+    <style>
+        :root {
+            --primary: #6366f1; --bg-dark: #0a0a0f; --bg-card: #16161d; --text: #f8fafc; --text-muted: #a1a1aa; --border: #2d2d3a;
+        }
+        body { font-family: sans-serif; background: var(--bg-dark); color: var(--text); padding: 40px 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .step-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 30px; margin-bottom: 30px; }
+        .btn-primary { background: var(--primary); border: none; padding: 12px 24px; border-radius: 8px; }
+        .form-control { background: #1e1e28; border: 1px solid var(--border); color: var(--text); padding: 12px; border-radius: 8px; }
+        .upload-area { border: 2px dashed var(--border); padding: 40px; text-align: center; border-radius: 12px; cursor: pointer; transition: 0.3s; }
+        .upload-area:hover { border-color: var(--primary); background: rgba(99, 102, 241, 0.1); }
+        .method-card { cursor: pointer; transition: all 0.3s; }
+        .method-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3); }
+        .method-card.active { border-color: var(--primary); background: rgba(99, 102, 241, 0.1); }
+        .progress { height: 30px; border-radius: 10px; }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1 class="mb-0" data-i18n="add_title">📝 Fontunu Oluştur</h1>
+                <span id="creditBadge" class="badge bg-success bg-opacity-25 text-success mt-2" style="font-size: 0.9rem;">
+                    <i class="bi bi-coin"></i> <span data-i18n="credit_left">Kalan Hak:</span> <span id="creditCount">...</span>
+                </span>
+            </div>
+            <div class="d-flex gap-2">
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">🌐</button>
+                    <ul class="dropdown-menu dropdown-menu-dark">
+                        <li><a class="dropdown-item" href="#" id="langTrBtn">Türkçe</a></li>
+                        <li><a class="dropdown-item" href="#" id="langEnBtn">English</a></li>
+                    </ul>
+                </div>
+                <a href="editor.html" class="btn btn-outline-light">
+                    <i class="bi bi-arrow-left"></i> <span data-i18n="back_editor">Editöre Dön</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Adım 1 -->
+        <div class="step-card">
+            <h3 data-i18n="step1_title">1️⃣ Varyasyon Sayısını Seç</h3>
+            <p class="text-light" data-i18n="step1_desc">Her karakterden kaç farklı örnek yazacaksın?</p>
+            <div class="btn-group mb-3 w-100" role="group">
+                <input type="radio" class="btn-check" name="vCount" id="v1" value="1">
+                <label class="btn btn-outline-primary" for="v1">1x<br><small data-i18n="var_1_desc">Hızlı Test</small></label>
+                <input type="radio" class="btn-check" name="vCount" id="v2" value="2">
+                <label class="btn btn-outline-primary" for="v2">2x<br><small data-i18n="var_2_desc">Basit</small></label>
+                <input type="radio" class="btn-check" name="vCount" id="v3" value="3" checked>
+                <label class="btn btn-outline-primary" for="v3">3x<br><small data-i18n="var_3_desc">İyi</small></label>
+                <input type="radio" class="btn-check" name="vCount" id="v5" value="5">
+                <label class="btn btn-outline-primary" for="v5">5x<br><small data-i18n="var_5_desc">Harika ⭐</small></label>
+                <input type="radio" class="btn-check" name="vCount" id="v10" value="10">
+                <label class="btn btn-outline-primary" for="v10">10x<br><small data-i18n="var_10_desc">Profesyonel</small></label>
+            </div>
+            
+            <div id="variationInfo" class="alert alert-info"></div>
+
+            <div class="d-flex gap-2">
+                <button onclick="downloadForm(false)" class="btn btn-primary flex-grow-1">
+                    <i class="bi bi-download"></i> <span data-i18n="btn_download_blank">Boş Form İndir</span>
+                </button>
+                <button onclick="downloadForm(true)" class="btn btn-outline-light flex-grow-1">
+                    <i class="bi bi-eye"></i> <span data-i18n="btn_download_sample">Örnek İndir</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Adım 2 -->
+        <div class="step-card">
+            <h3 data-i18n="step2_title">2️⃣ Yükleme Yöntemini Seç</h3>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="method-card step-card active" id="pdfMethod" onclick="selectMethod('pdf')">
+                        <div class="text-center">
+                            <i class="bi bi-file-earmark-pdf fs-1 text-danger"></i>
+                            <h5 class="mt-3" data-i18n="method_pdf">Tek PDF Yükle</h5>
+                            <p class="text-muted small" data-i18n="method_pdf_desc">Tüm sayfaları tarayıcıdan tara, tek PDF'e kaydet ve yükle</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="method-card step-card" id="manualMethod" onclick="selectMethod('manual')">
+                        <div class="text-center">
+                            <i class="bi bi-images fs-1 text-primary"></i>
+                            <h5 class="mt-3" data-i18n="method_manual">Manuel Fotoğraf</h5>
+                            <p class="text-muted small" data-i18n="method_manual_desc">Her sayfayı bilgisayardan yükle</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="method-card step-card" id="mobileMethod" onclick="selectMethod('mobile')">
+                        <div class="text-center">
+                            <i class="bi bi-qr-code-scan fs-1 text-warning"></i>
+                            <h5 class="mt-3" data-i18n="method_mobile">Telefondan Yükle</h5>
+                            <p class="text-muted small" data-i18n="method_mobile_desc">QR Kodu okut, telefondan çek yükle</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PDF Upload -->
+        <div id="pdfUploadArea" class="step-card">
+            <h3 data-i18n="step3_pdf">3️⃣ PDF Yükle ve İşle</h3>
+            
+            <div class="mb-3">
+                <label class="form-label" data-i18n="label_font_name">Font Adı:</label>
+                <input type="text" id="fontNamePdf" class="form-control" data-i18n="placeholder_font_name" placeholder="Örn: Benim Yazım">
+            </div>
+
+            <div class="upload-area" id="pdfDropZone">
+                <i class="bi bi-file-earmark-pdf fs-1 text-danger"></i>
+                <p class="mb-1 fw-bold" data-i18n="drop_pdf">PDF Dosyasını Sürükle veya Tıkla</p>
+                <input type="file" id="pdfFileInput" accept="application/pdf" style="display:none">
+                <div id="pdfFileName" class="mt-3 fw-bold text-primary"></div>
+            </div>
+
+            <button onclick="uploadPDF()" id="uploadPdfBtn" class="btn btn-primary w-100 mt-3" disabled>
+                <i class="bi bi-cloud-upload"></i> <span data-i18n="btn_upload_pdf">PDF'i Yükle ve İşle</span>
+            </button>
+
+            <!-- Progress -->
+            <div id="progressArea" style="display:none" class="mt-4">
+                <div class="alert alert-info">
+                    <strong><i class="bi bi-hourglass-split"></i> <span data-i18n="processing">İşleniyor...</span></strong>
+                    <p id="progressMessage" class="mb-2">...</p>
+                </div>
+                <div class="progress"><div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%">0%</div></div>
+                <p id="progressDetail" class="text-center mt-2 small text-muted"></p>
+            </div>
+
+            <!-- Success -->
+            <div id="successArea" style="display:none" class="mt-4">
+                <div class="alert alert-success">
+                    <h5><i class="bi bi-check-circle-fill"></i> <span data-i18n="success_title">Tamamlandı!</span></h5>
+                    <p id="successMessage" data-i18n="success_msg">Fontun başarıyla oluşturuldu.</p>
+                    <a href="editor.html" id="successLink" class="btn btn-primary">
+                        <i class="bi bi-pen"></i> <span data-i18n="nav_editor">Editöre Git</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Error -->
+            <div id="errorArea" style="display:none" class="mt-4">
+                <div class="alert alert-danger">
+                    <h5><i class="bi bi-exclamation-triangle-fill"></i> <span data-i18n="error_title">Hata</span></h5>
+                    <p id="errorMessage">Bir hata oluştu.</p>
+                    <button onclick="resetUpload()" class="btn btn-outline-danger">
+                        <i class="bi bi-arrow-clockwise"></i> <span data-i18n="btn_retry">Tekrar Dene</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Upload -->
+        <div id="manualUploadArea" class="step-card" style="display:none">
+            <!-- (Aynı yapı, JS ile yönlendiriliyor) -->
+            <div class="mb-3">
+                <label class="form-label" data-i18n="label_font_name">Font Adı:</label>
+                <input type="text" id="fontNameManual" class="form-control">
+            </div>
+            <button onclick="startManualUpload()" class="btn btn-success w-100">
+                <i class="bi bi-camera"></i> <span data-i18n="method_manual">Manuel Başla</span>
+            </button>
+        </div>
+
+        <!-- Mobile QR -->
+        <div id="mobileUploadArea" class="step-card" style="display:none">
+            <div class="text-center">
+                <h3 data-i18n="method_mobile">Telefondan Yükle</h3>
+                <div class="mb-3 text-start">
+                    <label class="form-label" data-i18n="label_font_name">Font Adı:</label>
+                    <input type="text" id="fontNameMobile" class="form-control" onkeyup="generateQR()">
+                </div>
+                <div class="bg-white p-4 d-inline-block rounded mt-2 mb-3"><div id="qrcode"></div></div>
+                <div id="mobileProgress" class="mt-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="i18n.js"></script> <!-- i18n -->
+
+    <script>
+        const API_BASE_URL = "https://elyazisi-api.onrender.com";
+        const firebaseConfig = { apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0", authDomain: "elyazisiapp.firebaseapp.com", projectId: "elyazisiapp" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        let currentUser = null; let currentMethod = 'pdf'; let jobId = null; let listenerUnsubscribe = null;
+
+        firebase.auth().onAuthStateChanged(user => {
+            currentUser = user;
+            if (!user) { window.location.href = "index.html"; } 
+            else { fetchUserCredits(user.uid); }
+        });
+
+        async function fetchUserCredits(uid) {
+            try {
+                // YENİ: Token ile güvenli endpoint
+                const user = firebase.auth().currentUser;
+                if (!user) {
+                    document.getElementById('creditCount').textContent = '0';
+                    return;
+                }
+                
+                const idToken = await user.getIdToken();
+                
+                const res = await fetch(`${API_BASE_URL}/api/user/credits`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${idToken}`
+                    }
+                });
+                
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                
+                const data = await res.json();
+                const credits = data.success ? data.credits : 0;
+                document.getElementById('creditCount').textContent = credits;
+                
+                if (credits <= 0) {
+                    const badge = document.getElementById('creditBadge');
+                    badge.classList.replace('bg-success', 'bg-danger');
+                    badge.classList.replace('text-success', 'text-danger');
+                    const lang = localStorage.getItem('fontify_lang') || 'tr';
+                    const t = translations[lang];
+                    
+                    const blockedHTML = `
+                        <div class="alert alert-danger text-center p-5">
+                            <h3><i class="bi bi-slash-circle"></i> ${t.no_credit_title}</h3>
+                            <p>${t.no_credit_msg}</p>
+                            <a href="destek.html" class="btn btn-outline-danger">${t.nav_support}</a>
+                        </div>`;
+                    document.getElementById('pdfUploadArea').innerHTML = blockedHTML;
+                    document.getElementById('mobileUploadArea').innerHTML = blockedHTML;
+                    document.getElementById('manualUploadArea').innerHTML = blockedHTML;
+                    document.querySelectorAll('.method-card').forEach(c => c.style.pointerEvents = 'none');
+                }
+            } catch(e) { console.error("Kredi yüklenemedi", e); }
+        }
+
+        document.querySelectorAll('input[name="vCount"]').forEach(radio => { radio.addEventListener('change', updateVariationInfo); });
+
+        function updateVariationInfo() {
+            const v = parseInt(document.querySelector('input[name="vCount"]:checked').value);
+            let pages = v === 10 ? 9 : v;
+            if (v === 3) pages = 3; 
+            const totalSections = pages * 2;
+            const totalChars = 107 * v;
+            const info = document.getElementById('variationInfo');
+            info.innerHTML = '';
+            const strong = document.createElement('strong');
+            strong.textContent = `${v}x:`;
+            info.appendChild(strong);
+            info.appendChild(document.createTextNode(` ${pages} pages, ${totalSections} parts, ~${totalChars} chars.`));
+        }
+
+        function selectMethod(method) {
+            currentMethod = method;
+            document.getElementById('pdfMethod').classList.toggle('active', method === 'pdf');
+            document.getElementById('manualMethod').classList.toggle('active', method === 'manual');
+            document.getElementById('mobileMethod').classList.toggle('active', method === 'mobile');
+            document.getElementById('pdfUploadArea').style.display = method === 'pdf' ? 'block' : 'none';
+            document.getElementById('manualUploadArea').style.display = method === 'manual' ? 'block' : 'none';
+            document.getElementById('mobileUploadArea').style.display = method === 'mobile' ? 'block' : 'none';
+            if (method === 'mobile') generateQR();
+        }
+
+        let qrCodeObj = null;
+        function generateQR() {
+            if (!currentUser) return;
+            const fname = document.getElementById('fontNameMobile').value.trim();
+            const vCount = document.querySelector('input[name="vCount"]:checked').value;
+            if (!fname) { document.getElementById('qrcode').innerHTML = ''; return; }
+            const url = `${window.location.origin}/mobil_yukle.html?uid=${currentUser.uid}&fname=${encodeURIComponent(fname)}&vcount=${vCount}`;
+            document.getElementById('qrcode').innerHTML = "";
+            qrCodeObj = new QRCode(document.getElementById("qrcode"), { text: url, width: 200, height: 200 });
+            listenForMobileUploads(currentUser.uid, fname);
+        }
+
+        function listenForMobileUploads(uid, fname) {
+            const fontId = `${uid}_${fname.replace(/ /g, '_')}`;
+            db.collection('users').doc(uid).collection('fonts').doc(fontId).onSnapshot((doc) => {
+                if (doc.exists) {
+                    const data = doc.data();
+                    const mobileProgress = document.getElementById('mobileProgress');
+                    mobileProgress.innerHTML = '';
+                    
+                    const alertDiv = document.createElement('div');
+                    alertDiv.className = 'alert alert-success';
+                    
+                    const p = document.createElement('p');
+                    p.textContent = `${data.sections_completed.length} parts completed.`;
+                    
+                    const a = document.createElement('a');
+                    a.href = `editor.html?font_id=${fontId}&user_id=${uid}`;
+                    a.className = 'btn btn-success mt-2';
+                    a.textContent = 'Go to Editor';
+                    
+                    alertDiv.appendChild(p);
+                    alertDiv.appendChild(a);
+                    mobileProgress.appendChild(alertDiv);
+                }
+            });
+        }
+
+        function downloadForm(isExample) {
+            const v = document.querySelector('input[name="vCount"]:checked').value;
+            const filename = isExample ? `ORNEK_${v}x_FINAL.pdf` : `form_${v}x_BOS.pdf`;
+            window.location.href = `pdfler/${filename}`;
+        }
+
+        const pdfDropZone = document.getElementById('pdfDropZone');
+        const pdfFileInput = document.getElementById('pdfFileInput');
+        pdfDropZone.addEventListener('click', () => pdfFileInput.click());
+        pdfDropZone.addEventListener('dragover', (e) => { e.preventDefault(); pdfDropZone.style.borderColor = 'var(--primary)'; });
+        pdfDropZone.addEventListener('dragleave', () => pdfDropZone.style.borderColor = 'var(--border)');
+        pdfDropZone.addEventListener('drop', (e) => { e.preventDefault(); handlePdfFile(e.dataTransfer.files[0]); });
+        pdfFileInput.addEventListener('change', (e) => handlePdfFile(e.target.files[0]));
+
+        function handlePdfFile(file) {
+            if (file && file.type === 'application/pdf') {
+                document.getElementById('pdfFileName').textContent = `📄 ${file.name}`;
+                document.getElementById('uploadPdfBtn').disabled = false;
+                pdfFileInput.file = file;
+            } else { alert('PDF Only!'); }
+        }
+
+        async function uploadPDF() {
+            if (!currentUser) return;
+            const fontName = document.getElementById('fontNamePdf').value.trim();
+            if (!fontName) { alert("Font Name!"); return; }
+            const file = pdfFileInput.files[0] || pdfFileInput.file;
+            const vCount = parseInt(document.querySelector('input[name="vCount"]:checked').value);
+
+            document.getElementById('uploadPdfBtn').disabled = true;
+            document.getElementById('progressArea').style.display = 'block';
+            
+            try {
+                // reCAPTCHA Token Al
+                const recaptchaToken = await new Promise((resolve) => {
+                    grecaptcha.ready(function() {
+                        grecaptcha.execute('6LfEIUUsAAAAAE3hpG_hGfi3PxHOAdK8KSkNirRm', {action: 'submit'}).then(resolve);
+                    });
+                });
+
+                // Firebase ID Token Al (Güvenlik İçin)
+                const idToken = await currentUser.getIdToken();
+
+                const formData = new FormData();
+                formData.append('file', file);
+                // user_id backend'de token'dan alınacak ama form validator için yine de gönderelim
+                formData.append('user_id', currentUser.uid); 
+                formData.append('font_name', fontName);
+                formData.append('variation_count', vCount);
+                formData.append('recaptcha_token', recaptchaToken);
+
+                const response = await fetch(`${API_BASE_URL}/api/upload_form`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${idToken}` // Token Header'da
+                    },
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    startProgressListener(data.job_id);
+                } else { throw new Error(data.message); }
+            } catch (error) {
+                document.getElementById('progressArea').style.display = 'none';
+                document.getElementById('errorArea').style.display = 'block';
+                document.getElementById('errorMessage').textContent = error.message;
+                document.getElementById('uploadPdfBtn').disabled = false;
+            }
+        }
+
+        function startProgressListener(jobId) {
+            listenerUnsubscribe = db.collection('operations').doc(jobId).onSnapshot((snapshot) => {
+                const data = snapshot.data();
+                if (!data) return;
+                document.getElementById('progressBar').style.width = `${data.progress}%`;
+                document.getElementById('progressBar').textContent = `${data.progress}%`;
+                document.getElementById('progressMessage').textContent = data.message;
+                
+                if (data.status === 'completed') {
+                    if (listenerUnsubscribe) listenerUnsubscribe();
+                    document.getElementById('progressArea').style.display = 'none';
+                    document.getElementById('successArea').style.display = 'block';
+                    document.getElementById('successMessage').textContent = `${data.processed_chars} chars processed.`;
+                    document.getElementById('successLink').href = `editor.html?font_id=${data.font_id}&user_id=${currentUser.uid}`;
+                }
+                if (data.status === 'error') {
+                    if (listenerUnsubscribe) listenerUnsubscribe();
+                    document.getElementById('progressArea').style.display = 'none';
+                    document.getElementById('errorArea').style.display = 'block';
+                    document.getElementById('errorMessage').textContent = data.error;
+                }
+            });
+        }
+        function resetUpload() { window.location.reload(); }
+        function startManualUpload() {
+            const fontName = document.getElementById('fontNameManual').value.trim();
+            if(!fontName) return alert("Name!");
+            const v = document.querySelector('input[name="vCount"]:checked').value;
+            window.location.href = `tara.html?uid=${currentUser.uid}&fname=${encodeURIComponent(fontName)}&page=0&vcount=${v}`;
+        }
+    </script>
+</body>
+</html>

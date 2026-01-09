@@ -1,0 +1,1458 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fontify - Editör</title>
+    <meta name="description" content="Fontify el yazısı editörü ile kendi fontunuzu kullanarak dijital metinler oluşturun. PDF veya PNG olarak indirin.">
+    <meta name="robots" content="noindex, nofollow">
+    
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688541/favicon-32x32_q5k9p1.png">
+    <link rel="canonical" href="https://fontify.online/editor.html">
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+
+    <!-- Loading -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loadingMessage" style="margin-top: 20px; color: #94a3b8; font-size: 14px;">Editör hazırlanıyor...</div>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <button id="menuBtn" class="menu-btn" title="Ayarları Aç">
+                <i class="bi bi-list"></i>
+            </button>
+            <div class="header-brand">
+                <img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688649/logo_fg9wjn.png" alt="Fontify" style="height: 40px; border-radius: 8px;">
+                <span class="ms-2">Fontify</span>
+            </div>
+        </div>
+
+        <!-- Navigation Menu -->
+        <nav class="header-nav">
+            <a href="index.html" class="nav-link-custom"><i class="bi bi-house"></i> <span data-i18n="nav_home">Anasayfa</span></a>
+            <a href="ekle.html" class="nav-link-custom"><i class="bi bi-plus-circle"></i> <span data-i18n="nav_add">Yeni Font Ekle</span></a>
+            <a href="fonts.html" class="nav-link-custom"><i class="bi bi-folder2-open"></i> <span data-i18n="nav_library">Kütüphane</span></a>
+            <a href="destek.html" class="nav-link-custom"><i class="bi bi-headset"></i> <span data-i18n="nav_support">İletişim & Destek</span></a>
+        </nav>
+
+        <div class="user-dropdown dropdown">
+            <div class="user-btn dropdown-toggle" id="userBtn" data-bs-toggle="dropdown" aria-expanded="false">
+                <div class="user-avatar" id="userAvatar" style="overflow:hidden;">
+                    <span id="headerAvatarInitial">U</span>
+                    <img id="headerAvatarImg" src="" style="display:none; width:100%; height:100%; object-fit:cover;">
+                </div>
+                <span class="user-name" id="userName">Kullanıcı</span>
+            </div>
+            <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark" aria-labelledby="userBtn">
+                <li><a class="dropdown-item" href="ekle.html"><i class="bi bi-plus-lg"></i> <span data-i18n="nav_add">Yeni Font Ekle</span></a></li>
+                <li><a class="dropdown-item" href="fonts.html"><i class="bi bi-folder2-open"></i> <span data-i18n="lib_title">Font Kütüphanesi</span></a></li>
+                <li><a class="dropdown-item" href="settings.html"><i class="bi bi-gear"></i> <span data-i18n="nav_settings">Ayarlar</span></a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><h6 class="dropdown-header">Dil / Language</h6></li>
+                <li><a class="dropdown-item" href="#" id="langTrBtn"><i class="bi bi-check2"></i> Türkçe</a></li>
+                <li><a class="dropdown-item" href="#" id="langEnBtn">English</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item text-danger" href="#" id="logoutBtnHeader"><i class="bi bi-box-arrow-right"></i> <span data-i18n="nav_logout">Çıkış Yap</span></a></li>
+            </ul>
+        </div>
+    </header>
+
+    <!-- Sidebar Overlay -->
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+    
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <h2><i class="bi bi-sliders"></i> <span data-i18n="settings_title">Ayarlar</span></h2>
+            <button id="closeBtn" class="close-btn"><i class="bi bi-x-lg"></i></button>
+        </div>
+        
+        <!-- Sidebar Profile Section -->
+        <div class="p-3 border-bottom border-secondary bg-dark bg-opacity-50 text-center">
+            <div class="d-inline-flex align-items-center justify-content-center bg-gradient text-white rounded-circle mb-2" style="width: 60px; height: 60px; font-size: 24px; font-weight: bold;" id="sidebarAvatar">
+                U
+            </div>
+            <h6 class="mb-0 text-white" id="settingsName" data-i18n="guest_user">Kullanıcı</h6>
+            <small class="text-muted" id="settingsEmail" data-i18n="guest_desc">user@example.com</small>
+        </div>
+        
+        <div class="sidebar-content">
+            <!-- Font Selection -->
+            <div class="setting-group">
+                <label><i class="bi bi-fonts"></i> <span data-i18n="lbl_font">Yazı Tipi</span></label>
+                <div class="mb-2">
+                    <input type="text" id="fontSearchInput" class="form-control form-control-sm bg-dark text-light border-secondary" data-i18n="search_font" placeholder="🔍 Font ara...">
+                </div>
+                <select id="fontSelector" class="form-select">
+                    <!-- JS ile dolacak -->
+                </select>
+                
+                <!-- Font Bilgi Kartı -->
+                <div id="fontInfoCard" class="mt-3 p-2 rounded bg-light border border-secondary" style="display:none; font-size: 11px;">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-muted">Varyasyon:</span>
+                        <span id="fontVCount" class="fw-bold text-primary">3x</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted">Harf Sayısı:</span>
+                        <span id="fontCharCount" class="fw-bold text-primary">231</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Scale -->
+            <div class="setting-group">
+                <div class="range-header">
+                    <label data-i18n="lbl_size">Boyut</label>
+                    <span class="range-value" id="scaleValue">140</span>
+                </div>
+                <input type="range" class="form-range" id="scaleSlider" min="30" max="250" value="140">
+            </div>
+            
+            <!-- Line Height -->
+            <div class="setting-group">
+                <div class="range-header">
+                    <label data-i18n="lbl_line_height">Satır Aralığı</label>
+                    <span class="range-value" id="lineHeightValue">220</span>
+                </div>
+                <input type="range" class="form-range" id="lineHeightSlider" min="40" max="450" value="220">
+            </div>
+            
+            <!-- Letter Spacing -->
+            <div class="setting-group">
+                <div class="range-header">
+                    <label data-i18n="lbl_letter_spacing">Harf Aralığı</label>
+                    <span class="range-value" id="letterSpacingValue">3</span>
+                </div>
+                <input type="range" class="form-range" id="letterSpacingSlider" min="-5" max="20" value="3">
+            </div>
+
+            <!-- Word Spacing -->
+            <div class="setting-group">
+                <div class="range-header">
+                    <label data-i18n="lbl_word_spacing">Kelime Boşluğu</label>
+                    <span class="range-value" id="wordValue">55</span>
+                </div>
+                <input type="range" class="form-range" id="wordSlider" min="10" max="150" value="55">
+            </div>
+            
+            <!-- Jitter -->
+            
+                        <div class="setting-group">
+            
+                            <div class="range-header">
+            
+                                <label data-i18n="lbl_jitter">Harf Titremesi (Doğallık)</label>
+            
+                                <span class="range-value" id="jitterValue">5</span>
+            
+                            </div>
+            
+                            <input type="range" class="form-range" id="jitterSlider" min="0" max="20" value="5">
+            
+                        </div>
+            
+            
+            
+                        
+            
+            
+            
+                        <!-- Per-Line Settings -->
+            <div class="setting-group border-top pt-3">
+                <label class="d-flex justify-content-between cursor-pointer" data-bs-toggle="collapse" data-bs-target="#lineSettingsCollapse">
+                    <span><i class="bi bi-bezier2"></i> <span data-i18n="lbl_lines">Satır Eğrilikleri</span></span>
+                    <i class="bi bi-chevron-down"></i>
+                </label>
+                <div class="collapse show" id="lineSettingsCollapse">
+                    <div id="lineSettingsContainer" class="mt-3" style="max-height: 200px; overflow-y: auto; padding-right: 5px;">
+                        <small class="text-muted d-block text-center">...</small>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Fine Tuning Button -->
+            <div class="setting-group border-top pt-3 mt-3">
+                <button id="openCharEditorBtn" class="btn btn-outline-light w-100" style="border-radius: 12px; border-style: dashed;">
+                    <i class="bi bi-pencil-square"></i> <span data-i18n="btn_edit_chars">Harfleri Düzenle</span>
+                </button>
+                <small class="text-muted d-block mt-2 text-center" style="font-size: 11px;">
+                    ...
+                </small>
+            </div>
+
+            <!-- Boldness (Moved to Bottom) -->
+            <div class="setting-group border-top pt-3 mt-3">
+                <div class="range-header">
+                    <label style="color: white; font-weight: 700;"><i class="bi bi-type-bold"></i> <span data-i18n="lbl_boldness">Kalınlık</span></label>
+                    <span class="range-value" id="boldnessValue">0</span>
+                </div>
+                <input type="range" class="form-range" id="boldnessSlider" min="0" max="10" step="0.1" value="0">
+                <small class="text-muted d-block mt-1" style="font-size: 10px;">...</small>
+            </div>
+        </div>
+        
+        <div class="sidebar-footer">
+            <div class="d-grid gap-2">
+                <button id="copyBtn" class="btn btn-secondary">
+                    <i class="bi bi-clipboard-check"></i> <span data-i18n="btn_copy">Panoya Kopyala</span>
+                </button>
+                <div class="d-flex gap-2">
+                    <button id="pdfBtn" class="btn-primary-gradient flex-grow-1">
+                        <i class="bi bi-file-earmark-pdf"></i> <span data-i18n="btn_pdf">PDF</span>
+                    </button>
+                    <button id="pngBtn" class="btn-primary-gradient flex-grow-1" style="background: linear-gradient(135deg, var(--secondary), var(--primary));">
+                        <i class="bi bi-file-image"></i> <span data-i18n="btn_png">PNG</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Workspace -->
+    <main id="workspace" class="workspace">
+        <div class="toolbar">
+            <div class="btn-group me-2" role="group">
+                <button id="undoBtn" class="btn btn-dark border-secondary" title="Geri Al (Ctrl+Z)"><i class="bi bi-arrow-counterclockwise"></i></button>
+                <button id="redoBtn" class="btn btn-dark border-secondary" title="İleri Al (Ctrl+Y)"><i class="bi bi-arrow-clockwise"></i></button>
+            </div>
+            
+            <!-- Color Select -->
+            <div class="d-flex align-items-center gap-2 flex-grow-1">
+                <select id="paperSelect" class="form-select" style="max-width: 150px;">
+                    <option value="cizgili">📝 Çizgili</option>
+                    <option value="kareli">▦ Kareli</option>
+                    <option value="duz" selected>⬜ Düz</option>
+                    <option value="custom">📂 Özel Kağıt...</option>
+                </select>
+                <input type="file" id="customPaperInput" accept="image/*" hidden>
+                
+                <div class="input-group">
+                    <select id="colorSelect" class="form-select" style="max-width: 140px;">
+                        <option value="tukenmez" selected>⚫ Siyah</option>
+                        <option value="bic_mavi">🔵 Mavi</option>
+                        <option value="kirmizi">🔴 Kırmızı</option>
+                        <option value="custom">🎨 Özel...</option>
+                    </select>
+                    <input type="color" id="customColorPicker" class="form-control form-control-color" value="#000000" title="Özel Renk Seç" style="display:none; max-width: 50px;">
+                </div>
+            </div>
+
+            <!-- Page & View Controls -->
+            <div class="d-flex align-items-center gap-2 ms-2 border-start ps-3">
+                <div class="btn-group btn-group-sm">
+                    <button id="prevPageBtn" class="btn btn-outline-secondary" disabled><i class="bi bi-chevron-left"></i></button>
+                    <span class="btn btn-outline-secondary disabled text-light" id="pageIndicator" style="width: 80px;">Sayfa 1</span>
+                    <button id="nextPageBtn" class="btn btn-outline-secondary" disabled><i class="bi bi-chevron-right"></i></button>
+                </div>
+                <button id="fullscreenBtn" class="btn btn-sm btn-outline-primary" title="Tam Ekran"><i class="bi bi-arrows-fullscreen"></i></button>
+            </div>
+        </div>
+        
+        <div class="editor-wrapper">
+            <div class="input-panel">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="m-0"><i class="bi bi-pencil"></i> Metninizi Yazın</h3>
+                    <label class="btn btn-sm btn-outline-secondary" title=".txt veya .docx dosyası yükle">
+                        <i class="bi bi-upload"></i> Dosya Aç
+                        <input type="file" id="importFile" accept=".txt,.docx" hidden>
+                    </label>
+                </div>
+                <textarea id="metinAlani" placeholder="Buraya yazın... Yazdığınız metin el yazınıza dönüşecek."></textarea>
+            </div>
+            <div class="canvas-panel">
+                <canvas id="mainCanvas"></canvas>
+            </div>
+        </div>
+        
+        <footer class="app-footer">
+            <p class="mb-1">Fontify Tüm Hakları Saklıdır &copy; 2026</p>
+            <p class="small mb-0"><a href="destek.html" class="text-muted text-decoration-none" target="_blank">İletişim & Şikayet</a></p>
+        </footer>
+    </main>
+
+    <!-- Character Editor Modal -->
+    <div class="modal fade" id="charEditorModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content" style="background: var(--bg-card); color: var(--text); border: 1px solid var(--border);">
+                <div class="modal-header border-secondary">
+                    <div>
+                        <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square text-primary"></i> Harf Düzenleyici</h5>
+                        <p class="text-muted mb-0" style="font-size: 0.85rem;">Fontunuzdaki hatalı veya beğenmediğiniz harfleri değiştirin.</p>
+                    </div>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <!-- Step 1: List -->
+                    <div id="charListStep" class="p-4">
+                        <!-- Filter Tabs -->
+                        <ul class="nav nav-pills mb-4" id="charFilterTabs" role="tablist">
+                            <li class="nav-item"><button class="nav-link active" data-filter="all">Tümü</button></li>
+                            <li class="nav-item"><button class="nav-link" data-filter="kucuk">Küçük Harfler</button></li>
+                            <li class="nav-item"><button class="nav-link" data-filter="buyuk">Büyük Harfler</button></li>
+                            <li class="nav-item"><button class="nav-link" data-filter="rakam">Rakamlar</button></li>
+                            <li class="nav-item"><button class="nav-link" data-filter="ozel">Noktalama</button></li>
+                        </ul>
+
+                        <div id="charGridLoader" class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-2 text-muted">Font analizi yapılıyor...</p>
+                        </div>
+                        
+                        <div id="charGrid" class="char-grid-container">
+                            <!-- JS ile dolacak -->
+                        </div>
+                    </div>
+                    
+                    <!-- Step 2: Edit -->
+                    <div id="charEditStep" style="display: none; height: 100%;">
+                        <div class="d-flex h-100">
+                            <!-- Left: Preview & Actions -->
+                            <div class="edit-sidebar p-4 border-end border-secondary" style="width: 320px; background: var(--bg-light);">
+                                <button class="btn btn-sm btn-outline-secondary mb-4 w-100 text-start" onclick="showCharList()">
+                                    <i class="bi bi-arrow-left"></i> Listeye Dön
+                                </button>
+                                
+                                <div class="text-center mb-4">
+                                    <div class="current-char-preview mb-3">
+                                        <img id="currentCharImg" src="" alt="Seçili Harf">
+                                    </div>
+                                    <h5 id="currentCharKey" class="mb-1 fw-bold"></h5>
+                                    <span class="badge bg-primary bg-opacity-25 text-primary">Düzenleniyor</span>
+                                </div>
+                                
+                                <div class="d-grid gap-2">
+                                    <label class="btn btn-outline-light border-dashed">
+                                        <i class="bi bi-upload me-2"></i> Kendi Çizimini Yükle
+                                        <input type="file" id="uploadCharInput" hidden accept="image/*">
+                                    </label>
+                                    <button id="uploadCharBtn" class="btn btn-primary" disabled>
+                                        <i class="bi bi-check-lg"></i> Değişikliği Kaydet
+                                    </button>
+                                </div>
+                                
+                                <div class="alert alert-dark mt-4 small text-muted">
+                                    <i class="bi bi-info-circle me-1"></i> İpucu:
+                                    Yükleyeceğiniz resim şeffaf arkaplanlı veya beyaz arkaplanlı olmalıdır.
+                                </div>
+                            </div>
+                            
+                            <!-- Right: Variations -->
+                            <div class="flex-grow-1 p-4 bg-dark">
+                                <h6 class="mb-3 d-flex justify-content-between align-items-center">
+                                    <span><i class="bi bi-globe me-2"></i>Topluluk Varyasyonları</span>
+                                    <span class="badge bg-secondary">Seçmek için tıklayın</span>
+                                </h6>
+                                
+                                <div id="variationsGrid" class="variations-grid">
+                                    <!-- Varyasyonlar -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        .char-grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+            gap: 12px;
+        }
+        
+        .char-card {
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            aspect-ratio: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+            padding: 8px;
+        }
+        
+        .char-card:hover {
+            border-color: var(--primary);
+            background: #252535;
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .char-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+        }
+        
+        .char-card .char-badge {
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            font-size: 9px;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .current-char-preview {
+            width: 120px;
+            height: 120px;
+            background: white;
+            border-radius: 16px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 15px;
+        }
+        
+        .current-char-preview img {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        .border-dashed {
+            border-style: dashed !important;
+        }
+        
+        .variations-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 15px;
+            max-height: 60vh;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        
+        .var-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .var-card:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .var-img-box {
+            height: 80px;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+        }
+        
+        .var-img-box img {
+            max-width: 100%;
+            max-height: 100%;
+        }
+        
+        .var-info {
+            padding: 8px;
+            font-size: 10px;
+            color: var(--text-muted);
+            text-align: center;
+            background: rgba(0,0,0,0.1);
+        }
+    </style>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    
+    <!-- Mammoth.js for .docx support -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    
+    <!-- Engine -->
+    <script src="engine.js"></script>
+    <script src="i18n.js"></script>
+    
+    <script>
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingMsg = document.getElementById('loadingMessage');
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
+            authDomain: "elyazisiapp.firebaseapp.com",
+            projectId: "elyazisiapp",
+            storageBucket: "elyazisiapp.firebasestorage.app",
+            messagingSenderId: "823659862878",
+            appId: "1:823659862878:web:1615116c77d98f7f848dcf"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+        
+        // API URL zaten engine.js içinde tanımlı
+        // const API_URL = 'https://elyazisi-api.onrender.com';
+        
+        let editor = null;
+        let currentUserUid = null;
+        let currentFontId = null;
+
+        // --- AUTH & EDITOR INIT ---
+        firebase.auth().onAuthStateChanged(user => {
+            if (user) {
+                // KULLANICI GİRİŞ YAPMIŞ
+                currentUserUid = user.uid;
+                updateProfileDisplay(user);
+                initEditor(user.uid);
+            } else {
+                // MİSAFİR MODU (GUEST)
+                currentUserUid = null;
+                updateProfileForGuest();
+                initEditor(null);
+            }
+        });
+
+        function initEditor(uid) {
+            const urlParams = new URLSearchParams(window.location.search);
+            currentFontId = urlParams.get('font_id');
+
+            if (typeof FinalHandwritingEditor === 'undefined') {
+                loadingMsg.innerHTML = "<span style='color:red'>Hata: Motor dosyası yüklenemedi!</span>";
+                return;
+            }
+
+            try {
+                editor = new FinalHandwritingEditor('mainCanvas');
+                editor.loadAssets(uid).then(() => {
+                    loadingOverlay.classList.add('hidden');
+                }).catch(err => console.error("Assets hatası:", err));
+                
+                loadFontList(uid);
+                
+                const saved = localStorage.getItem('saved_text');
+                if (saved && editor) {
+                    document.getElementById('metinAlani').value = saved;
+                    editor.setText(saved);
+                }
+            } catch(e) {
+                loadingMsg.innerHTML = `<span style="color:red">Editör Başlatılamadı: ${e.message}</span>`;
+            }
+        }
+
+        function updateProfileForGuest() {
+            const lang = localStorage.getItem('fontify_lang') || 'tr';
+            const t = translations[lang];
+
+            // Dropdown'ı gizle, yerine 'Giriş Yap' butonu koy
+            const dropdown = document.querySelector('.user-dropdown');
+            dropdown.innerHTML = `
+                <a href="login.html" class="btn btn-primary-gradient btn-sm px-3" style="text-decoration:none; color:white;">
+                    <i class="bi bi-box-arrow-in-right"></i> ${t.nav_login}
+                </a>
+            `;
+            
+            // Sidebar profil kısmını güncelle
+            const settingsName = document.getElementById('settingsName');
+            const settingsEmail = document.getElementById('settingsEmail');
+            const sidebarAvatar = document.getElementById('sidebarAvatar');
+            
+            if(settingsName) settingsName.textContent = t.guest_user;
+            if(settingsEmail) settingsEmail.textContent = t.guest_desc;
+            if(sidebarAvatar) sidebarAvatar.innerHTML = '<i class="bi bi-person"></i>';
+            
+            // Linkleri Kısıtla (Yakalayıcı ekle)
+            restrictLinks();
+        }
+
+        function restrictLinks() {
+            // Header ve Sidebar linklerine tıklayınca kontrol et
+            const restrictedHrefs = ['ekle.html', 'fonts.html', 'settings.html'];
+            
+            document.querySelectorAll('a').forEach(link => {
+                const href = link.getAttribute('href');
+                if (restrictedHrefs.includes(href)) {
+                    link.onclick = (e) => {
+                        if (!currentUserUid) {
+                            e.preventDefault();
+                            if(confirm("Bu özelliği kullanmak için giriş yapmalısınız. Giriş sayfasına gidilsin mi?")) {
+                                window.location.href = "login.html";
+                            }
+                        }
+                    };
+                }
+            });
+        }
+
+        function updateProfileDisplay(user) {
+            try {
+                let display = user.displayName;
+                const email = user.email || '';
+                
+                if (!display || display.includes('@')) {
+                    let namePart = email.split('@')[0];
+                    namePart = namePart.replace(/[._0-9]/g, ' ').trim();
+                    display = namePart.replace(/\b\w/g, l => l.toUpperCase());
+                    if (!display) display = "Kullanıcı";
+                }
+                
+                document.getElementById('userName').textContent = display;
+                
+                const settingsName = document.getElementById('settingsName');
+                const settingsEmail = document.getElementById('settingsEmail');
+                const sidebarAvatar = document.getElementById('sidebarAvatar');
+                
+                if (settingsName) settingsName.textContent = display;
+                if (settingsEmail) settingsEmail.textContent = email;
+                
+                const img = document.getElementById('headerAvatarImg');
+                const initial = document.getElementById('headerAvatarInitial');
+                
+                if (user.photoURL) {
+                    img.src = user.photoURL;
+                    img.style.display = 'block';
+                    initial.style.display = 'none';
+                    if (sidebarAvatar) {
+                        sidebarAvatar.innerHTML = '';
+                        const avatarImg = document.createElement('img');
+                        avatarImg.src = user.photoURL;
+                        avatarImg.style.width = '100%';
+                        avatarImg.style.height = '100%';
+                        avatarImg.style.objectFit = 'cover';
+                        avatarImg.style.borderRadius = '50%';
+                        sidebarAvatar.appendChild(avatarImg);
+                    }
+                } else {
+                    const initChar = display.charAt(0).toUpperCase();
+                    initial.textContent = initChar;
+                    img.style.display = 'none';
+                    initial.style.display = 'block';
+                    if (sidebarAvatar) sidebarAvatar.textContent = initChar;
+                }
+            } catch(e) { console.error("Profil güncellenemedi:", e); }
+        }
+
+        // --- CHAR EDITOR LOGIC ---
+        const charModal = new bootstrap.Modal(document.getElementById('charEditorModal'));
+        let selectedCharKey = null;
+        let allCharAssets = {}; // { 'kucuk_a_1': 'base64...' }
+
+        document.getElementById('openCharEditorBtn').addEventListener('click', () => {
+            if (!currentFontId) {
+                alert('Lütfen önce kendi oluşturduğunuz bir fontu seçin. Varsayılan fontlar düzenlenemez.');
+                return;
+            }
+            // Sahiplik kontrolü yapılabilir ama backend zaten yapacak
+            renderCharList();
+            showCharList();
+            charModal.show();
+        });
+
+        function showCharList() {
+            document.getElementById('charListStep').style.display = 'block';
+            document.getElementById('charEditStep').style.display = 'none';
+        }
+
+        function showCharEdit(key, imgSrc) {
+            selectedCharKey = key;
+            document.getElementById('charListStep').style.display = 'none';
+            document.getElementById('charEditStep').style.display = 'block';
+            
+            document.getElementById('currentCharImg').src = imgSrc;
+            document.getElementById('currentCharKey').textContent = formatCharKey(key);
+            
+            // Upload butonunu sıfırla
+            document.getElementById('uploadCharBtn').disabled = true;
+            document.getElementById('uploadCharInput').value = '';
+            
+            loadVariations(key);
+        }
+
+        // Format: kucuk_a_1 -> "Küçük a (1)"
+        function formatCharKey(key) {
+            const parts = key.split('_');
+            const idx = parts.pop();
+            const char = parts.pop().toUpperCase();
+            const type = parts[0];
+            
+            if (type === 'kucuk') return `Küçük ${char} (${idx})`;
+            if (type === 'buyuk') return `Büyük ${char} (${idx})`;
+            if (type === 'rakam') return `Rakam ${char} (${idx})`;
+            return `${key} (${idx})`;
+        }
+
+        async function renderCharList() {
+            const grid = document.getElementById('charGrid');
+            const loader = document.getElementById('charGridLoader');
+            
+            grid.innerHTML = '';
+            loader.style.display = 'block';
+            
+            try {
+                const res = await fetch(`${API_URL}/api/get_assets?font_id=${currentFontId}&user_id=${currentUserUid}`);
+                const data = await res.json();
+                
+                loader.style.display = 'none';
+                
+                if(data.success && data.assets) {
+                    allCharAssets = {};
+                    grid.innerHTML = '';
+                    
+                    const sortedKeys = Object.keys(data.assets).sort();
+                    
+                    sortedKeys.forEach(groupKey => {
+                        const images = data.assets[groupKey];
+                        images.forEach((imgB64, index) => {
+                            const exactKey = `${groupKey}_${index+1}`;
+                            const src = imgB64.startsWith('data:') ? imgB64 : `data:image/png;base64,${imgB64}`;
+                            allCharAssets[exactKey] = src;
+                            
+                            // Kategori belirle
+                            let category = 'all';
+                            if (groupKey.startsWith('kucuk')) category = 'kucuk';
+                            else if (groupKey.startsWith('buyuk')) category = 'buyuk';
+                            else if (groupKey.startsWith('rakam')) category = 'rakam';
+                            else if (groupKey.startsWith('ozel')) category = 'ozel';
+                            
+                            const div = document.createElement('div');
+                            div.className = `char-card filter-item filter-${category}`;
+                            div.onclick = () => showCharEdit(exactKey, src);
+                            
+                            const charImg = document.createElement('img');
+                            charImg.src = src;
+                            div.appendChild(charImg);
+
+                            const badge = document.createElement('span');
+                            badge.className = 'char-badge';
+                            badge.textContent = index + 1;
+                            div.appendChild(badge);
+
+                            grid.appendChild(div);
+                        });
+                    });
+                }
+            } catch(e) {
+                loader.style.display = 'none';
+                grid.innerHTML = '<p class="text-danger w-100 text-center">Harfler yüklenirken hata oluştu.</p>';
+            }
+        }
+
+        // Filter Tabs Logic
+        document.querySelectorAll('#charFilterTabs button').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                // Active class
+                document.querySelectorAll('#charFilterTabs button').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                const filter = e.target.dataset.filter;
+                const items = document.querySelectorAll('.filter-item');
+                
+                items.forEach(item => {
+                    if (filter === 'all' || item.classList.contains(`filter-${filter}`)) {
+                        item.style.display = 'flex';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            });
+        });
+
+        async function loadVariations(key) {
+            const grid = document.getElementById('variationsGrid');
+            grid.innerHTML = '<div class="text-center w-100 py-5"><div class="spinner-border text-light"></div></div>';
+            
+            const parts = key.split('_');
+            parts.pop(); 
+            const base = parts.join('_');
+            
+            try {
+                const res = await fetch(`${API_URL}/api/get_char_variations?char_base=${base}&limit=16`);
+                
+                // API Endpoint yoksa veya hata dönerse (Henüz deploy edilmediyse)
+                if (!res.ok || (res.headers.get("content-type") && !res.headers.get("content-type").includes("application/json"))) {
+                    throw new Error("API_NOT_READY");
+                }
+
+                const data = await res.json();
+                
+                grid.innerHTML = '';
+                if (data.success && data.variations.length > 0) {
+                    renderVariations(data.variations);
+                } else {
+                    grid.innerHTML = `<div class="text-center w-100 py-4 text-muted">Bu harf için alternatif bulunamadı.</div>`;
+                }
+            } catch(e) {
+                console.warn("API Hatası, Sistem varsayılanlarına geçiliyor:", e);
+                
+                // FALLBACK: Sistem Fontundan Çek
+                try {
+                    grid.innerHTML = '<div class="text-center w-100 py-2"><div class="spinner-border spinner-border-sm text-secondary"></div> <span class="small text-muted">Sistem önerileri yükleniyor...</span></div>';
+                    
+                    const fallbackRes = await fetch(`${API_URL}/api/get_assets?font_id=system_default`);
+                    const fallbackData = await fallbackRes.json();
+                    
+                    if (fallbackData.success && fallbackData.assets) {
+                        const fallbackVariations = [];
+                        
+                        // fallbackData.assets yapısı: { 'kucuk_a': ['base64_1', 'base64_2'] }
+                        // base değişkeni: 'kucuk_a'
+                        
+                        // Tam eşleşme ara (örn: kucuk_a)
+                        if (fallbackData.assets[base]) {
+                            fallbackData.assets[base].forEach((img, idx) => {
+                                fallbackVariations.push({
+                                    image: img.startsWith('data:') ? img : `${API_URL}/static/harfler/${img}`,
+                                    font_name: `Standart Stil ${idx+1}`
+                                });
+                            });
+                        }
+                        
+                        grid.innerHTML = '';
+                        if (fallbackVariations.length > 0) {
+                            renderVariations(fallbackVariations);
+                            // Bilgi mesajı ekle
+                            const info = document.createElement('div');
+                            info.className = 'alert alert-info col-12 small p-2 mb-2';
+                            info.innerHTML = '<i class="bi bi-info-circle"></i> Topluluk verilerine ulaşılamadı, sistem standartları gösteriliyor.';
+                            grid.prepend(info);
+                        } else {
+                            throw new Error("Sistemde de bu harf yok.");
+                        }
+                    } else {
+                        throw new Error("Sistem fontu boş.");
+                    }
+                } catch (fallbackErr) {
+                    grid.innerHTML = `
+                        <div class="alert alert-secondary col-12 small">
+                            <i class="bi bi-exclamation-circle"></i> 
+                            Seçenekler yüklenemedi. Sadece kendi görselinizi yükleyebilirsiniz.
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        function renderVariations(list) {
+            const grid = document.getElementById('variationsGrid');
+            
+            list.forEach(v => {
+                const div = document.createElement('div');
+                div.className = 'var-card';
+                div.onclick = () => updateCharacter(selectedCharKey, v.image);
+                
+                // Güvenli DOM Oluşturma (XSS Koruması)
+                const imgBox = document.createElement('div');
+                imgBox.className = 'var-img-box';
+                const img = document.createElement('img');
+                img.src = v.image;
+                imgBox.appendChild(img);
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'var-info';
+                infoDiv.textContent = v.font_name.substring(0, 15); // textContent kullanımı
+                
+                div.appendChild(imgBox);
+                div.appendChild(infoDiv);
+                grid.appendChild(div);
+            });
+        }
+
+        // Upload Logic
+        const fileInput = document.getElementById('uploadCharInput');
+        const uploadBtn = document.getElementById('uploadCharBtn');
+        
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                uploadBtn.disabled = false;
+                // Preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    document.getElementById('currentCharImg').src = e.target.result;
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            } else {
+                uploadBtn.disabled = true;
+            }
+        });
+        
+        uploadBtn.addEventListener('click', () => {
+            if (!fileInput.files.length) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                updateCharacter(selectedCharKey, e.target.result);
+            };
+            reader.readAsDataURL(fileInput.files[0]);
+        });
+
+        async function updateCharacter(key, base64Img) {
+            // Optimistic UI Update (Anında göster)
+            const oldSrc = document.getElementById('currentCharImg').src;
+            document.getElementById('currentCharImg').src = base64Img;
+            
+            if (!confirm(`Bu harfi değiştirmek istediğinize emin misiniz?`)) {
+                document.getElementById('currentCharImg').src = oldSrc;
+                return;
+            }
+            
+            // Loading UI
+            const modalBody = document.querySelector('.modal-content');
+            const originalBtnText = uploadBtn.innerHTML;
+            uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> İşleniyor...';
+            uploadBtn.disabled = true;
+            
+            // 1. Önce Editor Motorunu Güncelle (Local Update)
+            try {
+                if (editor) {
+                    // Engine'e asset'i güncellemesini söyle
+                    editor.overrideAsset(key, base64Img);
+                    
+                    // LocalStorage'a kaydet (Sayfa yenilenince gitmesin diye)
+                    const localOverrides = JSON.parse(localStorage.getItem('font_overrides_' + currentFontId) || '{}');
+                    localOverrides[key] = base64Img;
+                    localStorage.setItem('font_overrides_' + currentFontId, JSON.stringify(localOverrides));
+                }
+            } catch(localErr) {
+                console.error("Local update hatası", localErr);
+            }
+
+            // 2. Sunucuya Kaydetmeyi Dene (Sessizce)
+            try {
+                // Güvenlik Token'ı Al
+                const idToken = await firebase.auth().currentUser.getIdToken();
+                
+                const res = await fetch(`${API_URL}/api/update_char`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${idToken}`
+                    },
+                    body: JSON.stringify({
+                        font_id: currentFontId,
+                        user_id: currentUserUid,
+                        char_key: key,
+                        image_base64: base64Img
+                    })
+                });
+                
+                if (!res.ok) throw new Error("Sunucuya kaydedilemedi");
+                
+                // Başarılı olursa
+                alert('Harf başarıyla güncellendi!');
+                
+            } catch(e) {
+                console.warn("Sunucu hatası (Local modda devam ediliyor): " + e.message);
+                alert('Sunucuya erişilemediği için değişiklik SADECE BU CİHAZDA geçerli olacak şekilde kaydedildi.');
+            } finally {
+                // Her durumda modalı kapat ve yenile
+                charModal.hide();
+                // Sayfayı yenilemeye gerek yok, overrideAsset anlık yaptı.
+                // Ama garanti olsun diye editörü tekrar çizdir
+                if(editor) editor.render();
+                
+                uploadBtn.innerHTML = originalBtnText;
+                uploadBtn.disabled = false;
+            }
+        }
+
+        // --- EVENT LISTENERS (SIDEBAR) ---
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        function openSidebar() { sidebar.classList.add('open'); sidebarOverlay.classList.add('active'); }
+        function closeSidebar() { sidebar.classList.remove('open'); sidebarOverlay.classList.remove('active'); }
+        
+        document.getElementById('menuBtn')?.addEventListener('click', openSidebar);
+        document.getElementById('closeBtn')?.addEventListener('click', closeSidebar);
+        sidebarOverlay?.addEventListener('click', closeSidebar);
+
+        // Font & Settings
+        let allFontsCache = []; // Arama için cache
+
+        async function loadFontList(uid) {
+            const select = document.getElementById('fontSelector');
+            if(!select) return;
+            try {
+                const res = await fetch(`${API_URL}/api/list_fonts?user_id=${uid}`);
+                const data = await res.json();
+                
+                if (data.success && data.fonts) {
+                    allFontsCache = data.fonts; // Cache'le
+                    renderFontOptions(allFontsCache);
+                    
+                    // Mevcut fontun bilgisini göster
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const activeFontId = urlParams.get('font_id') || 'system_default';
+                    updateFontInfoCard(activeFontId);
+                }
+                
+                // URL'den gelen font_id'yi seçili yap
+                const urlParams = new URLSearchParams(window.location.search);
+                const activeFont = urlParams.get('font_id');
+                if(activeFont) select.value = activeFont;
+                
+            } catch(e) { console.error(e); }
+        }
+
+        function updateFontInfoCard(fontId) {
+            const card = document.getElementById('fontInfoCard');
+            const vCount = document.getElementById('fontVCount');
+            const charCount = document.getElementById('fontCharCount');
+            
+            if (!card || !editor) return;
+
+            // Engine'den o an yüklü olan asset bilgilerini al
+            const assets = editor.assets;
+            const keys = Object.keys(assets);
+            if (keys.length === 0) {
+                card.style.display = 'none';
+                return;
+            }
+
+            // Varyasyon sayısını en çok tekrar eden harften tahmin et
+            let maxV = 1;
+            keys.forEach(k => {
+                if (assets[k].length > maxV) maxV = assets[k].length;
+            });
+
+            vCount.textContent = maxV + "x";
+            charCount.textContent = keys.length;
+            card.style.display = 'block';
+        }
+
+        function renderFontOptions(fonts) {
+            const select = document.getElementById('fontSelector');
+            select.innerHTML = ''; // Temizle
+            
+            // Gruplama
+            const popularGroup = document.createElement('optgroup'); popularGroup.label = "⭐ En Çok Tercih Edilenler";
+            const myGroup = document.createElement('optgroup'); myGroup.label = "📂 Benim Fontlarım";
+            const pubGroup = document.createElement('optgroup'); pubGroup.label = "🌍 Diğer Paylaşılanlar";
+            
+            // Popülerlik simülasyonu (Gerçekte backend'den 'usage_count' gelmeli)
+            // Şimdilik 'system_default' ve isminde 'Güzel' geçenleri popüler varsayalım
+            const popularFonts = fonts.filter(f => f.id === 'system_default' || f.is_popular);
+            const myFonts = fonts.filter(f => f.type === 'private');
+            const otherFonts = fonts.filter(f => f.type === 'public' && f.id !== 'system_default' && !f.is_popular);
+            
+            // Sistem varsayılanını her zaman en tepeye, popüler grubuna ekle
+            
+            popularFonts.forEach(f => popularGroup.appendChild(new Option(f.name, f.id)));
+            myFonts.forEach(f => myGroup.appendChild(new Option(f.name, f.id)));
+            otherFonts.forEach(f => pubGroup.appendChild(new Option(f.name, f.id)));
+            
+            if (popularGroup.children.length) select.appendChild(popularGroup);
+            if (myGroup.children.length) select.appendChild(myGroup);
+            if (pubGroup.children.length) select.appendChild(pubGroup);
+        }
+
+        // Font Arama Logic
+        document.getElementById('fontSearchInput')?.addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            const filtered = allFontsCache.filter(f => f.name.toLowerCase().includes(term));
+            renderFontOptions(filtered);
+        });
+
+        document.getElementById('fontSelector')?.addEventListener('change', (e) => {
+            const url = new URL(window.location);
+            if(e.target.value) url.searchParams.set('font_id', e.target.value);
+            else url.searchParams.delete('font_id');
+            window.location.href = url.toString();
+        });
+
+        // Metin Girişi & History Logic
+        const metinAlani = document.getElementById('metinAlani');
+        let typeTimer; // Debounce timer
+
+        metinAlani?.addEventListener('input', (e) => {
+            if(editor) {
+                editor.setText(e.target.value);
+                editor.setCursorIndex(e.target.selectionStart);
+                localStorage.setItem('saved_text', e.target.value);
+                
+                // Hızlı yazarken sürekli kaydetme, yazma bitince (500ms sonra) kaydet
+                clearTimeout(typeTimer);
+                typeTimer = setTimeout(() => {
+                    editor.saveState();
+                }, 500);
+            }
+        });
+        
+        // İlk yüklemede state kaydet
+        // (Engine loadAssets bitince çağrılabilir ama şimdilik manuel tetikleme yok)
+
+        // Undo / Redo Actions
+        document.getElementById('undoBtn')?.addEventListener('click', () => {
+            if(editor) {
+                const state = editor.undo();
+                if(state) {
+                    metinAlani.value = state.text;
+                    metinAlani.setSelectionRange(state.cursor, state.cursor);
+                    metinAlani.focus();
+                }
+            }
+        });
+
+        document.getElementById('redoBtn')?.addEventListener('click', () => {
+            if(editor) {
+                const state = editor.redo();
+                if(state) {
+                    metinAlani.value = state.text;
+                    metinAlani.setSelectionRange(state.cursor, state.cursor);
+                    metinAlani.focus();
+                }
+            }
+        });
+        
+        // Klavye Kısayolları (Ctrl+Z / Ctrl+Y)
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                document.getElementById('undoBtn').click();
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                e.preventDefault();
+                document.getElementById('redoBtn').click();
+            }
+        });
+
+        // Copy to Clipboard
+        document.getElementById('copyBtn')?.addEventListener('click', async () => {
+            // ... (Kopyalama kodu, değiştirilmedi) ...
+            if(!editor) return;
+            const btn = document.getElementById('copyBtn');
+            const originalHtml = btn.innerHTML;
+            
+            try {
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+                btn.disabled = true;
+                await editor.copyToClipboard();
+                btn.innerHTML = '<i class="bi bi-check2"></i> Kopyalandı!';
+                btn.classList.replace('btn-secondary', 'btn-success');
+                setTimeout(() => { btn.innerHTML = originalHtml; btn.classList.replace('btn-success', 'btn-secondary'); btn.disabled = false; }, 2000);
+            } catch(e) { console.error(e); btn.innerHTML = 'Hata'; setTimeout(() => btn.innerHTML = originalHtml, 2000); alert("Kopyalama başarısız"); }
+        });
+
+        // --- FILE IMPORT LOGIC (.txt / .docx) ---
+        document.getElementById('importFile')?.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            const extension = file.name.split('.').pop().toLowerCase();
+
+            // Loading state
+            metinAlani.placeholder = "Dosya okunuyor...";
+            metinAlani.disabled = true;
+
+            if (extension === 'txt') {
+                reader.onload = function(event) {
+                    processImportedText(event.target.result);
+                };
+                reader.readAsText(file);
+            } 
+            else if (extension === 'docx') {
+                reader.onload = function(event) {
+                    mammoth.extractRawText({arrayBuffer: event.target.result})
+                        .then(function(result) {
+                            processImportedText(result.value);
+                        })
+                        .catch(function(err) {
+                            console.error(err);
+                            alert("Word dosyası okunamadı.");
+                            resetInput();
+                        });
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                alert("Sadece .txt ve .docx dosyaları desteklenir.");
+                resetInput();
+            }
+        });
+
+        function processImportedText(text) {
+            metinAlani.value = text;
+            if(editor) {
+                editor.setText(text);
+                editor.saveState(); // History'e kaydet
+                localStorage.setItem('saved_text', text);
+            }
+            resetInput();
+        }
+
+        function resetInput() {
+            metinAlani.disabled = false;
+            metinAlani.placeholder = "Buraya yazın... Yazdığınız metin el yazınıza dönüşecek.";
+            document.getElementById('importFile').value = ''; // Reset file input
+        }
+        
+        // Metin alanında tıklama/yön tuşları ile imleç değişince canvas'ı güncelle
+        metinAlani?.addEventListener('keyup', (e) => { if(editor) editor.setCursorIndex(e.target.selectionStart); });
+        metinAlani?.addEventListener('click', (e) => { if(editor) editor.setCursorIndex(e.target.selectionStart); });
+
+        // CANVAS TIKLAMA MANTIĞI (Beyaz sayfada düzenleme hissi)
+        const mainCanvas = document.getElementById('mainCanvas');
+        const canvasPanel = document.querySelector('.canvas-panel');
+        let currentZoom = 1.0;
+
+        // ZOOM LOGIC (Ctrl + Wheel)
+        canvasPanel.addEventListener('wheel', (e) => {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                currentZoom = Math.min(Math.max(0.5, currentZoom + delta), 3.0); // 0.5x - 3.0x arası
+                mainCanvas.style.transform = `scale(${currentZoom})`;
+            }
+        });
+
+        mainCanvas.addEventListener('mousedown', (e) => {
+            if (!editor) return;
+            
+            // Canvas üzerindeki tıklama koordinatlarını al
+            const rect = mainCanvas.getBoundingClientRect();
+            // Canvas ölçeklemesini (Zoom ve CSS width) hesaba kat
+            // Zoom yapıldığında rect değişir, bu yüzden scale hesabı rect üzerinden yapılmalı
+            
+            const scaleX = mainCanvas.width / rect.width;
+            const scaleY = mainCanvas.height / rect.height;
+            
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            
+            // Engine'den en yakın indexi al
+            const newIndex = editor.getCursorIndexFromCoords(x, y);
+            
+            // 1. Textarea'ya odaklan (Klavyeyi aç)
+            metinAlani.focus();
+            
+            // 2. Textarea içindeki imleci o pozisyona taşı
+            metinAlani.setSelectionRange(newIndex, newIndex);
+            
+            // 3. Engine'e de imleci güncellemesini söyle
+            editor.setCursorIndex(newIndex);
+        });
+
+        // Sliders
+        const sliders = [
+            { id: 'scaleSlider', m: 'setLetterScale' }, { id: 'lineHeightSlider', m: 'setLineHeight' },
+            { id: 'letterSpacingSlider', m: 'setLetterSpacing' }, { id: 'wordSlider', m: 'setWordSpacing' },
+            { id: 'jitterSlider', m: 'setJitter' },
+            { id: 'boldnessSlider', m: 'setBoldness' }
+        ];
+        sliders.forEach(s => {
+            document.getElementById(s.id)?.addEventListener('input', (e) => {
+                let v = parseFloat(e.target.value); 
+                e.target.previousElementSibling.querySelector('.range-value').textContent = v;
+                if(editor) editor[s.m](v);
+            });
+        });
+
+        // Satır Ayarlarını Güncelleme (Engine'den çağrılacak)
+        window.updateLineSettingsUI = function(lineCount) {
+            const container = document.getElementById('lineSettingsContainer');
+            if (!container || !editor) return;
+            
+            // Mevcut sayıyı koru, sadece fark varsa güncelle
+            // (Performans için basit bir diff yapılabilir ama şimdilik temizleyip yeniden çizelim, 
+            // input focus kaybını önlemek için sadece eksikleri eklemek lazım aslında)
+            
+            // Basitlik için: Eğer satır sayısı değiştiyse yeniden oluştur.
+            // Değerleri engine'den çek.
+            
+            const currentSliders = container.querySelectorAll('.line-slider-group').length;
+            if (currentSliders === lineCount) return; // Değişiklik yok
+            
+            container.innerHTML = '';
+            
+            for (let i = 0; i < lineCount; i++) {
+                const val = editor.getLineCurve(i); // Engine'den mevcut değeri al
+                
+                const div = document.createElement('div');
+                div.className = 'line-slider-group mb-2';
+                
+                const header = document.createElement('div');
+                header.className = 'd-flex justify-content-between align-items-center mb-1';
+                header.style.fontSize = '11px';
+                
+                const label = document.createElement('label');
+                label.className = 'm-0 text-muted';
+                label.textContent = `Satır ${i + 1}`;
+                
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-dark border border-secondary text-white';
+                badge.textContent = val;
+                
+                header.appendChild(label);
+                header.appendChild(badge);
+                
+                const input = document.createElement('input');
+                input.type = 'range';
+                input.className = 'form-range form-range-sm';
+                input.min = '-10';
+                input.max = '10';
+                input.value = val;
+                input.dataset.line = i;
+                
+                div.appendChild(header);
+                div.appendChild(input);
+                
+                // Event Listener
+                input.addEventListener('input', (e) => {
+                    const v = parseInt(e.target.value);
+                    badge.textContent = v;
+                    if(editor) editor.setSpecificLineCurve(i, v);
+                });
+                
+                container.appendChild(div);
+            }
+        };
+
+        // --- PAPER & COLOR LOGIC ---
+        const paperSelect = document.getElementById('paperSelect');
+        const customPaperInput = document.getElementById('customPaperInput');
+        
+        paperSelect?.addEventListener('change', (e) => {
+            if (e.target.value === 'custom') {
+                customPaperInput.click();
+            } else {
+                editor?.setPaperType(e.target.value);
+            }
+        });
+        
+        customPaperInput?.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                paperSelect.value = "cizgili"; // İptal ederse eskiye dön
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                if(editor) editor.setCustomPaper(event.target.result);
+            };
+            reader.readAsDataURL(file);
+        });
+
+        const colorSelect = document.getElementById('colorSelect');
+        const colorPicker = document.getElementById('customColorPicker');
+        
+        colorSelect?.addEventListener('change', (e) => {
+            if (e.target.value === 'custom') {
+                colorPicker.style.display = 'block';
+                colorPicker.click();
+            } else {
+                colorPicker.style.display = 'none';
+                editor?.setInkColor(e.target.value);
+            }
+        });
+        
+        colorPicker?.addEventListener('input', (e) => {
+            if(editor) editor.setCustomInkColor(e.target.value);
+        });
+
+        // --- FULLSCREEN & PAGINATION ---
+        document.getElementById('fullscreenBtn')?.addEventListener('click', () => {
+            document.body.classList.toggle('fullscreen-mode');
+            const btn = document.getElementById('fullscreenBtn');
+            if (document.body.classList.contains('fullscreen-mode')) {
+                btn.innerHTML = '<i class="bi bi-fullscreen-exit"></i>';
+                btn.classList.add('active');
+            } else {
+                btn.innerHTML = '<i class="bi bi-arrows-fullscreen"></i>';
+                btn.classList.remove('active');
+            }
+        });
+
+        document.getElementById('prevPageBtn')?.addEventListener('click', () => {
+            if(editor) {
+                editor.prevPage();
+                window.updatePageIndicator();
+            }
+        });
+        
+        document.getElementById('nextPageBtn')?.addEventListener('click', () => {
+            if(editor) {
+                editor.nextPage();
+                window.updatePageIndicator();
+            }
+        });
+
+        window.updatePageIndicator = function() {
+            if(!editor) return;
+            const current = editor.currentPage + 1;
+            const total = editor.totalPages;
+            const indicator = document.getElementById('pageIndicator');
+            if(indicator) indicator.textContent = `Sayfa ${current} / ${total}`;
+            
+            const pBtn = document.getElementById('prevPageBtn');
+            const nBtn = document.getElementById('nextPageBtn');
+            if(pBtn) pBtn.disabled = current <= 1;
+            if(nBtn) nBtn.disabled = current >= total;
+        }
+
+        // Engine'in sayfa sayısı değiştiğinde burayı çağırması lazım
+        // Bunu engine.js içinde handle edeceğiz veya periyodik kontrol
+
+        document.getElementById('pdfBtn')?.addEventListener('click', () => editor?.exportPDF());
+        document.getElementById('pngBtn')?.addEventListener('click', () => editor?.exportPNG());
+        
+        function updateEditorUI(lang) {
+            const t = translations[lang];
+            if (!t) return;
+            
+            // Select Options Güncelle
+            const pOpts = document.getElementById('paperSelect').options;
+            pOpts[0].text = t.paper_lined; pOpts[1].text = t.paper_grid; pOpts[2].text = t.paper_blank; pOpts[3].text = t.paper_custom;
+            
+            const cOpts = document.getElementById('colorSelect').options;
+            cOpts[0].text = t.color_black; cOpts[1].text = t.color_blue; cOpts[2].text = t.color_red; cOpts[3].text = t.color_custom;
+            
+            document.getElementById('metinAlani').placeholder = t.placeholder_text;
+        }
+
+        // Çıkış Fonksiyonu
+        function handleLogout(e) {
+            e.preventDefault();
+            const lang = localStorage.getItem('fontify_lang') || 'tr';
+            const msg = lang === 'en' ? 'Are you sure you want to logout?' : 'Çıkış yapmak istediğinize emin misiniz?';
+            
+            if(confirm(msg)) {
+                firebase.auth().signOut().then(() => {
+                    window.location.href = "login.html";
+                });
+            }
+        }
+
+        // Event Listener Ekle
+        document.getElementById('logoutBtnHeader')?.addEventListener('click', handleLogout);
+        // Eğer Sidebar'da da varsa (id="logoutBtnSidebar" varsayımıyla)
+        document.getElementById('logoutBtnSidebar')?.addEventListener('click', handleLogout);
+
+        // Sayfa yüklendiğinde de çalıştır
+        document.addEventListener('DOMContentLoaded', () => {
+            const lang = localStorage.getItem('fontify_lang') || 'tr';
+            updateEditorUI(lang);
+        });
+
+        // TEMA DESTEĞİ
+        const savedTheme = localStorage.getItem('fontify_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+
+    </script>
+</body>
+</html>

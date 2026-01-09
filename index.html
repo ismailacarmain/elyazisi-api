@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fontify - El Yazını Font Yap / Handwriting Font Generator</title>
+    
+    <!-- SEO Meta Tags (Bilingual) -->
+    <meta name="description" content="El yazını dijital fonta dönüştür. Turn your handwriting into a digital font in seconds. Upload PDF or photo, create custom fonts easily. Free handwriting font generator.">
+    <meta name="keywords" content="handwriting font generator, convert handwriting to font, digital handwriting, custom font maker, font from image, scan handwriting, el yazısı font, font yapma, fontify, ödev yapma programı">
+    <meta name="author" content="Fontify">
+    
+    <!-- Open Graph / Facebook / WhatsApp Preview -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://fontify.online/">
+    <meta property="og:title" content="Fontify - Handwriting to Font Converter">
+    <meta property="og:description" content="Create your own digital handwriting font from photos or PDF. Free & Easy! / El yazını hemen fonta çevir.">
+    <meta property="og:image" content="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688141/anaekran_nlig6j.png">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://fontify.online/">
+    <meta name="twitter:title" content="Fontify - Handwriting Font Generator">
+    <meta name="twitter:description" content="Turn your handwriting into a font. Upload PDF/Photo. Free tool.">
+    <meta name="twitter:image" content="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688141/anaekran_nlig6j.png">
+
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688541/favicon-32x32_q5k9p1.png">
+    <link rel="apple-touch-icon" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688649/logo_fg9wjn.png">
+    <link rel="canonical" href="https://fontify.online/">
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #6366f1; --primary-dark: #4f46e5; --secondary: #ec4899;
+            --bg-dark: #0a0a0f; --bg-card: #16161d; --text: #f8fafc;
+            --text-muted: #cbd5e1; --border: #2d2d3a;
+            --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+        }
+        body { font-family: 'Poppins', sans-serif; background: var(--bg-dark); color: var(--text); overflow-x: hidden; }
+        .navbar { background: rgba(10, 10, 15, 0.8); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); padding: 15px 0; }
+        .navbar-brand img { height: 40px; }
+        .btn-primary-gradient { background: var(--gradient); border: none; color: white; padding: 10px 25px; border-radius: 12px; font-weight: 500; transition: all 0.3s; }
+        .btn-primary-gradient:hover { opacity: 0.9; transform: translateY(-2px); box-shadow: 0 10px 20px rgba(99, 102, 241, 0.3); color: white; }
+        .hero-section { padding: 100px 0 60px; position: relative; overflow: hidden; }
+        .hero-content h1 { font-size: 3.5rem; font-weight: 700; margin-bottom: 20px; background: linear-gradient(to right, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .hero-content p { color: var(--text-muted); font-size: 1.2rem; margin-bottom: 30px; line-height: 1.6; }
+        .hero-image { width: 100%; border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.5); border: 1px solid var(--border); transition: transform 0.3s; }
+        .hero-image:hover { transform: scale(1.02); }
+        .slider-section { padding: 80px 0; background: var(--bg-card); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+        .section-title { text-align: center; margin-bottom: 50px; }
+        .slider-card { background: var(--bg-dark); border: 1px solid var(--border); border-radius: 20px; padding: 30px; text-align: center; height: 100%; transition: all 0.3s; }
+        .slider-card:hover { border-color: var(--primary); transform: translateY(-5px); }
+        .slider-card img { width: 100%; height: 300px; object-fit: cover; border-radius: 15px; margin-bottom: 20px; }
+        .slider-card h3 { font-size: 1.5rem; margin-bottom: 10px; color: white; }
+        .slider-card p { color: var(--text-muted); }
+        footer { padding: 40px 0; text-align: center; border-top: 1px solid var(--border); color: var(--text-muted); }
+        @media (max-width: 768px) { .hero-content h1 { font-size: 2.5rem; } .hero-section { padding-top: 80px; text-align: center; } }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg fixed-top">
+        <div class="container">
+            <a class="navbar-brand" href="#"><img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688649/logo_fg9wjn.png" alt="Fontify"></a>
+            <div class="d-flex align-items-center gap-3">
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">🌐</button>
+                    <ul class="dropdown-menu dropdown-menu-dark">
+                        <li><a class="dropdown-item" href="#" id="langTrBtn">Türkçe</a></li>
+                        <li><a class="dropdown-item" href="#" id="langEnBtn">English</a></li>
+                    </ul>
+                </div>
+                <a href="login.html" id="authBtn" class="btn btn-primary-gradient"><span id="authBtnText" data-i18n="nav_login">Giriş Yap</span></a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero-section">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-6 hero-content">
+                    <h1 data-i18n="hero_title">El Yazınızı<br>Dijitale Taşıyın</h1>
+                    <p data-i18n="hero_desc">Ödevler, notlar ve formlar artık çok daha kolay.</p>
+                    <a href="login.html" class="btn btn-primary-gradient btn-lg px-5" data-i18n="hero_btn">Hemen Başla</a>
+                </div>
+                <div class="col-lg-6 mt-5 mt-lg-0">
+                    <img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688141/anaekran_nlig6j.png" alt="Fontify" class="hero-image">
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slider-section">
+        <div class="container">
+            <div class="section-title">
+                <h2 data-i18n="why_title">Neden Fontify?</h2>
+                <p class="text-muted" data-i18n="why_subtitle">Manuel yazma derdine son verin</p>
+            </div>
+            <div id="featureCarousel" class="carousel slide" data-bs-ride="carousel">
+                <div class="carousel-inner">
+                    <div class="carousel-item active">
+                        <div class="row justify-content-center"><div class="col-md-8"><div class="slider-card">
+                            <img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767689010/negative-feeling-work-concept_1_gmy6ja.jpg">
+                            <h3 data-i18n="slide1_title">Yazmaktan Yoruldunuz mu?</h3>
+                            <p data-i18n="slide1_desc">Saatlerce elle yazı yazmak artık tarih oldu.</p>
+                        </div></div></div>
+                    </div>
+                    <div class="carousel-item">
+                        <div class="row justify-content-center"><div class="col-md-8"><div class="slider-card">
+                            <img src="https://drive.google.com/uc?export=view&id=1C0yMU_quQWP3S1mQVwRchAZH7fGyIDa4">
+                            <h3 data-i18n="slide2_title">Gerçekçi El Yazısı</h3>
+                            <p data-i18n="slide2_desc">Sadece bir font değil, sizin el yazınız.</p>
+                        </div></div></div>
+                    </div>
+                    <div class="carousel-item">
+                        <div class="row justify-content-center"><div class="col-md-8"><div class="slider-card">
+                            <img src="https://drive.google.com/uc?export=view&id=1nhpFa9Kq_3F8QhUb07BzD1fHRbBT0U1m">
+                            <h3 data-i18n="slide3_title">Anında PDF Çıktısı</h3>
+                            <p data-i18n="slide3_desc">Belgeleri PDF formatında indirin.</p>
+                        </div></div></div>
+                    </div>
+                </div>
+                <button class="carousel-control-prev" type="button" data-bs-target="#featureCarousel" data-bs-slide="prev"><span class="carousel-control-prev-icon"></span></button>
+                <button class="carousel-control-next" type="button" data-bs-target="#featureCarousel" data-bs-slide="next"><span class="carousel-control-next-icon"></span></button>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p class="mb-1" data-i18n="footer_rights">Fontify Tüm Hakları Saklıdır &copy; 2026</p>
+            <p class="small mb-0">
+                <a href="destek.html" class="text-muted text-decoration-none me-3" data-i18n="nav_support">İletişim</a>
+                <a href="gizlilik.html" class="text-muted text-decoration-none" data-i18n="footer_privacy">Gizlilik</a>
+            </p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="i18n.js"></script> <!-- Çoklu Dil -->
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0",
+            authDomain: "elyazisiapp.firebaseapp.com",
+            projectId: "elyazisiapp",
+            storageBucket: "elyazisiapp.firebasestorage.app",
+            messagingSenderId: "823659862878",
+            appId: "1:823659862878:web:1615116c77d98f7f848dcf"
+        };
+        firebase.initializeApp(firebaseConfig);
+        
+        firebase.auth().onAuthStateChanged(user => {
+            const authBtnText = document.getElementById('authBtnText');
+            const authBtn = document.getElementById('authBtn');
+            const heroBtn = document.querySelector('.hero-content .btn');
+            
+            // i18n dosyasındaki keyleri kullanmak için dataset güncellemesi
+            if (user) {
+                // authBtnText.setAttribute('data-i18n', 'nav_editor'); // i18n.js otomatik çevirecek
+                authBtnText.textContent = translations[localStorage.getItem('fontify_lang')||'tr'].nav_editor;
+                authBtn.href = 'editor.html';
+                if(heroBtn) {
+                    heroBtn.textContent = translations[localStorage.getItem('fontify_lang')||'tr'].hero_btn; 
+                    heroBtn.href = 'editor.html';
+                }
+            } else {
+                authBtnText.textContent = translations[localStorage.getItem('fontify_lang')||'tr'].nav_login;
+                authBtn.href = 'login.html';
+            }
+        });
+    </script>
+</body>
+</html>

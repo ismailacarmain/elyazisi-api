@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giriş Yap - Fontify</title>
+    <meta name="robots" content="noindex">
+    
+    <!-- Cache Buster -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+
+    <link rel="icon" type="image/png" href="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688541/favicon-32x32_q5k9p1.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root { --primary: #6366f1; --bg-dark: #0a0a0f; --bg-card: #16161d; --text: #f8fafc; --text-muted: #cbd5e1; --border: #2d2d3a; }
+        body { font-family: 'Poppins', sans-serif; background: var(--bg-dark); color: var(--text); min-height: 100vh; display: flex; }
+        .login-page { min-height: 100vh; display: flex; width: 100%; }
+        
+        /* Sol Taraf - Görsel */
+        .login-slider-section { 
+            flex: 1; 
+            background: url('https://res.cloudinary.com/dfcv156wy/image/upload/v1767689010/negative-feeling-work-concept_1_gmy6ja.jpg') no-repeat center center; 
+            background-size: cover; 
+            position: relative;
+        }
+        .login-slider-section::before {
+            content: ''; position: absolute; inset: 0; background: rgba(10, 10, 15, 0.6); backdrop-filter: blur(2px);
+        }
+        .slider-content {
+            position: relative; z-index: 2; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 60px; color: white;
+        }
+        
+        /* Sağ Taraf - Form */
+        .login-form-section { width: 480px; display: flex; flex-direction: column; justify-content: center; padding: 60px; background: var(--bg-dark); border-left: 1px solid var(--border); }
+        .login-logo-img { height: 60px; width: auto; align-self: flex-start; }
+        .subtitle { color: var(--text-muted); margin-bottom: 40px; font-size: 1rem; }
+        .google-btn { display: flex; align-items: center; justify-content: center; gap: 12px; background: white; color: #1f2937; width: 100%; padding: 16px 24px; border: none; border-radius: 14px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .google-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 40px rgba(99, 102, 241, 0.3); }
+        .google-btn svg { width: 22px; height: 22px; }
+        .divider { display: flex; align-items: center; margin: 30px 0; color: var(--text-muted); font-size: 0.85rem; }
+        .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+        .divider span { padding: 0 15px; }
+        .features-list { list-style: none; padding: 0; }
+        .features-list li { display: flex; align-items: center; gap: 12px; padding: 12px 0; color: var(--text-muted); font-size: 0.9rem; }
+        .features-list li i { color: var(--primary); font-size: 1.2rem; }
+        .login-footer { margin-top: auto; padding-top: 40px; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+        .loading-overlay { position: fixed; inset: 0; background: var(--bg-dark); display: flex; justify-content: center; align-items: center; z-index: 9999; }
+        .loading-overlay.hidden { display: none; }
+        .spinner { width: 50px; height: 50px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 992px) { .login-slider-section { display: none; } .login-form-section { width: 100%; padding: 40px 30px; } }
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay" class="loading-overlay"><div class="spinner"></div></div>
+
+    <div class="login-page">
+        <!-- Sol Taraf (Artık Iframe Değil, Şık Görsel) -->
+        <div class="login-slider-section d-none d-lg-flex">
+            <div class="slider-content">
+                <h1 class="display-4 fw-bold mb-3" data-i18n="hero_title">El Yazınızı<br>Dijitale Taşıyın</h1>
+                <p class="lead" data-i18n="hero_desc">Ödevler, notlar ve formlar artık çok daha kolay.</p>
+            </div>
+        </div>
+        
+        <!-- Sağ Taraf -->
+        <div class="login-form-section">
+            <img src="https://res.cloudinary.com/dfcv156wy/image/upload/v1767688649/logo_fg9wjn.png" alt="Fontify" class="login-logo-img mb-4">
+            <h1>Fontify</h1>
+            <p class="subtitle" data-i18n="login_subtitle">Kendi el yazınızla dijital belgeler oluşturun</p>
+            
+            <button id="googleLoginBtn" class="google-btn">
+                <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.63 1.22 9.14 3.59l6.86-6.86C35.84 2.37 30.31 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6.19c4.51-4.18 7.09-10.36 7.09-17.84z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6.19c-2.14 1.44-4.88 2.27-8.16 2.27-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                <span data-i18n="btn_google">Google ile Giriş Yap</span>
+            </button>
+            
+            <div class="divider"><span data-i18n="features">Özellikler</span></div>
+            <ul class="features-list">
+                <li><i class="bi bi-check-circle-fill"></i> <span data-i18n="feat_1">Kendi el yazınızı dijitalleştirin</span></li>
+                <li><i class="bi bi-check-circle-fill"></i> <span data-i18n="feat_2">PDF ve PNG olarak indirin</span></li>
+                <li><i class="bi bi-check-circle-fill"></i> <span data-i18n="feat_3">Çizgili, kareli veya düz kağıt seçin</span></li>
+                <li><i class="bi bi-check-circle-fill"></i> <span data-i18n="feat_4">Fontlarınızı paylaşın</span></li>
+            </ul>
+            
+            <div class="login-footer">
+                <p class="mb-1" data-i18n="footer_rights">Fontify © 2026</p>
+                <p class="small mb-0"><a href="destek.html" class="text-muted text-decoration-none" data-i18n="nav_support">İletişim</a></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="i18n.js"></script>
+    <script>
+        const firebaseConfig = { apiKey: "AIzaSyCc2VBYMe1ts8XjYE_YLMkG1rjf3NaD4Z0", authDomain: "elyazisiapp.firebaseapp.com", projectId: "elyazisiapp" };
+        firebase.initializeApp(firebaseConfig);
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        
+        // Zaten giriş yapmışsa yönlendir (Geri tuşu koruması için replace kullanıyoruz)
+        firebase.auth().onAuthStateChanged(user => {
+            if (user) {
+                window.location.replace('editor.html');
+            } else {
+                loadingOverlay.classList.add('hidden');
+            }
+        });
+
+        // Geri tuşuyla gelindiğinde sayfayı yenile (Cache sorununu çözer)
+        window.addEventListener('pageshow', function(event) {
+            if (event.persisted) {
+                window.location.reload();
+            }
+        });
+
+        document.getElementById('googleLoginBtn').addEventListener('click', async () => {
+            try {
+                loadingOverlay.classList.remove('hidden');
+                const provider = new firebase.auth.GoogleAuthProvider();
+                provider.setCustomParameters({ prompt: 'select_account' });
+                await firebase.auth().signInWithPopup(provider);
+                // Başarılı olursa onAuthStateChanged yakalar ve yönlendirir
+            } catch (e) {
+                loadingOverlay.classList.add('hidden');
+                alert(e.message);
+            }
+        });
+    </script>
+</body>
+</html>

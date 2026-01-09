@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+Allow: /index.html
+Allow: /login.html
+Allow: /destek.html
+Disallow: /editor.html
+Disallow: /ekle.html
+Disallow: /settings.html
+Disallow: /fonts.html
+Disallow: /tara.html
+Disallow: /mobil_yukle.html
+
+Sitemap: https://fontify.online/sitemap.xml
