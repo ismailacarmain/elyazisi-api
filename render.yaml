@@ -1,22 +1,6 @@
 services:
   - type: web
     name: elyazisi-api
-    env: python
-    region: frankfurt
+    env: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 app:app
     healthCheckPath: /health
-    
-    envVars:
-      - key: FLASK_ENV
-        value: production
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: PORT
-        value: 10000
-      # Bu değerleri Render Dashboard'dan manuel ekleyin:
-      # - FIREBASE_CREDENTIALS (JSON, tek satır)
-      # - RECAPTCHA_SECRET_KEY (string)
-    
-    autoDeploy: true
