@@ -5,7 +5,7 @@ import numpy as np
 import os
 import base64
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 import json
 import traceback
 import io
@@ -15,17 +15,19 @@ import uuid
 import time
 from pdf2image import convert_from_bytes
 from PIL import Image as PILImage
+import requests
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
+bucket = None
 connected_project_id = "BILINMIYOR"
 init_error = None
 
 def init_firebase():
-    global db, init_error, connected_project_id
+    global db, bucket, init_error, connected_project_id
     if db is not None: return db
     try:
         cred = None
@@ -61,9 +63,16 @@ def init_firebase():
                     break
         
         if cred:
-            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: 
+                # Storage Bucket adını project-id'den türet (Varsayılan)
+                bucket_name = f"{connected_project_id}.appspot.com"
+                firebase_admin.initialize_app(cred, {
+                    'storageBucket': bucket_name
+                })
+            
             db = firestore.client()
-            print(f"Firestore BAĞLANDI: {connected_project_id}")
+            bucket = storage.bucket()
+            print(f"Firestore ve Storage BAĞLANDI: {connected_project_id} -> {bucket.name}")
         else:
             print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
@@ -150,6 +159,7 @@ class HarfSistemi:
         if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5,5), 0)
+        # Scale 10 için BlockSize 51
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 10)
         tight = self.crop_tight(thresh)
         if tight is None: return None
@@ -205,6 +215,7 @@ class HarfSistemi:
         if missing: return None, f"Markerlar eksik: {missing}"
             
         src = np.float32(src_points)
+        # YÜKSEK KALİTE (Scale 10)
         scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
         dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
         M = cv2.getPerspectiveTransform(src, dst)
@@ -228,12 +239,25 @@ class HarfSistemi:
                 
                 processed_img = self.process_roi(roi)
                 if processed_img is not None:
+                    # PNG bytes döndür (Base64 DEĞİL)
                     _, buffer = cv2.imencode(".png", processed_img)
-                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
-                    page_results[self.char_list[idx]] = b64_str
+                    page_results[self.char_list[idx]] = buffer.tobytes()
                     detected_count += 1
                     
         return {'harfler': page_results, 'detected': detected_count, 'section_id': bid, 'total_in_section': min(60, len(self.char_list)-start_idx)}, None
+
+# --- YARDIMCI: STORAGE UPLOAD ---
+def upload_image_to_storage(img_bytes, path, content_type='image/png'):
+    global bucket
+    try:
+        if bucket is None: return None
+        blob = bucket.blob(path)
+        blob.upload_from_string(img_bytes, content_type=content_type)
+        blob.make_public()
+        return blob.public_url
+    except Exception as e:
+        print(f"Upload Hatası ({path}): {e}")
+        return None
 
 # --- BACKGROUND WORKER ---
 def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
@@ -244,17 +268,15 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
     font_id = f"{user_id}_{font_name.replace(' ', '_')}"
     
     try:
-        # 1. PDF'i Sayfalara Çevir
+        # 1. PDF'i Sayfalara Çevir (300 DPI)
         op_ref.update({'status': 'processing', 'message': 'PDF sayfalara dönüştürülüyor...', 'progress': 5})
         images = convert_from_bytes(file_bytes, dpi=300)
         
         # 2. Sayfaları Böl (Üst/Alt)
         sections_to_process = []
         for i, pil_img in enumerate(images):
-            # PIL Image -> Numpy
             open_cv_image = np.array(pil_img) 
-            # RGB to BGR 
-            open_cv_image = open_cv_image[:, :, ::-1].copy() 
+            open_cv_image = open_cv_image[:, :, ::-1].copy() # RGB to BGR
             
             h, w, _ = open_cv_image.shape
             half_h = h // 2
@@ -262,11 +284,10 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             top_half = open_cv_image[0:half_h, :]
             bottom_half = open_cv_image[half_h:h, :]
             
-            # Bölüm ID'leri (0, 1, 2, 3...)
             sections_to_process.append({'img': top_half, 'id': i*2})
             sections_to_process.append({'img': bottom_half, 'id': i*2+1})
 
-        # 3. Sırayla İşle
+        # 3. Sırayla İşle ve Yükle
         harf_sistemi = HarfSistemi(repetition=variation_count)
         total_sections = len(sections_to_process)
         total_processed_chars = 0
@@ -277,7 +298,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             current_progress = 10 + int((idx / total_sections) * 80)
             op_ref.update({
                 'progress': current_progress, 
-                'message': f'Bölüm {idx+1}/{total_sections} işleniyor...', 
+                'message': f'Bölüm {idx+1}/{total_sections} işleniyor ve yükleniyor...', 
                 'current_section': idx + 1,
                 'total_sections': total_sections
             })
@@ -285,13 +306,19 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             res, err = harf_sistemi.process_single_page(section['img'], forced_section_id=section['id'])
             
             if not err:
-                all_results.update(res['harfler'])
+                # Elde edilen byte verilerini Storage'a yükle
+                for char_name, img_bytes in res['harfler'].items():
+                    storage_path = f"users/{user_id}/fonts/{font_id}/{char_name}.png"
+                    public_url = upload_image_to_storage(img_bytes, storage_path)
+                    if public_url:
+                        all_results[char_name] = public_url
+                
                 total_processed_chars += res['detected']
                 completed_sections.append(res['section_id'])
             else:
                 print(f"Bölüm {section['id']} Hatası: {err}")
 
-        # 4. Kaydet
+        # 4. Kaydet (URL'leri)
         op_ref.update({'status': 'saving', 'message': 'Veritabanına kaydediliyor...', 'progress': 95})
         
         d_ref = database.collection('fonts').document(font_id)
@@ -370,7 +397,6 @@ def upload_form():
                 'type': 'pdf_upload'
             })
 
-        # Arka planda başlat
         thread = threading.Thread(target=process_pdf_job, args=(job_id, user_id, font_name, variation_count, file_bytes))
         thread.start()
 
@@ -379,7 +405,6 @@ def upload_form():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# Eski process_single route'u (Mobil için) korunuyor...
 @app.route('/process_single', methods=['POST'])
 def process_single():
     global init_error
@@ -399,19 +424,27 @@ def process_single():
 
         res, err = current_sistem.process_single_page(img)
         if err: return jsonify({'success': False, 'message': err}), 400
-
-        if db:
-            fid = f"{u_id}_{f_name.replace(' ', '_')}"
+        
+        # Storage Upload (Sync)
+        uploaded_results = {}
+        fid = f"{u_id}_{f_name.replace(' ', '_')}"
+        
+        if db and bucket:
+            for char_name, img_bytes in res['harfler'].items():
+                storage_path = f"users/{u_id}/fonts/{fid}/{char_name}.png"
+                public_url = upload_image_to_storage(img_bytes, storage_path)
+                if public_url:
+                    uploaded_results[char_name] = public_url
+            
             d_ref = db.collection('fonts').document(fid)
             u_ref = db.collection('users').document(u_id).collection('fonts').document(fid)
             
             doc = d_ref.get()
-            new_harfler = res['harfler']
             new_section = res['section_id']
             
             if not doc.exists:
                 payload = {
-                    'harfler': new_harfler, 'harf_sayisi': len(new_harfler), 
+                    'harfler': uploaded_results, 'harf_sayisi': len(uploaded_results), 
                     'sections_completed': [new_section],
                     'owner_id': u_id, 'user_id': u_id, 'font_name': f_name, 'font_id': fid, 
                     'repetition': repetition
@@ -419,7 +452,7 @@ def process_single():
                 d_ref.set(payload); u_ref.set(payload)
             else:
                 curr = doc.to_dict()
-                h = curr.get('harfler', {}); h.update(new_harfler)
+                h = curr.get('harfler', {}); h.update(uploaded_results)
                 s = curr.get('sections_completed', []); 
                 if new_section not in s: s.append(new_section)
                 d_ref.update({'harfler': h, 'harf_sayisi': len(h), 'sections_completed': s})
@@ -428,9 +461,6 @@ def process_single():
         return jsonify({'success': True, 'section_id': res['section_id'], 'detected_chars': res['detected']})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
-
-# Diğer route'lar (list_fonts, download vs.) aynı kalacak, yer kaplamaması için kısaltıldı ama kodun bütünlüğü korundu.
-# ... (list_fonts, add_to_library, get_assets, download fonksiyonları buraya eklenecek - mevcut yapıyı koruyarak)
 
 @app.route('/api/list_fonts')
 def list_fonts():
@@ -479,10 +509,11 @@ def get_assets():
             doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
         if doc.exists:
             harfler_data = doc.to_dict().get('harfler', {})
-            for key, b64 in harfler_data.items():
+            for key, val in harfler_data.items():
                 base_key = key.rsplit('_', 1)[0] if '_' in key else key
                 if base_key not in assets: assets[base_key] = []
-                assets[base_key].append(b64)
+                # val artık URL veya Base64 olabilir. Frontend bunu ayırt ediyor.
+                assets[base_key].append(val)
             return jsonify({"success": True, "assets": assets, "source": "firebase"})
     return jsonify({"success": True, "assets": {}, "source": "none"}), 200
 
@@ -508,11 +539,19 @@ def download():
             
             if doc.exists:
                 raw_harfler = doc.to_dict().get('harfler', {})
-                for key, b64_data in raw_harfler.items():
+                for key, val in raw_harfler.items():
                     try:
-                        if "," in b64_data: b64_data = b64_data.split(",")[1]
-                        img_data = base64.b64decode(b64_data)
-                        img = core_generator.Image.open(io.BytesIO(img_data)).convert("RGBA")
+                        img = None
+                        if val.startswith('http'):
+                            # URL'den indir
+                            resp = requests.get(val)
+                            img = core_generator.Image.open(io.BytesIO(resp.content)).convert("RGBA")
+                        else:
+                            # Base64
+                            b64_data = val.split(",")[1] if "," in val else val
+                            img_data = base64.b64decode(b64_data)
+                            img = core_generator.Image.open(io.BytesIO(img_data)).convert("RGBA")
+                        
                         parts = key.rsplit('_', 1)
                         base_key = parts[0] if len(parts) > 1 and parts[1].isdigit() else key
                         if base_key not in active_harfler: active_harfler[base_key] = []
