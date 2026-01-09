@@ -1,30 +1,24 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
-# Set working directory
+# Sistem güncellemelerini yap ve sadece gerekli olan poppler'ı kur
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends poppler-utils && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    poppler-utils \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first (for caching)
+# Bağımlılıkları kopyala ve kur
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Proje dosyalarını kopyala
 COPY . .
 
-# Expose port
+# Portu ayarla (Render için $PORT çevresel değişkenini kullanır)
+ENV PORT=10000
 EXPOSE 10000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:10000/health', timeout=5)"
-
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "2", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+# Gunicorn ile başlat
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 0 app:app"]
