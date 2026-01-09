@@ -189,7 +189,11 @@ def init_firebase():
         if cred:
             if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            print(f"Firestore BAĞLANDI (Secure Mod): {connected_project_id}")
+            # Proje ID'yi devasa bir logla göster ki kaçırmayalım
+            print("\n" + "="*50)
+            print(f"🔥 FIREBASE BAĞLANDI: {connected_project_id}")
+            print("="*50 + "\n")
+            logger.info(f"Firestore connected to project: {connected_project_id}")
         else:
             print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
@@ -482,11 +486,10 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
                 
             if res and res['harfler']:
                 batch = database.batch()
-                for char_name, b_64_bytes in res['harfler'].items():
-                    # Base64 string'e çevirerek kaydet
-                    b64_str = base64.b64encode(b_64_bytes).decode('utf-8')
+                for char_name, b_bytes in res['harfler'].items():
+                    # Orijinal sistemdeki gibi doğrudan bytes (Blob) olarak kaydet
                     char_ref = d_ref.collection('chars').document(char_name)
-                    batch.set(char_ref, {'data': b64_str})
+                    batch.set(char_ref, {'data': b_bytes})
                 batch.commit()
                 total_processed_chars += res['detected']
                 all_completed_sections.append(res['section_id'])
