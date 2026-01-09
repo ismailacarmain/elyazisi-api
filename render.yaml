@@ -1,25 +1,17 @@
 services:
   - type: web
     name: elyazisi-api
-    env: docker
+    env: python
+    region: frankfurt
     plan: free
-    region: frankfurt  # Türkiye'ye en yakın
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app
     healthCheckPath: /health
     
-    # Environment Variables
-    # NOT: Secret değerleri Render Dashboard'dan ekleyin!
     envVars:
       - key: FLASK_ENV
         value: production
-      - key: PORT
-        value: 10000
-      # Bu iki değer Render Dashboard'dan "Secret" olarak eklenecek:
-      # - RECAPTCHA_SECRET_KEY
-      # - FIREBASE_CREDENTIALS
+      - key: PYTHON_VERSION
+        value: 3.11.0
     
-    # Docker configuration
-    dockerfilePath: ./Dockerfile
-    dockerContext: ./
-    
-    # Auto-deploy
     autoDeploy: true
