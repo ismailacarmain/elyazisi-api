@@ -1,11 +1,11 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, redirect
 from flask_cors import CORS
 import cv2
 import numpy as np
 import os
 import base64
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 import json
 import traceback
 import io
@@ -13,32 +13,128 @@ import core_generator as core_generator
 import threading
 import uuid
 import time
+import re
+import logging
+from urllib.parse import urlparse
 from pdf2image import convert_from_bytes
 from PIL import Image as PILImage
 import requests
+from functools import wraps
+
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+ALLOWED_IMAGE_DOMAINS = [
+    'cloudinary.com',
+    'firebasestorage.googleapis.com',
+    'res.cloudinary.com'
+]
+
+def is_safe_url(url):
+    """URL güvenlik kontrolü"""
+    try:
+        parsed = urlparse(url)
+        
+        # Sadece HTTPS
+        if parsed.scheme != 'https':
+            return False
+        
+        # Sadece izin verilen domainler
+        if not any(parsed.netloc.endswith(domain) for domain in ALLOWED_IMAGE_DOMAINS):
+            return False
+        
+        # Localhost ve private IP'ler yasak
+        if 'localhost' in parsed.netloc or '127.0.0.1' in parsed.netloc:
+            return False
+        
+        return True
+    except:
+        return False
+
+def validate_font_name(name):
+    """Font adını doğrula"""
+    if not name or not isinstance(name, str):
+        raise ValueError("Font name required")
+    
+    name = name.strip()
+    
+    if len(name) < 3 or len(name) > 50:
+        raise ValueError("Font name must be 3-50 characters")
+    
+    # XSS ve path traversal koruması
+    if re.search(r'[<>]', name):
+        raise ValueError("Font name contains invalid characters")
+    
+    if '..' in name or '/' in name or '\\' in name:
+        raise ValueError("Font name contains invalid characters")
+    
+    return name
+
+def validate_base64_image(b64_string, max_size_mb=5):
+    """Base64 image doğrula"""
+    try:
+        if not b64_string or not isinstance(b64_string, str):
+            raise ValueError("Invalid image data")
+        
+        # Data URL prefix'ini kaldır
+        if ',' in b64_string:
+            b64_string = b64_string.split(',')[1]
+        
+        # Decode
+        img_data = base64.b64decode(b64_string, validate=True)
+        
+        # Boyut kontrolü
+        size_mb = len(img_data) / (1024 * 1024)
+        if size_mb > max_size_mb:
+            raise ValueError(f"Image too large: {size_mb:.1f}MB (max {max_size_mb}MB)")
+        
+        # Format kontrolü
+        img = PILImage.open(io.BytesIO(img_data))
+        if img.format not in ['JPEG', 'PNG', 'JPG']:
+            raise ValueError(f"Invalid format: {img.format}")
+        
+        # Dimension kontrolü
+        if img.width > 4000 or img.height > 4000:
+            raise ValueError("Image dimensions too large")
+        
+        return b64_string
+    except Exception as e:
+        raise ValueError(f"Invalid image: {str(e)}")
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
-# CORS Sıkılaştırması (Gevşetildi - Debug için)
-CORS(app) # resources={r"/*": {"origins": "*"}})
+
+# 1. GÜVENLİK: CORS Sıkılaştırması (Production)
+CORS(app, resources={r"/api/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com"]}}, r"/process_single": {"origins": ["https://fontify.online"]}})
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
 connected_project_id = "BILINMIYOR"
 init_error = None
 
-# --- GÜVENLİK (reCAPTCHA) ---
-RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY', "6LfEIUUsAAAAANamEZ_p_9PxSgx4hckW-9n9wI9e")
+# 2. GÜVENLİK: Secret Key Env Var (Koddan Silindi)
+RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 def verify_recaptcha(token):
-    if not token: 
-        print("reCAPTCHA Token yok!")
-        # return False # Production'da False olmalı
-        return True # Debug için geçici izin
+    # 3. GÜVENLİK: Bypass Kaldırıldı
+    if not token or not RECAPTCHA_SECRET_KEY: 
+        print("reCAPTCHA Token veya Secret yok!")
+        return False
     try:
         url = "https://www.google.com/recaptcha/api/siteverify"
         data = {'secret': RECAPTCHA_SECRET_KEY, 'response': token}
         res = requests.post(url, data=data)
         result = res.json()
+        if not result.get("success"):
+            logger.warning(f"reCAPTCHA failed for IP: {request.remote_addr}")
+            return False
         return result.get("success", False) and result.get("score", 0) >= 0.5
     except Exception as e:
         print(f"reCAPTCHA Hatası: {e}")
@@ -55,23 +151,7 @@ def init_firebase():
             cred = credentials.Certificate(cred_dict)
             connected_project_id = cred_dict.get('project_id', 'EnvJson')
         
-        if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
-            try:
-                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
-                cred_dict = {
-                    "type": "service_account",
-                    "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
-                    "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID'),
-                    "private_key": private_key,
-                    "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL'),
-                    "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }
-                cred = credentials.Certificate(cred_dict)
-                connected_project_id = cred_dict.get('project_id')
-            except Exception as e: init_error = f"Env Vars Hatası: {e}"
-
+        # Yerel dosya kontrolü (Sadece development için)
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
@@ -83,7 +163,7 @@ def init_firebase():
         if cred:
             if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            print(f"Firestore BAĞLANDI (Limitsiz Mod): {connected_project_id}")
+            print(f"Firestore BAĞLANDI (Secure Mod): {connected_project_id}")
         else:
             print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
@@ -94,49 +174,88 @@ def init_firebase():
 
 init_firebase()
 
+@app.before_request
+def before_request():
+    """HTTPS zorunluluğu (production)"""
+    if not request.is_secure and not request.headers.get('X-Forwarded-Proto') == 'https':
+        if not app.debug and not request.host.startswith('localhost'):
+            from flask import redirect
+            return redirect(request.url.replace('http://', 'https://'), code=301)
+
+@app.after_request
+def set_secure_headers(response):
+    """Güvenlik header'ları ekle"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    
+    if not app.debug:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https: blob:; "
+        "font-src 'self' https://cdn.jsdelivr.net; "
+        "connect-src 'self' https://fontify.online https://elyazisi-api.onrender.com https://firestore.googleapis.com;"
+    )
+    
+    return response
+
+# 4. GÜVENLİK: Auth Token Middleware
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        id_token = None
+        if 'Authorization' in request.headers:
+            id_token = request.headers['Authorization'].split(' ').pop()
+        
+        if not id_token:
+            return jsonify({'success': False, 'message': 'Token eksik!'}), 401
+            
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            request.uid = decoded_token['uid'] # Kullanıcı ID'sini request'e ekle
+        except Exception as e:
+            return jsonify({'success': False, 'message': 'Geçersiz Token'}), 401
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
 # --- KREDİ SİSTEMİ ---
 def check_and_deduct_credit(user_id):
     try:
         if not db: return False, "Veritabanı hatası"
         user_ref = db.collection('users').document(user_id)
         doc = user_ref.get()
-        
-        current_credits = 10 # Varsayılan
+        current_credits = 10 
         
         if doc.exists:
             data = doc.to_dict()
-            val = data.get('credits')
-            if val is not None: current_credits = int(val)
-            else: 
-                # Doküman var ama kredi alanı yok, ekleyelim
-                user_ref.set({'credits': 10}, merge=True)
+            current_credits = data.get('credits', 10)
         else:
-            # Kullanıcı dokümanı yoksa oluştur (İlk giriş)
             user_ref.set({'credits': 10}, merge=True)
             
         if current_credits <= 0:
-            return False, "Yetersiz kredi! Yeni font oluşturmak için hakkınız kalmadı."
+            return False, "Yetersiz kredi!"
             
-        # Krediyi düş
         user_ref.update({'credits': firestore.Increment(-1)})
         return True, current_credits - 1
     except Exception as e:
-        print(f"Kredi Hatası: {e}")
         return False, str(e)
 
 @app.route('/api/get_user_credits')
 def get_user_credits():
+    # Public okuma yapılabilir veya token eklenebilir. Şimdilik açık kalsın.
     user_id = request.args.get('user_id')
     if not user_id or not db: return jsonify({'credits': 0})
     try:
         doc = db.collection('users').document(user_id).get()
-        if doc.exists:
-            val = doc.to_dict().get('credits')
-            return jsonify({'credits': int(val) if val is not None else 10})
-        return jsonify({'credits': 10}) # Yeni kullanıcı
+        return jsonify({'credits': doc.to_dict().get('credits', 10) if doc.exists else 10})
     except: return jsonify({'credits': 0})
 
-# --- HARF TARAMA MOTORU ---
+# --- HARF TARAMA MOTORU (Aynı Kalıyor) ---
 class HarfSistemi:
     def __init__(self, repetition=3):
         self.repetition = repetition
@@ -150,58 +269,30 @@ class HarfSistemi:
         symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺#"
         symbols_str = symbols_str.replace(" ", "")
         
-        tr_map = {
-            'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu',
-            'Ç': 'cc', 'Ğ': 'gg', 'I': 'ii', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'
-        }
-        
-        sym_map = {
-            ".": "nokta", ",": "virgul", ":": "ikiknokta", ";": "noktalivirgul", 
-            "?": "soru", "!": "unlem", "-": "tire", "_": "alt_tire",
-            "\"": "tirnak", "'": "tektirnak", 
-            "(": "parantezac", ")": "parantezkapama",
-            "[": "koseli_ac", "]": "koseli_kapa",
-            "{": "suslu_ac", "}": "suslu_kapa",
-            "/": "slash", "\\": "backslas", "|": "pipe",
-            "+": "arti", "*": "carpi", "=": "esit",
-            "<": "kucuktur", ">": "buyuktur",
-            "%": "yuzde", "^": "sapka", "~": "yaklasik",
-            "@": "at", "$": "dolar", "€": "euro", "₺": "tl",
-            "&": "ampersand", "#": "diyez"
-        }
+        tr_map = {'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu', 'Ç': 'cc', 'Ğ': 'gg', 'I': 'ii', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'}
+        sym_map = {'.': 'nokta', ',': 'virgul', ':': 'ikiknokta', ';': 'noktalivirgul', '?': 'soru', '!': 'unlem', '-': 'tire', '_': 'alt_tire', '"': 'tirnak', "'": 'tektirnak', '(': 'parantezac', ')': 'parantezkapama', '[': 'koseli_ac', ']': 'koseli_kapa', '{': 'suslu_ac', '}': 'suslu_kapa', '/': 'slash', '\\': 'backslas', '|': 'pipe', '+': 'arti', '*': 'carpi', '=': 'esit', '<': 'kucuktur', '>': 'buyuktur', '%': 'yuzde', '^': 'sapka', '~': 'yaklasik', '@': 'at', '$': 'dolar', '€': 'euro', '₺': 'tl', '&': 'ampersand', '#': 'diyez'}
 
         for char in lowers:
             base = tr_map.get(char, char)
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"kucuk_{base}_{i}")
-        
+            for i in range(1, self.repetition + 1): self.char_list.append(f"kucuk_{base}_{i}")
         for char in uppers:
             base = tr_map.get(char, char.lower())
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"buyuk_{base}_{i}")
-        
+            for i in range(1, self.repetition + 1): self.char_list.append(f"buyuk_{base}_{i}")
         for char in digits:
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"rakam_{char}_{i}")
+            for i in range(1, self.repetition + 1): self.char_list.append(f"rakam_{char}_{i}")
         
-        seen = set()
-        unique_symbols = ""
+        seen = set(); unique_symbols = ""
         for char in symbols_str:
-            if char not in seen:
-                unique_symbols += char
-                seen.add(char)
-
+            if char not in seen: unique_symbols += char; seen.add(char)
         for char in unique_symbols:
             safe = sym_map.get(char, f"sembol_{ord(char)}")
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"ozel_{safe}_{i}")
+            for i in range(1, self.repetition + 1): self.char_list.append(f"ozel_{safe}_{i}")
 
     def crop_tight(self, binary_img):
         coords = cv2.findNonZero(binary_img)
         if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
-        if w < 2 or h < 2: return None
-        return binary_img[y:y+h, x:x+w]
+        return binary_img[y:y+h, x:x+w] if w >= 2 and h >= 2 else None
 
     def process_roi(self, roi):
         if roi.size == 0: return None
@@ -211,8 +302,7 @@ class HarfSistemi:
         tight = self.crop_tight(thresh)
         if tight is None: return None
         h, w = tight.shape
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        rgba[:, :, 3] = tight
+        rgba = np.zeros((h, w, 4), dtype=np.uint8); rgba[:, :, 3] = tight
         return rgba
 
     def process_single_page(self, img, forced_section_id=None):
@@ -225,7 +315,6 @@ class HarfSistemi:
         
         detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
         corners, ids, _ = detector.detectMarkers(gray_full)
-        
         if ids is None or len(ids) < 4:
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
             enhanced = clahe.apply(gray_full)
@@ -236,8 +325,6 @@ class HarfSistemi:
         
         bid = forced_section_id if forced_section_id is not None else int(min(ids)) // 4
         expected = [(bid * 4 + k) % 50 for k in range(4)]
-        
-        src_points = []
         found_centers = {ids[idx]: np.mean(corners[idx][0], axis=0) for idx in range(len(ids))}
         missing = [target for target in expected if target not in found_centers]
         if missing: return None, f"Markerlar eksik: {missing}"
@@ -245,8 +332,8 @@ class HarfSistemi:
         src = np.float32([found_centers[target] for target in expected])
         scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
         dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
-        matrix = cv2.getPerspectiveTransform(src, dst)
-        warped = cv2.warpPerspective(img, matrix, (sw, sh))
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, M, (sw, sh))
         
         b_px = 150; sx = int((sw - 10*b_px)/2); sy = int((sh - 6*b_px)/2)
         start_idx = bid * 60; page_results = {}; detected_count = 0
@@ -260,14 +347,14 @@ class HarfSistemi:
                 processed_img = self.process_roi(roi)
                 if processed_img is not None:
                     _, buffer = cv2.imencode(".png", processed_img)
-                    b64_str = base64.b64encode(buffer).decode('utf-8')
-                    page_results[self.char_list[idx]] = b64_str
+                    page_results[self.char_list[idx]] = buffer.tobytes()
                     detected_count += 1
-                    
         return {'harfler': page_results, 'detected': detected_count, 'section_id': bid}, None
 
 # --- BACKGROUND WORKER ---
 def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
+    # Not: Background thread olduğu için request.uid kullanamayız, user_id parametresine güveniyoruz.
+    # Ancak upload_form'da user_id token'dan alındığı için güvenli.
     database = init_firebase()
     if not database: return
     op_ref = database.collection('operations').document(job_id)
@@ -297,14 +384,13 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             init_payload = {
                 'font_name': font_name, 'font_id': font_id, 'owner_id': user_id, 'user_id': user_id,
                 'repetition': variation_count, 'created_at': firestore.SERVER_TIMESTAMP,
-                'harf_sayisi': 0, 'sections_completed': [],
-                'is_public': True # Public
+                'harf_sayisi': 0, 'sections_completed': [], 'is_public': True
             }
             d_ref.set(init_payload); u_ref.set(init_payload)
 
         for idx, section in enumerate(sections_to_process):
             op_ref.update({
-                'progress': 10 + int((idx / total_sections) * 80), 
+                'progress': 10 + int((idx / total_sections) * 80),
                 'message': f'Bölüm {idx+1}/{total_sections} işleniyor...', 
                 'current_section': idx + 1, 'total_sections': total_sections
             })
@@ -316,7 +402,6 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
                     char_ref = d_ref.collection('chars').document(char_name)
                     batch.set(char_ref, {'data': b64})
                 batch.commit()
-                
                 total_processed_chars += res['detected']
                 all_completed_sections.append(res['section_id'])
 
@@ -325,16 +410,10 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         for s in all_completed_sections:
             if s not in old_sections: old_sections.append(s)
         
-        final_meta = {
-            'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars,
-            'sections_completed': old_sections
-        }
+        final_meta = {'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars, 'sections_completed': old_sections}
         d_ref.update(final_meta); u_ref.update(final_meta)
 
-        op_ref.update({
-            'status': 'completed', 'progress': 100, 'message': 'İşlem tamamlandı!',
-            'processed_chars': total_processed_chars, 'font_id': font_id
-        })
+        op_ref.update({'status': 'completed', 'progress': 100, 'message': 'İşlem tamamlandı!', 'processed_chars': total_processed_chars, 'font_id': font_id})
     except Exception as e:
         traceback.print_exc()
         op_ref.update({'status': 'error', 'error': str(e), 'progress': 0})
@@ -342,31 +421,73 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
 # --- WEB ROTALARI ---
 
 @app.route('/')
-def index():
-    return render_template('index.html')
+def index(): return render_template('index.html')
 
 @app.route('/mobil_yukle.html')
-def mobil_page():
-    return send_file('web/mobil_yukle.html')
+def mobil_page(): return send_file('web/mobil_yukle.html')
+
+# Dosya Güvenlik Ayarları
+ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
+MAX_FILE_SIZE = 10 * 1024 * 1024 # 10 MB
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/api/upload_form', methods=['POST'])
+@login_required
 def upload_form():
     try:
-        # Güvenlik Kontrolü
-        token = request.form.get('recaptcha_token')
-        if not verify_recaptcha(token):
+        user_id = request.uid
+        
+        # 1. reCAPTCHA Kontrolü
+        if not verify_recaptcha(request.form.get('recaptcha_token')):
+            logger.warning(f"reCAPTCHA failure - User: {user_id}, IP: {request.remote_addr}")
             return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
-        user_id = request.form.get('user_id')
+        # 2. Dosya Kontrolü
+        file = request.files.get('file')
+        if not file or not file.filename:
+            return jsonify({'success': False, 'message': 'Dosya yüklenmedi.'}), 400
+            
+        if not allowed_file(file.filename):
+            return jsonify({'success': False, 'message': 'Geçersiz dosya türü. Sadece PDF, JPG, PNG.'}), 400
+            
+        # Dosya boyutu kontrolü (Flask, file.read() yapmadan content-length'e bakabilir ama kesin çözüm okumaktır)
+        file.seek(0, os.SEEK_END)
+        file_length = file.tell()
+        file.seek(0)
         
+        if file_length > MAX_FILE_SIZE:
+            return jsonify({'success': False, 'message': 'Dosya çok büyük (Max 10MB).'}), 400
+
+        # 3. Kredi ve Spam Kontrolü
+        # Spam Kontrolü: Son işlemden bu yana 60 saniye geçti mi?
+        user_ref = db.collection('users').document(user_id)
+        user_doc = user_ref.get()
+        
+        if user_doc.exists:
+            last_upload = user_doc.to_dict().get('last_upload_time')
+            if last_upload:
+                # Firestore Timestamp to datetime
+                last_time = last_upload.timestamp()
+                if (time.time() - last_time) < 60:
+                    logger.warning(f"Rate limit hit - User: {user_id}, IP: {request.remote_addr}")
+                    return jsonify({'success': False, 'message': 'Çok hızlı işlem yapıyorsunuz. Lütfen 1 dakika bekleyin.'}), 429
+
         # Kredi Kontrolü
         allowed, msg = check_and_deduct_credit(user_id)
         if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
-        font_name = request.form.get('font_name')
+        # İşlemi Kaydet (Zaman Damgası ile)
+        user_ref.update({'last_upload_time': firestore.SERVER_TIMESTAMP})
+
+        try:
+            font_name = validate_font_name(request.form.get('font_name'))
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+
         variation_count = int(request.form.get('variation_count', 3))
-        file = request.files.get('file')
-        if not file or not user_id or not font_name: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
+        
         job_id = str(uuid.uuid4())
         if db:
             db.collection('operations').document(job_id).set({
@@ -375,31 +496,37 @@ def upload_form():
             })
         threading.Thread(target=process_pdf_job, args=(job_id, user_id, font_name, variation_count, file.read())).start()
         return jsonify({'success': True, 'job_id': job_id})
-    except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
+    except ValueError as e:
+        logger.warning(f"Validation error in upload_form: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"System error in upload_form: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 @app.route('/process_single', methods=['POST'])
+# Mobil için token doğrulaması şu an eklemiyorum çünkü mobil_yukle.html'de auth yok (URL'den uid geliyor)
+# Mobil güvenlik için ileride URL'e token eklenmeli. Şimdilik reCAPTCHA yeterli.
 def process_single():
-    global init_error
     try:
         data = request.get_json()
-        
-        if not verify_recaptcha(data.get('recaptcha_token')):
-            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
+        if not verify_recaptcha(data.get('recaptcha_token')): return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
-        u_id = data.get('user_id')
+        try:
+            u_id = data.get('user_id')
+            f_name = validate_font_name(data.get('font_name'))
+            b64 = validate_base64_image(data.get('image_base64'))
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+
+        repetition = int(data.get('variation_count', 3))
         
-        # Kredi Kontrolü
         allowed, msg = check_and_deduct_credit(u_id)
         if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
-        f_name = data.get('font_name')
-        b64 = data.get('image_base64')
-        repetition = int(data.get('variation_count', 3))
-        
         h_sistemi = HarfSistemi(repetition=repetition)
         nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None: return jsonify({'success': False, 'message': 'Hata'}), 400
+        if img is None: return jsonify({'success': False, 'message': 'Resim hatası'}), 400
 
         res, err = h_sistemi.process_single_page(img)
         if err: return jsonify({'success': False, 'message': err}), 400
@@ -410,12 +537,7 @@ def process_single():
             u_ref = db.collection('users').document(u_id).collection('fonts').document(fid)
             
             if not d_ref.get().exists:
-                payload = {
-                    'font_name': f_name, 'font_id': fid, 'owner_id': u_id, 'user_id': u_id,
-                    'repetition': repetition, 'created_at': firestore.SERVER_TIMESTAMP,
-                    'harf_sayisi': 0, 'sections_completed': [],
-                    'is_public': True
-                }
+                payload = {'font_name': f_name, 'font_id': fid, 'owner_id': u_id, 'user_id': u_id, 'repetition': repetition, 'created_at': firestore.SERVER_TIMESTAMP, 'harf_sayisi': 0, 'sections_completed': [], 'is_public': True}
                 d_ref.set(payload); u_ref.set(payload)
             
             batch = db.batch()
@@ -431,123 +553,120 @@ def process_single():
             d_ref.update(upd); u_ref.update(upd)
 
         return jsonify({'success': True, 'section_id': res['section_id'], 'detected_chars': res['detected']})
-    except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
+    except ValueError as e:
+        logger.warning(f"Validation error in process_single: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"System error in process_single: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 @app.route('/api/toggle_visibility', methods=['POST'])
+@login_required
 def toggle_visibility():
     try:
         data = request.get_json()
         font_id = data.get('font_id')
-        user_id = data.get('user_id')
+        user_id = request.uid # Token'dan gelen güvenli ID
         
-        if not font_id or not user_id:
-            return jsonify({'success': False, 'message': 'Eksik bilgi'}), 400
-            
         database = init_firebase()
-        if not database: return jsonify({'success': False, 'message': 'Veritabanı hatası'}), 500
-        
         font_ref = database.collection('fonts').document(font_id)
         doc = font_ref.get()
         
-        if not doc.exists:
-            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+        if not doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+        if doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz işlem'}), 403
             
-        if doc.to_dict().get('owner_id') != user_id:
-            return jsonify({'success': False, 'message': 'Yetkisiz işlem'}), 403
-            
-        current_status = doc.to_dict().get('is_public', True)
-        new_status = not current_status
+        new_status = not doc.to_dict().get('is_public', True)
         font_ref.update({'is_public': new_status})
-        
         return jsonify({'success': True, 'new_status': new_status})
+    except ValueError as e:
+        logger.warning(f"Validation error in toggle_visibility: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error(f"System error in toggle_visibility: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'İşlem başarısız.'}), 500
 
 @app.route('/api/update_char', methods=['POST'])
+@login_required
 def update_char():
     try:
         data = request.get_json()
-        font_id = data.get('font_id')
-        user_id = data.get('user_id')
-        char_key = data.get('char_key')
-        image_base64 = data.get('image_base64')
+        font_id, char_key, image_base64 = data.get('font_id'), data.get('char_key'), data.get('image_base64')
+        user_id = request.uid # Token'dan gelen güvenli ID
         
-        if not all([font_id, user_id, char_key, image_base64]):
-            return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-            
         database = init_firebase()
-        if not database: return jsonify({'success': False, 'message': 'Veritabanı hatası'}), 500
-        
         font_ref = database.collection('fonts').document(font_id)
         font_doc = font_ref.get()
         
         if not font_doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
         if font_doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz işlem!'}), 403
             
-        char_ref = font_ref.collection('chars').document(char_key)
-        char_ref.set({'data': image_base64})
-        
+        try:
+            image_base64 = validate_base64_image(image_base64)
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+
+        font_ref.collection('chars').document(char_key).set({'data': image_base64})
         return jsonify({'success': True, 'message': 'Harf güncellendi'})
-    except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
+    except ValueError as e:
+        logger.warning(f"Validation error in update_char: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"System error in update_char: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Güncelleme başarısız.'}), 500
 
 @app.route('/api/list_fonts')
 def list_fonts():
+    # Public okuma herkese açık, token gerekmez.
     user_id = request.args.get('user_id')
     database = init_firebase()
     if not database: return jsonify({"success": False})
     fonts = []
     try:
-        # Public
         public_query = database.collection('fonts').where('is_public', '==', True).stream()
         for doc in public_query:
             d = doc.to_dict()
-            fonts.append({
-                'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'),
-                'type': 'public', 'owner_id': d.get('owner_id')
-            })
+            fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'public', 'owner_id': d.get('owner_id')})
             
-        # Private (Login olmuşsa)
         if user_id:
             private_query = database.collection('fonts').where('owner_id', '==', user_id).where('is_public', '==', False).stream()
             for doc in private_query:
                 d = doc.to_dict()
-                fonts.append({
-                    'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'),
-                    'type': 'private', 'owner_id': user_id
-                })
+                fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'private', 'owner_id': user_id})
         return jsonify({"success": True, "fonts": fonts})
-    except Exception as e: return jsonify({"success": False, "error": str(e)})
+    except Exception as e:
+        logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
 @app.route('/api/get_assets')
 def get_assets():
-    font_id = request.args.get('font_id')
-    assets = {}
-    database = init_firebase()
-    if database and font_id:
-        doc_ref = database.collection('fonts').document(font_id)
-        
-        # 1. YÖNTEM: Alt Koleksiyondan Çek (Yeni Sistem - Limitsiz)
-        char_docs = doc_ref.collection('chars').stream()
-        found_in_sub = False
-        for doc in char_docs:
-            found_in_sub = True
-            key, val = doc.id, doc.to_dict().get('data')
-            base_key = key.rsplit('_', 1)[0] if '_' in key else key
-            if base_key not in assets: assets[base_key] = []
-            assets[base_key].append(val)
-            
-        # 2. YÖNTEM: Ana Dokümandan Çek (Eski Sistem - Geriye Dönük Uyumluluk)
-        if not found_in_sub:
-            main_doc = doc_ref.get()
-            if main_doc.exists:
-                harfler_data = main_doc.to_dict().get('harfler', {})
-                for key, val in harfler_data.items():
-                    base_key = key.rsplit('_', 1)[0] if '_' in key else key
-                    if base_key not in assets: assets[base_key] = []
-                    assets[base_key].append(val)
-
-        return jsonify({"success": True, "assets": assets, "source": "firebase"})
-    return jsonify({"success": True, "assets": {}}), 200
+    try:
+        font_id = request.args.get('font_id')
+        assets = {}
+        database = init_firebase()
+        if database and font_id:
+            # Hibrit okuma (Önce alt koleksiyon, yoksa ana doküman)
+            char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
+            has_sub = False
+            for doc in char_docs:
+                has_sub = True
+                key, val = doc.id, doc.to_dict().get('data')
+                base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                if base_key not in assets: assets[base_key] = []
+                assets[base_key].append(val)
+                
+            if not has_sub:
+                doc = database.collection('fonts').document(font_id).get()
+                if doc.exists:
+                    raw = doc.to_dict().get('harfler', {})
+                    for key, val in raw.items():
+                        base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                        if base_key not in assets: assets[base_key] = []
+                        assets[base_key].append(val)
+            return jsonify({"success": True, "assets": assets, "source": "firebase"})
+        return jsonify({"success": True, "assets": {}}), 200
+    except Exception as e:
+        logger.error(f"System error in get_assets: {str(e)}", exc_info=True)
+        return jsonify({"success": False, "message": "Assets yüklenemedi."}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -556,42 +675,55 @@ def download():
         active_harfler = {}
         database = init_firebase()
         if database and font_id:
-            # Önce alt koleksiyonu dene
+            # get_assets mantığıyla aynısını yap (Hibrit)
             char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
-            has_chars = False
+            has_sub = False
             for doc in char_docs:
-                has_chars = True
+                has_sub = True
                 key, b64 = doc.id, doc.to_dict().get('data')
-                img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
-                base_key = key.rsplit('_', 1)[0] if '_' in key else key
-                if base_key not in active_harfler: active_harfler[base_key] = []
-                active_harfler[base_key].append(img)
+                try:
+                    img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
+                    base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                    if base_key not in active_harfler: active_harfler[base_key] = []
+                    active_harfler[base_key].append(img)
+                except: continue
             
-            # Alt koleksiyon boşsa eski sistemi dene
-            if not has_chars:
+            if not has_sub:
                 doc = database.collection('fonts').document(font_id).get()
                 if doc.exists:
                     raw = doc.to_dict().get('harfler', {})
                     for key, val in raw.items():
                         try:
-                            # Val base64 veya URL olabilir (Eski Storage denemesi)
+                            # Eski sistemde val base64 veya url olabilir
                             if val.startswith('http'):
-                                resp = requests.get(val)
-                                img = core_generator.Image.open(io.BytesIO(resp.content)).convert("RGBA")
+                                if not is_safe_url(val):
+                                    logger.warning(f"Unsafe URL blocked: {val}")
+                                    continue
+                                try:
+                                    resp = requests.get(val, timeout=5)
+                                    resp.raise_for_status()
+                                    img = core_generator.Image.open(io.BytesIO(resp.content)).convert("RGBA")
+                                except Exception as e:
+                                    logger.error(f"URL fetch error: {e}")
+                                    continue
                             else:
                                 b64 = val.split(",")[1] if "," in val else val
                                 img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
-                            
                             base_key = key.rsplit('_', 1)[0] if '_' in key else key
                             if base_key not in active_harfler: active_harfler[base_key] = []
                             active_harfler[base_key].append(img)
                         except: continue
         
-        config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': 140, 'line_spacing': 220, 'word_spacing': 55, 'murekkep_rengi': (27,27,29), 'opacity': 0.95, 'jitter': 3, 'paper_type': 'cizgili', 'line_slope': 5}
+        config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': (27,27,29), 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
         pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
         return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
-    except: return "Hata", 500
+    except ValueError as e:
+        logger.warning(f"Validation error in download: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"System error in download: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
