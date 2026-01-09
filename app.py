@@ -99,19 +99,25 @@ def check_and_deduct_credit(user_id):
     try:
         if not db: return False, "Veritabanı hatası"
         user_ref = db.collection('users').document(user_id)
-        doc = user_ref.get() 
+        doc = user_ref.get()
         
-        current_credits = 10 # Varsayılan başlangıç kredisi
+        current_credits = 10 # Varsayılan
         
         if doc.exists:
             data = doc.to_dict()
-            current_credits = data.get('credits', 10)
+            val = data.get('credits')
+            if val is not None: current_credits = int(val)
+            else: 
+                # Doküman var ama kredi alanı yok, ekleyelim
+                user_ref.set({'credits': 10}, merge=True)
         else:
+            # Kullanıcı dokümanı yoksa oluştur (İlk giriş)
             user_ref.set({'credits': 10}, merge=True)
             
         if current_credits <= 0:
             return False, "Yetersiz kredi! Yeni font oluşturmak için hakkınız kalmadı."
             
+        # Krediyi düş
         user_ref.update({'credits': firestore.Increment(-1)})
         return True, current_credits - 1
     except Exception as e:
@@ -125,8 +131,9 @@ def get_user_credits():
     try:
         doc = db.collection('users').document(user_id).get()
         if doc.exists:
-            return jsonify({'credits': doc.to_dict().get('credits', 10)})
-        return jsonify({'credits': 10})
+            val = doc.to_dict().get('credits')
+            return jsonify({'credits': int(val) if val is not None else 10})
+        return jsonify({'credits': 10}) # Yeni kullanıcı
     except: return jsonify({'credits': 0})
 
 # --- HARF TARAMA MOTORU ---
