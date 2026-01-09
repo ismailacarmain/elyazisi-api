@@ -423,10 +423,6 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
 @app.route('/')
 def index(): return render_template('index.html')
 
-@app.route('/health')
-def health_check():
-    return "OK", 200
-
 @app.route('/mobil_yukle.html')
 def mobil_page(): return send_file('web/mobil_yukle.html')
 
