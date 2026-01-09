@@ -143,7 +143,8 @@ CORS(app, resources={
         "origins": [
             "https://fontify.online",
             "https://www.fontify.online",
-            "https://elyazisi-api.onrender.com"
+            "https://elyazisi-api.onrender.com",
+            "https://square-morning-7a87.ismailacarmain.workers.dev",
         ],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
