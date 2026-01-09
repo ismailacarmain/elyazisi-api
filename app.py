@@ -321,6 +321,15 @@ def login_required(f):
     """Firebase auth token verification"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # --- OFFLINE/LOCAL MODE BYPASS ---
+        # Eğer DB bağlantısı yoksa, token kontrolünü atla ve test kullanıcısı ata
+        if db is None:
+            logger.warning("⚠️ Database not connected: Running in OFFLINE/TEST MODE. Auth bypassed.")
+            request.uid = 'local_test_user'
+            request.user_email = 'test@localhost'
+            return f(*args, **kwargs)
+        # ---------------------------------
+
         # Get Authorization header
         auth_header = request.headers.get('Authorization')
         
@@ -367,6 +376,13 @@ def login_required(f):
             }), 401
             
         except Exception as e:
+            # Token doğrulanamasa bile (örn: internet yok veya key yok), test modunda devam et
+            if db is None or app.debug:
+                logger.warning(f"Auth verification failed but proceeding in Debug/Offline mode: {str(e)}")
+                request.uid = 'local_test_user'
+                request.user_email = 'test@localhost'
+                return f(*args, **kwargs)
+
             logger.error(f"Token verification failed: {str(e)}")
             return jsonify({
                 'success': False,
@@ -382,69 +398,22 @@ def login_required(f):
 # CREDIT SYSTEM (DÜZELTİLMİŞ!)
 # ============================================
 def check_credits(required=1):
-    """Credit kontrolü decorator - login_required'dan SONRA çalışmalı!"""
+    """
+    Kredi kontrolü iptal edildi (Sınırsız Kullanım Modu).
+    Her zaman işlem başarılı sayılır ve kredi düşülmez.
+    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # request.uid burada mevcut (login_required'dan geliyor)
-            try:
-                if not db:
-                    logger.error("Firestore not initialized")
-                    return jsonify({
-                        'success': False,
-                        'message': 'Veritabanı bağlantısı yok'
-                    }), 500
-                
-                user_doc = db.collection('users').document(request.uid).get()
-                
-                if not user_doc.exists:
-                    # Yeni kullanıcı - varsayılan credit ver
-                    db.collection('users').document(request.uid).set({
-                        'credits': 10,
-                        'email': request.user_email,
-                        'created_at': firestore.SERVER_TIMESTAMP
-                    })
-                    user_credits = 10
-                    logger.info(f"New user created: {request.uid} with 10 credits")
-                else:
-                    user_data = user_doc.to_dict()
-                    user_credits = user_data.get('credits', 0)
-                
-                logger.info(f"User {request.uid} has {user_credits} credits (required: {required})")
-                
-                # Credit yetersiz
-                if user_credits < required:
-                    logger.warning(f"User {request.uid} insufficient credits: {user_credits} < {required}")
-                    return jsonify({
-                        'success': False,
-                        'message': f'Kredi yetersiz. Mevcut: {user_credits}, Gerekli: {required}',
-                        'error': 'INSUFFICIENT_CREDITS',
-                        'current_credits': user_credits,
-                        'required_credits': required
-                    }), 403  # 403 Forbidden (401 değil!)
-                
-                # Credit azalt
-                db.collection('users').document(request.uid).update({
-                    'credits': firestore.Increment(-required),
-                    'last_used': firestore.SERVER_TIMESTAMP
-                })
-                
-                logger.info(f"User {request.uid} used {required} credit(s), {user_credits - required} remaining")
-                
-                # Request'e credit bilgisini ekle
-                request.user_credits_before = user_credits
-                request.user_credits_after = user_credits - required
-                
-            except Exception as e:
-                logger.error(f"Credit check failed: {str(e)}", exc_info=True)
-                return jsonify({
-                    'success': False,
-                    'message': 'Kredi kontrolü başarısız',
-                    'error': 'CREDIT_CHECK_FAILED'
-                }), 500
+            # Kredi kontrolünü atla
+            # Frontend'in hata vermemesi için dummy değerler ekle
+            request.user_credits_before = 999999
+            request.user_credits_after = 999999
+            
+            # Sadece log bas, işlem yapma
+            # logger.info(f"Credit check bypassed for user {getattr(request, 'uid', 'anonymous')}")
             
             return f(*args, **kwargs)
-        
         return decorated_function
     return decorator
 
@@ -641,10 +610,12 @@ def upload_form():
             
             doc_ref = db.collection('fonts').add(font_doc)
             logger.info(f"Font created: {doc_ref[1].id}")
+        else:
+            logger.warning("Database not connected: Font not saved to Firestore (Memory only)")
         
         return jsonify({
             'success': True,
-            'message': 'Font başarıyla oluşturuldu',
+            'message': 'Font başarıyla oluşturuldu (Yerel Mod)',
             'remaining_credits': request.user_credits_after
         }), 200
         
