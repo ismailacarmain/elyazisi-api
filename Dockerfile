@@ -1,15 +1,23 @@
-FROM python:3.9-slim
+# Tam sürüm Python kullanıyoruz (Hata riskini sıfırlar)
+FROM python:3.10
 
 WORKDIR /app
 
-# Sistem bağımlılıklarını kur (OpenCV ve PDF için gerekli)
+# Sistem kütüphanelerini güncelle
+# libgl1: OpenCV için şart
+# poppler-utils: PDF işlemleri için şart
 RUN apt-get update && apt-get install -y \
-    libglib2.0-0 libsm6 libxext6 libxrender-dev libgl1 poppler-utils \
+    libgl1 \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Paketleri kur
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
+# Uygulamayı başlat
+CMD gunicorn --bind 0.0.0.0:$PORT app:app --timeout 120 --workers 1 --threads 8
