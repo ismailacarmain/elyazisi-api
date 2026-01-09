@@ -415,36 +415,37 @@ class HarfSistemi:
 
 # --- BACKGROUND WORKER ---
 def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
-    # Not: Background thread olduğu için request.uid kullanamayız, user_id parametresine güveniyoruz.
     database = init_firebase()
-    if not database: return
+    if not database: 
+        logger.error("Thread failed: Firebase not initialized")
+        return
+        
     op_ref = database.collection('operations').document(job_id)
     font_id = f"{user_id}_{font_name.replace(' ', '_')}"
     
     try:
-        op_ref.update({'status': 'processing', 'message': 'Dosya işleniyor...', 'progress': 5})
+        logger.info(f"Starting job {job_id} for user {user_id}")
+        op_ref.update({'status': 'processing', 'message': 'Dosya okunuyor...', 'progress': 10})
         
         images = []
         try:
-            # Önce PDF olarak dene
             images = convert_from_bytes(file_bytes, dpi=300)
+            logger.info(f"PDF converted to {len(images)} images")
         except Exception as pdf_err:
-            logger.info(f"PDF conversion failed, trying image: {pdf_err}")
+            logger.warning(f"PDF conversion failed: {pdf_err}. Trying as raw image.")
             try:
-                # PDF değilse Resim olarak dene
                 img = PILImage.open(io.BytesIO(file_bytes)).convert('RGB')
                 images = [img]
             except Exception as img_err:
-                logger.error(f"Image load failed: {img_err}")
-                raise ValueError("Geçersiz dosya formatı. Lütfen PDF veya geçerli bir resim yükleyin.")
-        
+                raise ValueError(f"Dosya okunamadı: {str(img_err)}")
+
+        if not images:
+            raise ValueError("İşlenecek sayfa bulunamadı.")
+
         sections_to_process = []
         for i, pil_img in enumerate(images):
             cv_img = np.array(pil_img)[:, :, ::-1].copy()
             h, w, _ = cv_img.shape
-            
-            # Eğer resim çok uzunsa (A4 dikey gibi ama bizim sistem yatay 2 parça bekliyor olabilir)
-            # Mevcut sistem her sayfayı ikiye bölüyor (üst/alt)
             half_h = h // 2
             sections_to_process.append({'img': cv_img[0:half_h, :], 'id': i*2})
             sections_to_process.append({'img': cv_img[half_h:h, :], 'id': i*2+1})
@@ -454,43 +455,70 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         total_processed_chars = 0
         all_completed_sections = []
 
+        op_ref.update({'message': f'Toplam {total_sections} bölüm işlenecek...', 'progress': 20})
+
         d_ref = database.collection('fonts').document(font_id)
         u_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
         
+        # Font dokümanını hazırla
         if not d_ref.get().exists:
             init_payload = {
                 'font_name': font_name, 'font_id': font_id, 'owner_id': user_id, 'user_id': user_id,
                 'repetition': variation_count, 'created_at': firestore.SERVER_TIMESTAMP,
                 'harf_sayisi': 0, 'sections_completed': [], 'is_public': True
             }
-            d_ref.set(init_payload); u_ref.set(init_payload)
+            d_ref.set(init_payload)
+            u_ref.set(init_payload)
 
         for idx, section in enumerate(sections_to_process):
-            op_ref.update({
-                'progress': 10 + int((idx / total_sections) * 80),
-                'message': f'Bölüm {idx+1}/{total_sections} işleniyor...', 
-                'current_section': idx + 1, 'total_sections': total_sections
-            })
+            msg = f'Bölüm {idx+1}/{total_sections} taranıyor...'
+            progress = 20 + int((idx / total_sections) * 75)
+            op_ref.update({'message': msg, 'progress': progress})
             
             res, err = harf_sistemi.process_single_page(section['img'], forced_section_id=section['id'])
-            if not err:
+            if err:
+                logger.warning(f"Section {idx} skip: {err}")
+                continue
+                
+            if res and res['harfler']:
                 batch = database.batch()
-                for char_name, b64 in res['harfler'].items():
+                for char_name, b_64_bytes in res['harfler'].items():
+                    # Base64 string'e çevirerek kaydet
+                    b64_str = base64.b64encode(b_64_bytes).decode('utf-8')
                     char_ref = d_ref.collection('chars').document(char_name)
-                    batch.set(char_ref, {'data': b64})
+                    batch.set(char_ref, {'data': b64_str})
                 batch.commit()
                 total_processed_chars += res['detected']
                 all_completed_sections.append(res['section_id'])
 
+        # Final güncelleme
         current_doc = d_ref.get().to_dict()
         old_sections = current_doc.get('sections_completed', [])
         for s in all_completed_sections:
             if s not in old_sections: old_sections.append(s)
         
-        final_meta = {'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars, 'sections_completed': old_sections}
-        d_ref.update(final_meta); u_ref.update(final_meta)
+        final_meta = {
+            'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars, 
+            'sections_completed': old_sections,
+            'last_update': firestore.SERVER_TIMESTAMP
+        }
+        d_ref.update(final_meta)
+        u_ref.update(final_meta)
 
-        op_ref.update({'status': 'completed', 'progress': 100, 'message': 'İşlem tamamlandı!', 'processed_chars': total_processed_chars, 'font_id': font_id})
+        op_ref.update({
+            'status': 'completed', 
+            'progress': 100, 
+            'message': f'Tamamlandı! {total_processed_chars} karakter eklendi.', 
+            'processed_chars': total_processed_chars, 
+            'font_id': font_id
+        })
+        logger.info(f"Job {job_id} completed successfully")
+
+    except Exception as e:
+        logger.error(f"Job {job_id} FATAL ERROR: {str(e)}", exc_info=True)
+        try:
+            op_ref.update({'status': 'error', 'error': str(e), 'message': f'Hata: {str(e)}', 'progress': 0})
+        except: pass
     except Exception as e:
         traceback.print_exc()
         op_ref.update({'status': 'error', 'error': str(e), 'progress': 0})
