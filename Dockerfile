@@ -1,26 +1,22 @@
-FROM python:3.9-slim
+# Slim yerine tam sürüm kullanıyoruz (Firebase/GRPC derleme hatalarını önler)
+FROM python:3.9
 
 WORKDIR /app
 
-# Sistem bağımlılıklarını ve derleme araçlarını kur
-# build-essential ve python3-dev: Derleme gerektiren paketler için şarttır.
+# Sistem kütüphanelerini güncelle (OpenCV için gerekli)
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    python3-dev \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1 \
+    libgl1-mesa-glx \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# Pip'i güncelle ve bağımlılıkları kur
+# Pip güncelle ve paketleri kur
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Gunicorn ile başlat
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
+
