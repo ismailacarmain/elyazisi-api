@@ -112,32 +112,7 @@ def validate_base64_image(b64_string, max_size_mb=5):
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 # 1. GÜVENLİK: CORS Sıkılaştırması (Production)
-CORS(app, resources={
-    r"/api/*": {"origins": ["*"]}, 
-    r"/process_single": {"origins": ["*"]},
-    r"/download": {"origins": ["*"]}
-})
-
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy"}), 200
-
-@app.route('/forms/<path:filename>')
-@app.route('/pdfler/<path:filename>')
-def serve_forms(filename):
-    # _ORNEK veya ORNEK taleplerini _DOLU olarak yönlendir (frontend uyumu için)
-    if "ORNEK" in filename:
-        # Eğer dosya adında 1x, 3x gibi ibareler varsa onları koru
-        for v in ["1", "2", "3", "5", "10"]:
-            if f"{v}x" in filename:
-                return send_file(os.path.join('static/forms', f"form_{v}x_DOLU.pdf"))
-    
-    # Normal servis
-    try:
-        return send_file(os.path.join('static/forms', filename))
-    except:
-        # Fallback: Eğer dosya bulunamazsa ama bir varyasyon isteniyorsa varsayılanı ver
-        return send_file(os.path.join('static/forms', 'form_3x_BOS.pdf'))
+CORS(app, resources={r"/api/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com"]}}, r"/process_single": {"origins": ["https://fontify.online"]}})
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -148,94 +123,56 @@ init_error = None
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 def verify_recaptcha(token):
-    if not RECAPTCHA_SECRET_KEY: 
-        logger.warning("reCAPTCHA Secret Key is missing in environment variables. Bypassing check for development.")
-        return True # Secret yoksa şimdilik izin ver (kullanıcıyı üzmeyelim)
-    
-    if not token: 
-        logger.warning(f"reCAPTCHA Token missing - IP: {request.remote_addr}")
+    # 3. GÜVENLİK: Bypass Kaldırıldı
+    if not token or not RECAPTCHA_SECRET_KEY: 
+        print("reCAPTCHA Token veya Secret yok!")
         return False
-        
     try:
         url = "https://www.google.com/recaptcha/api/siteverify"
         data = {'secret': RECAPTCHA_SECRET_KEY, 'response': token}
-        res = requests.post(url, data=data, timeout=5)
+        res = requests.post(url, data=data)
         result = res.json()
-        return result.get("success", False)
+        if not result.get("success"):
+            logger.warning(f"reCAPTCHA failed for IP: {request.remote_addr}")
+            return False
+        return result.get("success", False) and result.get("score", 0) >= 0.5
     except Exception as e:
-        logger.error(f"reCAPTCHA Error: {e}")
+        print(f"reCAPTCHA Hatası: {e}")
         return False
 
 def init_firebase():
     global db, init_error, connected_project_id
     if db is not None: return db
     try:
-        # HATA AYIKLAMA: Render'daki tüm değişken isimlerini yazdır (İçeriklerini değil!)
-        logger.info(f"Mevcut Environment Değişkenleri: {list(os.environ.keys())}")
-        
         cred = None
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
-        
         if env_creds:
-            env_creds = env_creds.strip()
-            logger.info(f"FIREBASE_CREDENTIALS bulundu. Uzunluk: {len(env_creds)} karakter.")
-            
-            # JSON formatını zorla düzeltmeye çalış (Render kopyalama hataları için)
-            try:
-                cred_dict = json.loads(env_creds)
-                cred = credentials.Certificate(cred_dict)
-                connected_project_id = cred_dict.get('project_id', 'EnvJson')
-            except json.JSONDecodeError as je:
-                logger.error(f"!!! KRİTİK: JSON Formatı Hatalı !!! Hata: {je}")
-                # Eğer JSON tırnak hatası varsa basit bir tamir dene
-                try:
-                    import ast
-                    cred_dict = ast.literal_eval(env_creds)
-                    cred = credentials.Certificate(cred_dict)
-                    connected_project_id = cred_dict.get('project_id', 'AstFixed')
-                    logger.info("JSON hatası ast.literal_eval ile tamir edildi.")
-                except:
-                    logger.error("JSON tamir edilemedi. Lütfen Render'daki içeriği kontrol edin.")
-        else:
-            logger.error("!!! HATA: FIREBASE_CREDENTIALS bulunamadı. Render panelini kontrol edin !!!")
+            cred_dict = json.loads(env_creds.strip())
+            cred = credentials.Certificate(cred_dict)
+            connected_project_id = cred_dict.get('project_id', 'EnvJson')
         
+        # Yerel dosya kontrolü (Sadece development için)
         if not cred:
-            # Yedek plan: Gizli dosya olarak eklenmiş olabilir mi?
-            paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json', 'firebase_key.json']
+            paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
-                    logger.info(f"Firebase anahtarı dosyada bulundu: {p}")
                     cred = credentials.Certificate(p)
-                    with open(p, 'r') as f:
-                        data = json.load(f)
-                        connected_project_id = data.get('project_id', 'File')
+                    with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                     break
         
         if cred:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            logger.info(f"✅ FIREBASE BAŞARIYLA BAĞLANDI | Proje: {connected_project_id}")
+            print(f"Firestore BAĞLANDI (Secure Mod): {connected_project_id}")
         else:
-            logger.error("❌ Firebase başlatılamadı: Geçerli bir anahtar yok.")
-            
+            print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
         init_error = str(e)
         db = None
-        logger.error(f"🔥 Firebase Hatası: {str(e)}", exc_info=True)
+        print(f"Firebase Hatası: {e}")
     return db
 
 init_firebase()
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    # Log the error
-    logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
-    return jsonify({
-        "success": False,
-        "message": "Sunucu tarafında bir hata oluştu.",
-        "error": str(e) if app.debug else None
-    }), 500
 
 @app.before_request
 def before_request():
@@ -274,20 +211,14 @@ def login_required(f):
         if 'Authorization' in request.headers:
             id_token = request.headers['Authorization'].split(' ').pop()
         
-        if id_token:
-            try:
-                decoded_token = auth.verify_id_token(id_token)
-                request.uid = decoded_token['uid']
-            except Exception as e:
-                logger.error(f"Token verify error: {e}")
-                # Token geçersizse ama formda user_id varsa devam etmesine izin ver
-                request.uid = request.form.get('user_id') or request.args.get('user_id')
-        else:
-            # Token yoksa form verilerinden al (Mobil ve eski sayfalar için)
-            request.uid = request.form.get('user_id') or request.args.get('user_id')
-        
-        if not request.uid:
-            return jsonify({'success': False, 'message': 'Kullanıcı kimliği (User ID) bulunamadı!'}), 401
+        if not id_token:
+            return jsonify({'success': False, 'message': 'Token eksik!'}), 401
+            
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            request.uid = decoded_token['uid'] # Kullanıcı ID'sini request'e ekle
+        except Exception as e:
+            return jsonify({'success': False, 'message': 'Geçersiz Token'}), 401
             
         return f(*args, **kwargs)
     return decorated_function
@@ -295,54 +226,34 @@ def login_required(f):
 # --- KREDİ SİSTEMİ ---
 def check_and_deduct_credit(user_id):
     try:
-        if not db: return True, 999 # DB yoksa engelleme
+        if not db: return False, "Veritabanı hatası"
         user_ref = db.collection('users').document(user_id)
         doc = user_ref.get()
-        current_credits = 1000 # Başlangıç kredisini artırdık
+        current_credits = 10 
         
         if doc.exists:
             data = doc.to_dict()
-            current_credits = data.get('credits', 1000)
+            current_credits = data.get('credits', 10)
         else:
-            user_ref.set({'credits': 1000}, merge=True)
+            user_ref.set({'credits': 10}, merge=True)
             
         if current_credits <= 0:
-            # Test aşamasında krediyi otomatik yenile
-            user_ref.update({'credits': 1000})
-            return True, 1000
+            return False, "Yetersiz kredi!"
             
         user_ref.update({'credits': firestore.Increment(-1)})
         return True, current_credits - 1
     except Exception as e:
-        logger.error(f"Credit error: {e}")
-        return True, 999 # Hata olsa da işleme izin ver
+        return False, str(e)
 
 @app.route('/api/get_user_credits')
 def get_user_credits():
     # Public okuma yapılabilir veya token eklenebilir. Şimdilik açık kalsın.
     user_id = request.args.get('user_id')
-    
-    # Veritabanı henüz bağlanmamışsa veya user_id yoksa bile 10 göster (UI kırılmasın)
-    if not db:
-        logger.warning("Firestore DB not initialized yet, returning default 10.")
-        return jsonify({'credits': 10})
-        
-    if not user_id:
-        return jsonify({'credits': 0})
-        
+    if not user_id or not db: return jsonify({'credits': 0})
     try:
         doc = db.collection('users').document(user_id).get()
-        if doc.exists:
-            # Kullanıcı varsa kredisini getir, yoksa 10 say.
-            user_data = doc.to_dict()
-            credits = user_data.get('credits', 10)
-            return jsonify({'credits': credits})
-        else:
-            # Kullanıcı veritabanında hiç yoksa (ilk defa giriyorsa) 10 kredisi vardır.
-            return jsonify({'credits': 10})
-    except Exception as e:
-        logger.error(f"Kredi okuma hatası: {e}")
-        return jsonify({'credits': 10})
+        return jsonify({'credits': doc.to_dict().get('credits', 10) if doc.exists else 10})
+    except: return jsonify({'credits': 0})
 
 # --- HARF TARAMA MOTORU (Aynı Kalıyor) ---
 class HarfSistemi:
@@ -442,33 +353,17 @@ class HarfSistemi:
 
 # --- BACKGROUND WORKER ---
 def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
+    # Not: Background thread olduğu için request.uid kullanamayız, user_id parametresine güveniyoruz.
+    # Ancak upload_form'da user_id token'dan alındığı için güvenli.
     database = init_firebase()
-    if not database: 
-        logger.error("Thread failed: Firebase not initialized")
-        return
-        
+    if not database: return
     op_ref = database.collection('operations').document(job_id)
     font_id = f"{user_id}_{font_name.replace(' ', '_')}"
     
     try:
-        logger.info(f"Starting job {job_id} for user {user_id}")
-        op_ref.update({'status': 'processing', 'message': 'Dosya okunuyor...', 'progress': 10})
+        op_ref.update({'status': 'processing', 'message': 'PDF sayfalara dönüştürülüyor...', 'progress': 5})
+        images = convert_from_bytes(file_bytes, dpi=300)
         
-        images = []
-        try:
-            images = convert_from_bytes(file_bytes, dpi=300)
-            logger.info(f"PDF converted to {len(images)} images")
-        except Exception as pdf_err:
-            logger.warning(f"PDF conversion failed: {pdf_err}. Trying as raw image.")
-            try:
-                img = PILImage.open(io.BytesIO(file_bytes)).convert('RGB')
-                images = [img]
-            except Exception as img_err:
-                raise ValueError(f"Dosya okunamadı: {str(img_err)}")
-
-        if not images:
-            raise ValueError("İşlenecek sayfa bulunamadı.")
-
         sections_to_process = []
         for i, pil_img in enumerate(images):
             cv_img = np.array(pil_img)[:, :, ::-1].copy()
@@ -482,69 +377,43 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         total_processed_chars = 0
         all_completed_sections = []
 
-        op_ref.update({'message': f'Toplam {total_sections} bölüm işlenecek...', 'progress': 20})
-
         d_ref = database.collection('fonts').document(font_id)
         u_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
         
-        # Font dokümanını hazırla
         if not d_ref.get().exists:
             init_payload = {
                 'font_name': font_name, 'font_id': font_id, 'owner_id': user_id, 'user_id': user_id,
                 'repetition': variation_count, 'created_at': firestore.SERVER_TIMESTAMP,
                 'harf_sayisi': 0, 'sections_completed': [], 'is_public': True
             }
-            d_ref.set(init_payload)
-            u_ref.set(init_payload)
+            d_ref.set(init_payload); u_ref.set(init_payload)
 
         for idx, section in enumerate(sections_to_process):
-            msg = f'Bölüm {idx+1}/{total_sections} taranıyor...'
-            progress = 20 + int((idx / total_sections) * 75)
-            op_ref.update({'message': msg, 'progress': progress})
+            op_ref.update({
+                'progress': 10 + int((idx / total_sections) * 80),
+                'message': f'Bölüm {idx+1}/{total_sections} işleniyor...', 
+                'current_section': idx + 1, 'total_sections': total_sections
+            })
             
             res, err = harf_sistemi.process_single_page(section['img'], forced_section_id=section['id'])
-            if err:
-                logger.warning(f"Section {idx} skip: {err}")
-                continue
-                
-            if res and res['harfler']:
+            if not err:
                 batch = database.batch()
-                for char_name, b_bytes in res['harfler'].items():
-                    # Orijinal sistemdeki gibi doğrudan bytes (Blob) olarak kaydet
+                for char_name, b64 in res['harfler'].items():
                     char_ref = d_ref.collection('chars').document(char_name)
-                    batch.set(char_ref, {'data': b_bytes})
+                    batch.set(char_ref, {'data': b64})
                 batch.commit()
                 total_processed_chars += res['detected']
                 all_completed_sections.append(res['section_id'])
 
-        # Final güncelleme
         current_doc = d_ref.get().to_dict()
         old_sections = current_doc.get('sections_completed', [])
         for s in all_completed_sections:
             if s not in old_sections: old_sections.append(s)
         
-        final_meta = {
-            'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars, 
-            'sections_completed': old_sections,
-            'last_update': firestore.SERVER_TIMESTAMP
-        }
-        d_ref.update(final_meta)
-        u_ref.update(final_meta)
+        final_meta = {'harf_sayisi': current_doc.get('harf_sayisi', 0) + total_processed_chars, 'sections_completed': old_sections}
+        d_ref.update(final_meta); u_ref.update(final_meta)
 
-        op_ref.update({
-            'status': 'completed', 
-            'progress': 100, 
-            'message': f'Tamamlandı! {total_processed_chars} karakter eklendi.', 
-            'processed_chars': total_processed_chars, 
-            'font_id': font_id
-        })
-        logger.info(f"Job {job_id} completed successfully")
-
-    except Exception as e:
-        logger.error(f"Job {job_id} FATAL ERROR: {str(e)}", exc_info=True)
-        try:
-            op_ref.update({'status': 'error', 'error': str(e), 'message': f'Hata: {str(e)}', 'progress': 0})
-        except: pass
+        op_ref.update({'status': 'completed', 'progress': 100, 'message': 'İşlem tamamlandı!', 'processed_chars': total_processed_chars, 'font_id': font_id})
     except Exception as e:
         traceback.print_exc()
         op_ref.update({'status': 'error', 'error': str(e), 'progress': 0})
@@ -555,7 +424,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
 def index(): return render_template('index.html')
 
 @app.route('/mobil_yukle.html')
-def mobil_page(): return send_file('static/mobil_yukle.html')
+def mobil_page(): return send_file('web/mobil_yukle.html')
 
 # Dosya Güvenlik Ayarları
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
@@ -570,29 +439,47 @@ def upload_form():
     try:
         user_id = request.uid
         
-        # 1. reCAPTCHA Kontrolü (Sadece Logla, Engelleme)
+        # 1. reCAPTCHA Kontrolü
         if not verify_recaptcha(request.form.get('recaptcha_token')):
-            logger.warning(f"reCAPTCHA validation failed or skipped - User: {user_id}")
+            logger.warning(f"reCAPTCHA failure - User: {user_id}, IP: {request.remote_addr}")
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
         # 2. Dosya Kontrolü
-        uploaded_files = request.files.getlist('file') or request.files.getlist('files')
-        
-        if not uploaded_files or not uploaded_files[0].filename:
+        file = request.files.get('file')
+        if not file or not file.filename:
             return jsonify({'success': False, 'message': 'Dosya yüklenmedi.'}), 400
             
-        file = uploaded_files[0]
-        
         if not allowed_file(file.filename):
-            return jsonify({'success': False, 'message': 'Geçersiz dosya türü.'}), 400
+            return jsonify({'success': False, 'message': 'Geçersiz dosya türü. Sadece PDF, JPG, PNG.'}), 400
             
-        # 3. Kredi Kontrolü
+        # Dosya boyutu kontrolü (Flask, file.read() yapmadan content-length'e bakabilir ama kesin çözüm okumaktır)
+        file.seek(0, os.SEEK_END)
+        file_length = file.tell()
+        file.seek(0)
+        
+        if file_length > MAX_FILE_SIZE:
+            return jsonify({'success': False, 'message': 'Dosya çok büyük (Max 10MB).'}), 400
+
+        # 3. Kredi ve Spam Kontrolü
+        # Spam Kontrolü: Son işlemden bu yana 60 saniye geçti mi?
+        user_ref = db.collection('users').document(user_id)
+        user_doc = user_ref.get()
+        
+        if user_doc.exists:
+            last_upload = user_doc.to_dict().get('last_upload_time')
+            if last_upload:
+                # Firestore Timestamp to datetime
+                last_time = last_upload.timestamp()
+                if (time.time() - last_time) < 60:
+                    logger.warning(f"Rate limit hit - User: {user_id}, IP: {request.remote_addr}")
+                    return jsonify({'success': False, 'message': 'Çok hızlı işlem yapıyorsunuz. Lütfen 1 dakika bekleyin.'}), 429
+
+        # Kredi Kontrolü
         allowed, msg = check_and_deduct_credit(user_id)
         if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
-        # Zaman damgasını güncelle (Bilgi amaçlı)
-        try:
-            db.collection('users').document(user_id).update({'last_upload_time': firestore.SERVER_TIMESTAMP})
-        except: pass
+        # İşlemi Kaydet (Zaman Damgası ile)
+        user_ref.update({'last_upload_time': firestore.SERVER_TIMESTAMP})
 
         try:
             font_name = validate_font_name(request.form.get('font_name'))
@@ -839,5 +726,4 @@ def download():
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
