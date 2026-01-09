@@ -149,8 +149,8 @@ class HarfSistemi:
     def process_roi(self, roi):
         if roi.size == 0: return None
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3,3), 0)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+        gray = cv2.GaussianBlur(gray, (5,5), 0)
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 10)
         tight = self.crop_tight(thresh)
         if tight is None: return None
         h, w = tight.shape
@@ -205,13 +205,13 @@ class HarfSistemi:
         if missing: return None, f"Markerlar eksik: {missing}"
             
         src = np.float32(src_points)
-        scale = 4; sw, sh = 210 * scale, 148 * scale; m = 70
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
         dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
         M = cv2.getPerspectiveTransform(src, dst)
         warped = cv2.warpPerspective(img, M, (sw, sh))
         
         # Izgara Kesimi
-        b_px = 60
+        b_px = 150
         sx = int((sw - 10*b_px)/2)
         sy = int((sh - 6*b_px)/2)
         start_idx = bid * 60
@@ -223,7 +223,7 @@ class HarfSistemi:
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): continue
                 
-                p = 8 
+                p = 15 
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
@@ -246,7 +246,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
     try:
         # 1. PDF'i Sayfalara Çevir
         op_ref.update({'status': 'processing', 'message': 'PDF sayfalara dönüştürülüyor...', 'progress': 5})
-        images = convert_from_bytes(file_bytes)
+        images = convert_from_bytes(file_bytes, dpi=300)
         
         # 2. Sayfaları Böl (Üst/Alt)
         sections_to_process = []
