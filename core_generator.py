@@ -162,7 +162,7 @@ def metni_sayfaya_yaz(metin, harfler, config):
                 scale_noise = random.uniform(-0.01 * jitter, 0.01 * jitter)
                 harf_resmi = harfi_boyutlandir(harf_resmi, int(config['target_letter_height'] * (1 + scale_noise)))
                 angle = random.uniform(-0.2 * jitter, 0.2 * jitter)
-                harf_resmi = harf_resmi.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
+                harf_resmi = harf_resmi.rotate(angle, resample=Image.BICUBIC, expand=True)
                 
                 gw, gh = harf_resmi.size
                 if x + gw > max_x:
