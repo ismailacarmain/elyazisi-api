@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
-# Gerekli sistem kütüphaneleri (OpenCV ve PDF için)
-RUN apt-get update && apt-get install -y \
+# Sistem kütüphanelerini kur (OpenCV ve PDF için kritik)
+# --no-install-recommends: İmaj boyutunu küçültür ve gereksiz paketleri önler
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -13,9 +14,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY requirements.txt .
+
+# Paketleri kur
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Render'ın verdiği PORT'u dinle
+# Uygulamayı başlat
 CMD gunicorn --bind 0.0.0.0:$PORT app:app
