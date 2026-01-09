@@ -285,11 +285,28 @@ def check_and_deduct_credit(user_id):
 def get_user_credits():
     # Public okuma yapılabilir veya token eklenebilir. Şimdilik açık kalsın.
     user_id = request.args.get('user_id')
-    if not user_id or not db: return jsonify({'credits': 0})
+    
+    # Veritabanı henüz bağlanmamışsa veya user_id yoksa bile 10 göster (UI kırılmasın)
+    if not db:
+        logger.warning("Firestore DB not initialized yet, returning default 10.")
+        return jsonify({'credits': 10})
+        
+    if not user_id:
+        return jsonify({'credits': 0})
+        
     try:
         doc = db.collection('users').document(user_id).get()
-        return jsonify({'credits': doc.to_dict().get('credits', 10) if doc.exists else 10})
-    except: return jsonify({'credits': 0})
+        if doc.exists:
+            # Kullanıcı varsa kredisini getir, yoksa 10 say.
+            user_data = doc.to_dict()
+            credits = user_data.get('credits', 10)
+            return jsonify({'credits': credits})
+        else:
+            # Kullanıcı veritabanında hiç yoksa (ilk defa giriyorsa) 10 kredisi vardır.
+            return jsonify({'credits': 10})
+    except Exception as e:
+        logger.error(f"Kredi okuma hatası: {e}")
+        return jsonify({'credits': 10})
 
 # --- HARF TARAMA MOTORU (Aynı Kalıyor) ---
 class HarfSistemi:
@@ -781,4 +798,5 @@ def download():
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
