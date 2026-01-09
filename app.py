@@ -253,7 +253,17 @@ def upload_image_to_storage(img_bytes, path, content_type='image/png'):
         if bucket is None: return None
         blob = bucket.blob(path)
         blob.upload_from_string(img_bytes, content_type=content_type)
-        blob.make_public()
+        
+        # Public yapmayı dene (Yetki hatası olabilir)
+        try:
+            blob.make_public()
+        except Exception as e:
+            print(f"Make Public Uyarısı ({path}): {e}")
+            # Public olmasa bile token'lı URL gerekebilir veya bucket policy açıktır.
+            # Şimdilik manuel public link oluşturmayı deneyelim:
+            # https://storage.googleapis.com/BUCKET_NAME/PATH
+            pass
+
         return blob.public_url
     except Exception as e:
         print(f"Upload Hatası ({path}): {e}")
