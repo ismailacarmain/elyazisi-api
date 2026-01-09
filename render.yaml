@@ -3,4 +3,23 @@ services:
     name: elyazisi-api
     env: docker
     plan: free
+    region: frankfurt  # Türkiye'ye en yakın
     healthCheckPath: /health
+    
+    # Environment Variables
+    # NOT: Secret değerleri Render Dashboard'dan ekleyin!
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Bu iki değer Render Dashboard'dan "Secret" olarak eklenecek:
+      # - RECAPTCHA_SECRET_KEY
+      # - FIREBASE_CREDENTIALS
+    
+    # Docker configuration
+    dockerfilePath: ./Dockerfile
+    dockerContext: ./
+    
+    # Auto-deploy
+    autoDeploy: true
