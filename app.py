@@ -172,34 +172,41 @@ def init_firebase():
     try:
         cred = None
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
+        
         if env_creds:
+            logger.info("FIREBASE_CREDENTIALS environment variable found.")
             cred_dict = json.loads(env_creds.strip())
             cred = credentials.Certificate(cred_dict)
             connected_project_id = cred_dict.get('project_id', 'EnvJson')
+        else:
+            logger.error("!!! HATA: FIREBASE_CREDENTIALS environment variable BULUNAMADI !!!")
+            logger.error("Lütfen Render panelinden Environment Variable ekleyin.")
         
-        # Yerel dosya kontrolü (Sadece development için)
         if not cred:
+            # Yerel dosya denemesi
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
+                    logger.info(f"Firebase key found at local path: {p}")
                     cred = credentials.Certificate(p)
                     with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                     break
         
         if cred:
-            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: 
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase Admin SDK initialized successfully.")
             db = firestore.client()
-            # Proje ID'yi devasa bir logla göster ki kaçırmayalım
-            print("\n" + "="*50)
-            print(f"🔥 FIREBASE BAĞLANDI: {connected_project_id}")
-            print("="*50 + "\n")
-            logger.info(f"Firestore connected to project: {connected_project_id}")
+            print("\n" + "!"*60)
+            print(f"!!! FIREBASE BAĞLANDI | PROJE: {connected_project_id} !!!")
+            print("!"*60 + "\n")
         else:
-            print("UYARI: Firebase credentials bulunamadı.")
+            logger.error("Firebase başlatılamadı: Hiçbir kimlik bilgisi (credential) bulunamadı.")
+            
     except Exception as e:
         init_error = str(e)
         db = None
-        print(f"Firebase Hatası: {e}")
+        logger.error(f"Firebase Başlatma Hatası: {e}", exc_info=True)
     return db
 
 init_firebase()
