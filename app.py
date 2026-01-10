@@ -13,9 +13,13 @@ import core_generator as core_generator
 from pdf2image import convert_from_bytes
 import threading
 import uuid
+import requests
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
+
+# --- CONFIG ---
+RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY', '6LfEIUUsAAAAANamEZ_p_9PxSgx4hckW-9n9wI9e') # Fallback for dev
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -569,9 +573,42 @@ def process_single():
         traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
 
+def verify_recaptcha(token):
+    """reCAPTCHA v3 token doğrula"""
+    if not token:
+        return False
+    
+    # Dev ortamında veya secret key yoksa geçici bypass (Production'da kaldırılmalı)
+    if not RECAPTCHA_SECRET_KEY:
+        print("UYARI: RECAPTCHA_SECRET_KEY eksik, doğrulama atlanıyor.")
+        return True
+
+    try:
+        response = requests.post('https://www.google.com/recaptcha/api/siteverify', data={
+            'secret': RECAPTCHA_SECRET_KEY,
+            'response': token
+        })
+        
+        result = response.json()
+        
+        # v3: score kontrolü (0.0 - 1.0). 0.5 ve üzeri insan kabul edilir.
+        if result.get('success') and result.get('score', 0) >= 0.5:
+            return True
+        
+        print(f"reCAPTCHA Fail: {result}")
+        return False
+    except Exception as e:
+        print(f"reCAPTCHA Error: {e}")
+        return False
+
 @app.route('/api/upload_form', methods=['POST'])
 def upload_form():
     try:
+        # 1. reCAPTCHA Kontrolü
+        recaptcha_token = request.form.get('recaptcha_token')
+        if not verify_recaptcha(recaptcha_token):
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız (Bot şüphesi).'}), 403
+
         user_id = request.form.get('user_id')
         font_name = request.form.get('font_name')
         variation_count = int(request.form.get('variation_count', 3))
