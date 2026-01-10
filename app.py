@@ -253,8 +253,9 @@ class HarfSistemi:
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): continue
                 
-                # Padding arttırıldı (22 -> 28) - Çerçeve çizgilerini daha garanti yok eder.
-                p = 28
+                # Padding azaltıldı (28 -> 14). Harflerin (ç, ğ, ş) kuyrukları kesilmesin.
+                # Çerçeve temizliği process_roi içinde yapıldığı için burayı rahatlatabiliriz.
+                p = 14
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
