@@ -122,6 +122,10 @@ def check_and_deduct_credit(user_id):
     except Exception as e:
         return False, str(e)
 
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
+
 @app.route('/api/get_user_credits')
 def get_user_credits():
     # Public okuma yapılabilir veya token eklenebilir. Şimdilik açık kalsın.
