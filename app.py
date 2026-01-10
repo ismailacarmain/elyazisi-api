@@ -324,11 +324,9 @@ def mobil_page(): return send_file('web/mobil_yukle.html')
 def upload_form():
     try:
         # Token ve Kredi kontrolü kaldırıldı (Sınırsız mod)
+        # reCAPTCHA kontrolü KALDIRILDI
         user_id = request.form.get('user_id', 'anonymous') 
         
-        if not verify_recaptcha(request.form.get('recaptcha_token')):
-            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
-
         font_name = request.form.get('font_name')
         variation_count = int(request.form.get('variation_count', 3))
         file = request.files.get('file')
@@ -351,7 +349,7 @@ def upload_form():
 def process_single():
     try:
         data = request.get_json()
-        if not verify_recaptcha(data.get('recaptcha_token')): return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
+        # reCAPTCHA kontrolü KALDIRILDI
 
         u_id, f_name, b64 = data.get('user_id'), data.get('font_name'), data.get('image_base64')
         repetition = int(data.get('variation_count', 3))
