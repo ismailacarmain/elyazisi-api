@@ -590,6 +590,70 @@ def upload_form():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/delete_font', methods=['POST'])
+def delete_font():
+    try:
+        data = request.get_json()
+        font_id = data.get('font_id')
+        user_id = data.get('user_id')
+        
+        database = init_firebase()
+        if not database: return jsonify({'success': False, 'message': 'Veritabanı hatası'}), 500
+        
+        # 1. Kullanıcının kendi koleksiyonundan sil
+        user_font_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
+        
+        # Sahiplik kontrolü
+        doc = user_font_ref.get()
+        if not doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı veya yetkiniz yok'}), 404
+            
+        user_font_ref.delete()
+        
+        # 2. Genel 'fonts' koleksiyonundan da sil (Eğer varsa)
+        public_font_ref = database.collection('fonts').document(font_id)
+        if public_font_ref.get().exists:
+            public_font_ref.delete()
+            
+        return jsonify({'success': True, 'message': 'Font başarıyla silindi'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/toggle_visibility', methods=['POST'])
+def toggle_visibility():
+    try:
+        data = request.get_json()
+        font_id = data.get('font_id')
+        user_id = data.get('user_id')
+        make_public = data.get('public', False) # True = Keşfete Ekle, False = Gizle
+        
+        database = init_firebase()
+        if not database: return jsonify({'success': False, 'message': 'Veritabanı hatası'}), 500
+        
+        user_font_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
+        doc = user_font_ref.get()
+        
+        if not doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+            
+        font_data = doc.to_dict()
+        public_font_ref = database.collection('fonts').document(font_id)
+        
+        if make_public:
+            # Keşfete Ekle (Kopyala)
+            font_data['type'] = 'public'
+            public_font_ref.set(font_data)
+            user_font_ref.update({'is_public': True})
+        else:
+            # Keşfetten Kaldır (Sil)
+            if public_font_ref.get().exists:
+                public_font_ref.delete()
+            user_font_ref.update({'is_public': False})
+            
+        return jsonify({'success': True, 'message': 'Görünürlük güncellendi'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/download', methods=['POST'])
 def download():
     try:
