@@ -21,7 +21,10 @@ from functools import wraps
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 # 1. GÜVENLİK: CORS Sıkılaştırması (Production)
-CORS(app, resources={r"/api/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com"]}}, r"/process_single": {"origins": ["https://fontify.online"]}})
+CORS(app, resources={
+    r"/api/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com"]},
+    r"/process_single": {"origins": ["https://fontify.online"]}
+})
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
