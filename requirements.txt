@@ -1,9 +1,7 @@
-flask==3.1.0
-flask-cors==5.0.0
-opencv-python-headless==4.10.0.84
-numpy==1.26.4
-firebase-admin==6.6.0
-gunicorn==23.0.0
-pdf2image==1.17.0
-Pillow==11.0.0
-requests==2.32.3
+Flask
+firebase-admin
+flask-cors
+gunicorn
+opencv-contrib-python-headless
+numpy
+Pillow

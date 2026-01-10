@@ -1,808 +1,573 @@
-from flask import Flask, request, jsonify, render_template, send_file, redirect
+from flask import Flask, request, jsonify, render_template, send_file
 from flask_cors import CORS
 import cv2
 import numpy as np
 import os
 import base64
 import firebase_admin
-from firebase_admin import credentials, firestore, auth
+from firebase_admin import credentials, firestore
 import json
 import traceback
 import io
 import core_generator as core_generator
-import threading
-import uuid
-import time
-import re
-import logging
-from urllib.parse import urlparse
-from pdf2image import convert_from_bytes
-from PIL import Image as PILImage
-import requests
-from functools import wraps
 
-# ============================================
-# LOGGING SETUP
-# ============================================
-handlers = [logging.StreamHandler()]
-try:
-    handlers.append(logging.FileHandler('app.log'))
-except (IOError, PermissionError):
-    print("Warning: Cannot create log file, using console only")
+app = Flask(__name__, template_folder='templates', static_folder='static')
+CORS(app)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=handlers
-)
-logger = logging.getLogger(__name__)
-
-# ============================================
-# FLASK APP SETUP
-# ============================================
-app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max request
-
-# ============================================
-# SECURITY: SSRF PROTECTION
-# ============================================
-ALLOWED_IMAGE_DOMAINS = [
-    'cloudinary.com',
-    'firebasestorage.googleapis.com',
-    'res.cloudinary.com'
-]
-
-def is_safe_url(url):
-    """URL güvenlik kontrolü - SSRF koruması"""
-    try:
-        parsed = urlparse(url)
-        
-        # Sadece HTTPS
-        if parsed.scheme != 'https':
-            logger.warning(f"Non-HTTPS URL rejected: {url}")
-            return False
-        
-        # Sadece izin verilen domainler
-        if not any(parsed.netloc.endswith(domain) for domain in ALLOWED_IMAGE_DOMAINS):
-            logger.warning(f"Domain not in whitelist: {parsed.netloc}")
-            return False
-        
-        # Localhost ve private IP'ler yasak
-        if 'localhost' in parsed.netloc or '127.0.0.1' in parsed.netloc:
-            logger.warning(f"Localhost URL rejected: {url}")
-            return False
-        
-        return True
-    except Exception as e:
-        logger.error(f"URL validation error: {str(e)}")
-        return False
-
-# ============================================
-# SECURITY: INPUT VALIDATION
-# ============================================
-def validate_font_name(name):
-    """Font adı validation - XSS ve path traversal koruması"""
-    if not name or not isinstance(name, str):
-        raise ValueError("Font name required")
-    
-    name = name.strip()
-    
-    if len(name) < 3 or len(name) > 50:
-        raise ValueError("Font name must be 3-50 characters")
-    
-    # XSS koruması
-    if re.search(r'[<>]', name):
-        raise ValueError("Font name contains invalid characters")
-    
-    # Path traversal koruması
-    if '..' in name or '/' in name or '\\' in name:
-        raise ValueError("Font name contains invalid characters")
-    
-    return name
-
-def validate_base64_image(b64_string, max_size_mb=10):
-    """Base64 image validation"""
-    try:
-        if not b64_string or not isinstance(b64_string, str):
-            raise ValueError("Invalid image data")
-        
-        # Data URL prefix'ini kaldır
-        if ',' in b64_string:
-            b64_string = b64_string.split(',')[1]
-        
-        # Decode
-        img_data = base64.b64decode(b64_string, validate=True)
-        
-        # Boyut kontrolü
-        size_mb = len(img_data) / (1024 * 1024)
-        if size_mb > max_size_mb:
-            raise ValueError(f"Image too large: {size_mb:.1f}MB (max {max_size_mb}MB)")
-        
-        # Format kontrolü
-        img = PILImage.open(io.BytesIO(img_data))
-        if img.format not in ['JPEG', 'PNG']:
-            raise ValueError(f"Unsupported image format: {img.format}")
-        
-        # Dimension kontrolü
-        width, height = img.size
-        if width > 4000 or height > 4000:
-            raise ValueError(f"Image too large: {width}x{height} (max 4000x4000)")
-        
-        return img_data
-        
-    except ValueError as e:
-        raise e
-    except Exception as e:
-        raise ValueError(f"Invalid image data: {str(e)}")
-
-# ============================================
-# CORS CONFIGURATION (DÜZELTILMIŞ!)
-# ============================================
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "https://fontify.online",
-            "https://www.fontify.online",
-            "https://elyazisi-api.onrender.com",
-            "https://square-morning-7a87.ismailacarmain.workers.dev",
-        ],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    },
-    r"/process_single": {
-        "origins": [
-            "https://fontify.online",
-            "https://www.fontify.online"
-        ],
-        "methods": ["POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    },
-    r"/download": {
-        "origins": [
-            "https://fontify.online",
-            "https://www.fontify.online"
-        ],
-        "methods": ["GET", "OPTIONS"]
-    }
-})
-
-# ============================================
-# RECAPTCHA
-# ============================================
-RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
-
-def verify_recaptcha(token):
-    """reCAPTCHA v3 doğrulama"""
-    if not RECAPTCHA_SECRET_KEY:
-        logger.warning("RECAPTCHA_SECRET_KEY not configured")
-        return False
-    
-    if not token:
-        logger.warning("No reCAPTCHA token provided")
-        return False
-    
-    try:
-        response = requests.post(
-            'https://www.google.com/recaptcha/api/siteverify',
-            data={
-                'secret': RECAPTCHA_SECRET_KEY,
-                'response': token
-            },
-            timeout=5
-        )
-        result = response.json()
-        
-        success = result.get('success', False)
-        score = result.get('score', 0)
-        
-        if not success:
-            logger.warning(f"reCAPTCHA verification failed: {result}")
-            return False
-        
-        if score < 0.5:
-            logger.warning(f"reCAPTCHA score too low: {score}")
-            return False
-        
-        logger.info(f"reCAPTCHA verified successfully: score={score}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"reCAPTCHA verification error: {str(e)}")
-        return False
-
-# ============================================
-# FIREBASE INITIALIZATION
-# ============================================
+# --- FIREBASE BAĞLANTISI ---
 db = None
+connected_project_id = "BILINMIYOR"
 init_error = None
 
 def init_firebase():
-    """Firebase initialization - secure"""
-    global db, init_error
-    
+    global db, init_error, connected_project_id
+    if db is not None: return db
     try:
         cred = None
-        connected_project_id = "Unknown"
-        
-        # Environment variable'dan al (Production)
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         if env_creds:
-            cred_dict = json.loads(env_creds)
+            cred_dict = json.loads(env_creds.strip())
             cred = credentials.Certificate(cred_dict)
-            connected_project_id = cred_dict.get('project_id', 'Environment')
+            connected_project_id = cred_dict.get('project_id', 'EnvJson')
         
-        # Yerel dosya kontrolü (Development only)
+        if not cred and os.environ.get('FIREBASE_PRIVATE_KEY'):
+            try:
+                private_key = os.environ.get('FIREBASE_PRIVATE_KEY', "").replace('\n', '\n')
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
+                    "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID'),
+                    "private_key": private_key,
+                    "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL'),
+                    "client_id": os.environ.get('FIREBASE_CLIENT_ID'),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+                cred = credentials.Certificate(cred_dict)
+                connected_project_id = cred_dict.get('project_id')
+            except Exception as e: init_error = f"Env Vars Hatası: {e}"
+
         if not cred:
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json']
             for p in paths:
                 if os.path.exists(p):
                     cred = credentials.Certificate(p)
-                    with open(p, 'r') as f:
-                        connected_project_id = json.load(f).get('project_id', 'File')
+                    with open(p, 'r') as f: connected_project_id = json.load(f).get('project_id', 'Dosya')
                     break
         
         if cred:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(cred)
+            if not firebase_admin._apps: firebase_admin.initialize_app(cred)
             db = firestore.client()
-            logger.info(f"✅ Firebase connected: {connected_project_id}")
+            print(f"Firestore BAĞLANDI: {connected_project_id}")
         else:
-            logger.error("❌ Firebase credentials not found")
-            
+            print("UYARI: Firebase credentials bulunamadı.")
     except Exception as e:
         init_error = str(e)
         db = None
-        logger.error(f"❌ Firebase initialization error: {e}")
-    
+        print(f"Firebase Hatası: {e}")
     return db
 
-# Initialize Firebase on startup
 init_firebase()
 
-# ============================================
-# HTTPS ENFORCEMENT
-# ============================================
-@app.before_request
-def before_request():
-    """HTTPS zorunluluğu (production)"""
-    if not request.is_secure and not request.headers.get('X-Forwarded-Proto') == 'https':
-        if not app.debug and not request.host.startswith('localhost'):
-            return redirect(request.url.replace('http://', 'https://'), code=301)
+# --- HARF TARAMA MOTORU (GELİŞMİŞ ARUCO SİSTEMİ) ---
+class HarfSistemi:
+    def __init__(self, repetition=3):
+        self.repetition = repetition
+        self.char_list = []
+        self.generate_char_list()
 
-# ============================================
-# SECURITY HEADERS
-# ============================================
-@app.after_request
-def set_secure_headers(response):
-    """Security headers"""
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
-    if not app.debug:
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    
-    response.headers['Content-Security-Policy'] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "img-src 'self' data: https: blob:; "
-        "font-src 'self' https://cdn.jsdelivr.net; "
-        "connect-src 'self' https://fontify.online https://elyazisi-api.onrender.com https://firestore.googleapis.com;"
-    )
-    
-    return response
-
-# ============================================
-# ERROR HANDLERS
-# ============================================
-@app.errorhandler(Exception)
-def handle_exception(e):
-    """Global exception handler"""
-    logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
-    return jsonify({
-        "success": False,
-        "message": "Sunucu hatası oluştu",
-        "error": str(e) if app.debug else None
-    }), 500
-
-@app.errorhandler(413)
-def request_entity_too_large(error):
-    """File too large handler"""
-    return jsonify({
-        "success": False,
-        "message": "Dosya çok büyük (max 50MB)"
-    }), 413
-
-# ============================================
-# AUTH MIDDLEWARE (DÜZELTİLMİŞ!)
-# ============================================
-def login_required(f):
-    """Firebase auth token verification"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # --- OFFLINE/LOCAL MODE BYPASS ---
-        # Eğer DB bağlantısı yoksa, token kontrolünü atla ve test kullanıcısı ata
-        if db is None:
-            logger.warning("⚠️ Database not connected: Running in OFFLINE/TEST MODE. Auth bypassed.")
-            request.uid = 'local_test_user'
-            request.user_email = 'test@localhost'
-            return f(*args, **kwargs)
-        # ---------------------------------
-
-        # Get Authorization header
-        auth_header = request.headers.get('Authorization')
+    def generate_char_list(self):
+        # Web uyumlu ASCII isimlendirme
+        lowers = "abcçdefgğhıijklmnoöpqrsştuüvwxyz"
+        uppers = "ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZ"
+        digits = "0123456789"
+        symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺&#"
+        symbols_str = symbols_str.replace(" ", "")
         
-        if not auth_header:
-            logger.warning(f"Missing Authorization header from {request.remote_addr}")
-            return jsonify({
-                'success': False,
-                'message': 'Giriş yapmanız gerekiyor',
-                'error': 'MISSING_AUTH'
-            }), 401
+        # Türkçe ve Özel Karakter Haritası (engine.js ile %100 uyumlu olmalı)
+        # Önemli: I -> buyuk_ii, İ -> buyuk_i, ı -> kucuk_ii, i -> kucuk_i
+        tr_map = {
+            'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu',
+            'Ç': 'cc', 'Ğ': 'gg', 'I': 'ii', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'
+        }
         
-        # Parse Bearer token
-        try:
-            id_token = auth_header.split('Bearer ')[-1]
-        except:
-            logger.warning(f"Invalid Authorization header format from {request.remote_addr}")
-            return jsonify({
-                'success': False,
-                'message': 'Geçersiz token formatı',
-                'error': 'INVALID_TOKEN_FORMAT'
-            }), 401
+        # Sembol haritası
+        sym_map = {
+            ".": "nokta", ",": "virgul", ":": "ikiknokta", ";": "noktalivirgul", 
+            "?": "soru", "!": "unlem", "-": "tire", "_": "alt_tire",
+            "\"": "tirnak", "'": "tektirnak", 
+            "(": "parantezac", ")": "parantezkapama",
+            "[": "koseli_ac", "]": "koseli_kapa",
+            "{": "suslu_ac", "}": "suslu_kapa",
+            "/": "slash", "\\": "backslas", "|": "pipe",
+            "+": "arti", "*": "carpi", "=": "esit",
+            "<": "kucuktur", ">": "buyuktur",
+            "%": "yuzde", "^": "sapka", "~": "yaklasik",
+            "@": "at", "$": "dolar", "€": "euro", "₺": "tl",
+            "&": "ampersand", "#": "diyez"
+        }
+
+        # Küçük harfler
+        for char in lowers:
+            base = tr_map.get(char, char)
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"kucuk_{base}_{i}")
         
-        # Verify token
-        try:
-            decoded_token = auth.verify_id_token(id_token)
-            request.uid = decoded_token['uid']
-            request.user_email = decoded_token.get('email', 'unknown')
-            logger.info(f"User authenticated: {request.uid}")
+        # Büyük harfler
+        for char in uppers:
+            # tr_map içinde varsa onu kullan (I->ii gibi), yoksa lowercase yap
+            if char in tr_map:
+                base = tr_map[char]
+            else:
+                base = char.lower()
             
-        except auth.ExpiredIdTokenError:
-            logger.warning(f"Expired token from {request.remote_addr}")
-            return jsonify({
-                'success': False,
-                'message': 'Oturumunuz sona erdi. Lütfen tekrar giriş yapın.',
-                'error': 'TOKEN_EXPIRED'
-            }), 401
-            
-        except auth.RevokedIdTokenError:
-            logger.warning(f"Revoked token from {request.remote_addr}")
-            return jsonify({
-                'success': False,
-                'message': 'Token iptal edilmiş.',
-                'error': 'TOKEN_REVOKED'
-            }), 401
-            
-        except Exception as e:
-            # Token doğrulanamasa bile (örn: internet yok veya key yok), test modunda devam et
-            if db is None or app.debug:
-                logger.warning(f"Auth verification failed but proceeding in Debug/Offline mode: {str(e)}")
-                request.uid = 'local_test_user'
-                request.user_email = 'test@localhost'
-                return f(*args, **kwargs)
-
-            logger.error(f"Token verification failed: {str(e)}")
-            return jsonify({
-                'success': False,
-                'message': 'Token doğrulanamadı',
-                'error': 'TOKEN_VERIFICATION_FAILED'
-            }), 401
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"buyuk_{base}_{i}")
         
-        return f(*args, **kwargs)
-    
-    return decorated_function
+        # Rakamlar
+        for char in digits:
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"rakam_{char}_{i}")
+        
+        # Semboller
+        seen = set()
+        unique_symbols = ""
+        for char in symbols_str:
+            if char not in seen:
+                unique_symbols += char
+                seen.add(char)
 
-# ============================================
-# CREDIT SYSTEM (DÜZELTİLMİŞ!)
-# ============================================
-def check_credits(required=1):
-    """
-    Kredi kontrolü iptal edildi (Sınırsız Kullanım Modu).
-    Her zaman işlem başarılı sayılır ve kredi düşülmez.
-    """
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            # Kredi kontrolünü atla
-            # Frontend'in hata vermemesi için dummy değerler ekle
-            request.user_credits_before = 999999
-            request.user_credits_after = 999999
+        for char in unique_symbols:
+            safe = sym_map.get(char, f"sembol_{ord(char)}")
+            for i in range(1, self.repetition + 1):
+                self.char_list.append(f"ozel_{safe}_{i}")
+
+    def crop_tight(self, binary_img):
+        coords = cv2.findNonZero(binary_img)
+        if coords is None: return None
+        x, y, w, h = cv2.boundingRect(coords)
+        # Çok küçük gürültüleri ele (Noktalama işaretleri için limiti düşürdüm: 2px)
+        if w < 2 or h < 2: return None
+        return binary_img[y:y+h, x:x+w]
+
+    def process_roi(self, roi):
+        if roi.size == 0: return None
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        
+        # Hafif bir yumuşatma
+        gray = cv2.GaussianBlur(gray, (3,3), 0)
+        
+        # Adaptive Threshold
+        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
+        
+        tight = self.crop_tight(thresh)
+        if tight is None: return None
+        
+        h, w = tight.shape
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[:, :, 0] = 0
+        rgba[:, :, 1] = 0
+        rgba[:, :, 2] = 0
+        rgba[:, :, 3] = tight
+        
+        return rgba
+
+    def process_single_page(self, img, forced_section_id=None):
+        # ... (Marker tespit kodları aynı kalıyor) ...
+        # Marker tespiti için grayscale yap
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.adaptiveThreshWinSizeMin = 3
+        parameters.adaptiveThreshWinSizeMax = 23
+        parameters.adaptiveThreshWinSizeStep = 5
+        
+        detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+        
+        corners, ids, _ = detector.detectMarkers(gray_full)
+        
+        # Eğer bulunamazsa kontrast artırıp tekrar dene
+        if ids is None or len(ids) < 4:
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray_full)
+            corners, ids, _ = detector.detectMarkers(enhanced)
+        
+        if ids is None or len(ids) < 4:
+            return None, f"Yetersiz marker ({0 if ids is None else len(ids)}/4). Lütfen fotoğrafı dik ve net çekin."
+        
+        ids = ids.flatten()
+        
+        # 2. Bölüm Tespiti
+        if forced_section_id is not None:
+            bid = forced_section_id
+            start_id = bid * 4
+            expected = [(start_id + k) % 50 for k in range(4)]
+        else:
+            base = int(min(ids))
+            bid = base // 4
+            start_id = bid * 4
+            expected = [start_id, start_id+1, start_id+2, start_id+3]
+        
+        # 3. Perspektif
+        src_points = []
+        found_centers = {}
+        for idx in range(len(ids)):
+            found_centers[ids[idx]] = np.mean(corners[idx][0], axis=0)
             
-            # Sadece log bas, işlem yapma
-            # logger.info(f"Credit check bypassed for user {getattr(request, 'uid', 'anonymous')}")
+        missing = []
+        for target in expected:
+            if target in found_centers: src_points.append(found_centers[target])
+            else: missing.append(target)
+                
+        if missing: return None, f"Bölüm {bid} için markerlar eksik: {missing}"
             
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
+        src = np.float32(src_points)
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, M, (sw, sh))
+        
+        # 4. Izgara Kesimi
+        b_px = 150
+        sx = int((sw - 10*b_px)/2)
+        sy = int((sh - 6*b_px)/2)
+        start_idx = bid * 60
+        page_results = {}
+        detected_count = 0
+        
+        for r in range(6):
+            for c in range(10):
+                idx = start_idx + (r * 10 + c)
+                if idx >= len(self.char_list): continue
+                
+                # Padding: 22px (Merkeze odaklan, yanlardan ve çerçeveden uzak dur)
+                p = 22 
+                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                
+                processed_img = self.process_roi(roi)
+                if processed_img is not None:
+                    _, buffer = cv2.imencode(".png", processed_img)
+                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
+                    page_results[self.char_list[idx]] = b64_str
+                    detected_count += 1
+                    
+        return {'harfler': page_results, 'detected': detected_count, 'section_id': bid, 'total_in_section': min(60, len(self.char_list)-start_idx)}, None
+        # ... (Marker tespit kodları aynı kalıyor) ...
+        # Marker tespiti için grayscale yap
+        gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.adaptiveThreshWinSizeMin = 3
+        parameters.adaptiveThreshWinSizeMax = 23
+        parameters.adaptiveThreshWinSizeStep = 5
+        
+        detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
+        
+        corners, ids, _ = detector.detectMarkers(gray_full)
+        
+        # Eğer bulunamazsa kontrast artırıp tekrar dene
+        if ids is None or len(ids) < 4:
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray_full)
+            corners, ids, _ = detector.detectMarkers(enhanced)
+        
+        if ids is None or len(ids) < 4:
+            return None, f"Yetersiz marker ({0 if ids is None else len(ids)}/4). Lütfen fotoğrafı dik ve net çekin."
+        
+        ids = ids.flatten()
+        
+        # 2. Bölüm Tespiti
+        if forced_section_id is not None:
+            bid = forced_section_id
+            start_id = bid * 4
+            expected = [(start_id + k) % 50 for k in range(4)]
+        else:
+            base = int(min(ids))
+            bid = base // 4
+            start_id = bid * 4
+            expected = [start_id, start_id+1, start_id+2, start_id+3]
+        
+        # 3. Perspektif
+        src_points = []
+        found_centers = {}
+        for idx in range(len(ids)):
+            found_centers[ids[idx]] = np.mean(corners[idx][0], axis=0)
+            
+        missing = []
+        for target in expected:
+            if target in found_centers: src_points.append(found_centers[target])
+            else: missing.append(target)
+                
+        if missing: return None, f"Bölüm {bid} için markerlar eksik: {missing}"
+            
+        src = np.float32(src_points)
+        scale = 10; sw, sh = 210 * scale, 148 * scale; m = 175
+        dst = np.float32([[m, m], [sw-m, m], [m, sh-m], [sw-m, sh-m]])
+        M = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(img, M, (sw, sh))
+        
+        # 4. Izgara Kesimi
+        b_px = 150
+        sx = int((sw - 10*b_px)/2)
+        sy = int((sh - 6*b_px)/2)
+        start_idx = bid * 60
+        page_results = {}
+        detected_count = 0
+        
+        for r in range(6):
+            for c in range(10):
+                idx = start_idx + (r * 10 + c)
+                if idx >= len(self.char_list): continue
+                
+                # Padding'i azalttım (15 -> 8). Kutunun kenarına yazılanlar artık kesilmez.
+                p = 8 
+                roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
+                
+                processed_img = self.process_roi(roi)
+                if processed_img is not None:
+                    _, buffer = cv2.imencode(".png", processed_img)
+                    b64_str = base64.b64encode(buffer).decode('utf-8').replace('\n', '')
+                    page_results[self.char_list[idx]] = b64_str
+                    detected_count += 1
+                    
+        return {'harfler': page_results, 'detected': detected_count, 'section_id': bid, 'total_in_section': min(60, len(self.char_list)-start_idx)}, None
 
-# ============================================
-# RATE LIMITING (Simple)
-# ============================================
-last_upload_times = {}
-RATE_LIMIT_SECONDS = 10  # 10 saniyede bir upload
+# Varsayılan sistem (3x) - İstek üzerine değişebilir
+default_sistem = HarfSistemi(repetition=3)
 
-def check_rate_limit():
-    """Basit rate limiting"""
-    if not hasattr(request, 'uid'):
-        return True
-    
-    current_time = time.time()
-    last_time = last_upload_times.get(request.uid, 0)
-    
-    if current_time - last_time < RATE_LIMIT_SECONDS:
-        remaining = int(RATE_LIMIT_SECONDS - (current_time - last_time))
-        logger.warning(f"Rate limit hit for user {request.uid}")
-        return False, remaining
-    
-    last_upload_times[request.uid] = current_time
-    return True, 0
-
-# ============================================
-# ROUTES: HEALTH & BASIC
-# ============================================
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "firebase": "connected" if db else "disconnected"
-    }), 200
+# --- WEB ROTALARI ---
 
 @app.route('/')
 def index():
-    """Ana sayfa"""
-    return render_template('index.html')
+    font_id = request.args.get('font_id', '')
+    user_id = request.args.get('user_id', '')
+    return render_template('index.html', font_id=font_id, user_id=user_id)
 
-@app.route('/upload')
-def upload_page():
-    """Upload sayfası"""
-    return render_template('upload.html')
+@app.route('/mobil_yukle.html')
+def mobil_page():
+    # Statik dosya olarak sunmak yerine template render edebiliriz ama 
+    # dosya yapısına göre statik sunum daha kolay olabilir.
+    # Şimdilik template klasöründe olduğunu varsayalım ya da direkt static'den okuyalım.
+    return send_file('web/mobil_yukle.html')
 
-# ============================================
-# ROUTES: USER ENDPOINTS
-# ============================================
-@app.route('/api/user/credits', methods=['GET'])
-@login_required
-def get_user_credits():
-    """Kullanıcının credit bilgisini döndür"""
+@app.route('/api/list_fonts')
+def list_fonts():
+    user_id = request.args.get('user_id')
+    fonts = []
+    database = init_firebase()
+    if not database: return jsonify({"success": False, "error": "Veritabanı bağlantısı yok"})
     try:
-        if not db:
-            return jsonify({'success': False, 'message': 'Veritabanı bağlantısı yok'}), 500
-        
-        user_doc = db.collection('users').document(request.uid).get()
-        
-        if not user_doc.exists:
-            # Yeni kullanıcı oluştur
-            credits = 10
-            db.collection('users').document(request.uid).set({
-                'credits': credits,
-                'email': request.user_email,
-                'created_at': firestore.SERVER_TIMESTAMP
-            })
-            logger.info(f"New user created in get_credits: {request.uid}")
-        else:
-            user_data = user_doc.to_dict()
-            credits = user_data.get('credits', 0)
-        
-        return jsonify({
-            'success': True,
-            'credits': credits
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Get credits error: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': 'Kredi bilgisi alınamadı'
-        }), 500
+        public_fonts = database.collection('fonts').stream()
+        for doc in public_fonts:
+            d = doc.to_dict()
+            f_name = d.get('font_name') or d.get('font_id') or doc.id
+            fonts.append({'id': d.get('font_id', doc.id), 'name': f_name, 'type': 'public'})
+        if user_id:
+            private_fonts = database.collection('users').document(user_id).collection('fonts').stream()
+            for doc in private_fonts:
+                d = doc.to_dict()
+                fid = d.get('font_id', doc.id)
+                f_name = d.get('font_name') or fid
+                if not any(f['id'] == fid for f in fonts):
+                    fonts.append({'id': fid, 'name': f_name, 'type': 'private'})
+        return jsonify({"success": True, "fonts": fonts})
+    except Exception as e: return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/user/fonts', methods=['GET'])
-@login_required
-def get_user_fonts():
-    """Kullanıcının fontlarını listele"""
-    try:
-        if not db:
-            return jsonify({'success': False, 'message': 'Veritabanı bağlantısı yok'}), 500
-        
-        # Kullanıcının fontları
-        fonts_ref = db.collection('fonts').where('owner_id', '==', request.uid).stream()
-        
-        fonts = []
-        for doc in fonts_ref:
-            font_data = doc.to_dict()
-            font_data['id'] = doc.id
-            fonts.append(font_data)
-        
-        logger.info(f"User {request.uid} has {len(fonts)} fonts")
-        
-        return jsonify({
-            'success': True,
-            'fonts': fonts
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Get fonts error: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': 'Font listesi alınamadı'
-        }), 500
+@app.route('/api/get_assets')
+def get_assets():
+    font_id = request.args.get('font_id')
+    user_id = request.args.get('user_id')
+    assets = {}
+    database = init_firebase()
+    if database and font_id:
+        doc = database.collection('fonts').document(font_id).get()
+        if not doc.exists and user_id:
+            doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
+        if doc.exists:
+            harfler_data = doc.to_dict().get('harfler', {})
+            for key, b64 in harfler_data.items():
+                base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                if base_key not in assets: assets[base_key] = []
+                assets[base_key].append(b64)
+            return jsonify({"success": True, "assets": assets, "source": "firebase"})
+    
+    HARFLER_KLASORU = 'static/harfler'
+    if os.path.exists(HARFLER_KLASORU):
+        for dosya in os.listdir(HARFLER_KLASORU):
+            if dosya.endswith('.png'):
+                key = dosya.rsplit('_', 1)[0]
+                if key not in assets: assets[key] = []
+                assets[key].append(dosya)
+        if assets: return jsonify({"success": True, "assets": assets, "source": "local"})
+    return jsonify({"success": True, "assets": {}, "source": "none", "warning": "Harf yok"}), 200
 
-# ============================================
-# ROUTES: FONT UPLOAD (DÜZELTİLMİŞ SIRALAMA!)
-# ============================================
-@app.route('/api/upload_form', methods=['POST'])
-@login_required  # 1. Önce auth kontrol (request.uid set edilir)
-@check_credits(required=1)  # 2. Sonra credit kontrol (request.uid kullanır)
-def upload_form():
-    """
-    Font yükleme endpoint
-    ÖNEMLİ: Decorator sıralaması kritik!
-    """
-    try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({
-                'success': False,
-                'message': 'Veri eksik'
-            }), 400
-        
-        # Font name validation
-        try:
-            font_name = validate_font_name(data.get('font_name', ''))
-        except ValueError as e:
-            return jsonify({
-                'success': False,
-                'message': str(e)
-            }), 400
-        
-        # Image data validation
-        image_data = data.get('image')
-        if not image_data:
-            return jsonify({
-                'success': False,
-                'message': 'Resim verisi eksik'
-            }), 400
-        
-        # Rate limiting
-        allowed, remaining = check_rate_limit()
-        if not allowed:
-            return jsonify({
-                'success': False,
-                'message': f'Çok hızlı istek. {remaining} saniye bekleyin.'
-            }), 429
-        
-        # Base64 image validation
-        try:
-            img_bytes = validate_base64_image(image_data, max_size_mb=10)
-        except ValueError as e:
-            return jsonify({
-                'success': False,
-                'message': str(e)
-            }), 400
-        
-        # reCAPTCHA validation (opsiyonel)
-        recaptcha_token = data.get('recaptchaToken')
-        if recaptcha_token:
-            if not verify_recaptcha(recaptcha_token):
-                logger.warning(f"reCAPTCHA failed for user {request.uid}")
-                # İsteğe bağlı: return error veya sadece log
-        
-        # Image processing (core_generator modülünüzle)
-        logger.info(f"Processing font: {font_name} for user {request.uid}")
-        
-        # TODO: Gerçek font işleme kodunuz buraya gelecek
-        # result = core_generator.process_font(img_bytes, font_name)
-        
-        # Firestore'a kaydet
-        if db:
-            font_doc = {
-                'name': font_name,
-                'owner_id': request.uid,
-                'owner_email': request.user_email,
-                'is_public': False,
-                'created_at': firestore.SERVER_TIMESTAMP,
-                # 'characters': result['characters'],
-                # 'download_url': result['url']
-            }
-            
-            doc_ref = db.collection('fonts').add(font_doc)
-            logger.info(f"Font created: {doc_ref[1].id}")
-        else:
-            logger.warning("Database not connected: Font not saved to Firestore (Memory only)")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Font başarıyla oluşturuldu (Yerel Mod)',
-            'remaining_credits': request.user_credits_after
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Upload form error: {str(e)}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'message': 'Font oluşturma başarısız',
-            'error': str(e) if app.debug else 'INTERNAL_ERROR'
-        }), 500
+# --- TARAMA VE UPLOAD ---
 
-# ============================================
-# ROUTES: FONT OPERATIONS
-# ============================================
-@app.route('/api/toggle_visibility', methods=['POST'])
-@login_required
-def toggle_visibility():
-    """Font görünürlüğünü değiştir (public/private)"""
-    try:
-        if not db:
-            return jsonify({'success': False, 'message': 'Veritabanı bağlantısı yok'}), 500
-        
-        data = request.get_json()
-        font_id = data.get('font_id')
-        
-        if not font_id:
-            return jsonify({'success': False, 'message': 'Font ID eksik'}), 400
-        
-        # Font'u kontrol et
-        font_ref = db.collection('fonts').document(font_id)
-        font_doc = font_ref.get()
-        
-        if not font_doc.exists:
-            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
-        
-        font_data = font_doc.to_dict()
-        
-        # Sadece owner değiştirebilir
-        if font_data.get('owner_id') != request.uid:
-            return jsonify({'success': False, 'message': 'Yetkiniz yok'}), 403
-        
-        # Toggle
-        current_visibility = font_data.get('is_public', False)
-        new_visibility = not current_visibility
-        
-        font_ref.update({'is_public': new_visibility})
-        logger.info(f"Font {font_id} visibility changed to {new_visibility}")
-        
-        return jsonify({
-            'success': True,
-            'is_public': new_visibility
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Toggle visibility error: {str(e)}")
-        return jsonify({'success': False, 'message': 'İşlem başarısız'}), 500
-
-@app.route('/api/update_char', methods=['POST'])
-@login_required
-def update_char():
-    """Font karakterini güncelle"""
-    try:
-        if not db:
-            return jsonify({'success': False, 'message': 'Veritabanı bağlantısı yok'}), 500
-        
-        data = request.get_json()
-        font_id = data.get('font_id')
-        char = data.get('char')
-        image_data = data.get('image')
-        
-        if not all([font_id, char, image_data]):
-            return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-        
-        # Font ownership kontrolü
-        font_ref = db.collection('fonts').document(font_id)
-        font_doc = font_ref.get()
-        
-        if not font_doc.exists:
-            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
-        
-        font_data = font_doc.to_dict()
-        
-        if font_data.get('owner_id') != request.uid:
-            return jsonify({'success': False, 'message': 'Yetkiniz yok'}), 403
-        
-        # Karakter güncelle
-        # TODO: Gerçek güncelleme kodunuz
-        logger.info(f"Character {char} updated in font {font_id}")
-        
-        return jsonify({'success': True}), 200
-        
-    except Exception as e:
-        logger.error(f"Update char error: {str(e)}")
-        return jsonify({'success': False, 'message': 'Güncelleme başarısız'}), 500
-
-# ============================================
-# ROUTES: DOWNLOAD
-# ============================================
-@app.route('/download', methods=['GET'])
-def download():
-    """Download endpoint - URL'den dosya indir"""
-    try:
-        url = request.args.get('url')
-        
-        if not url:
-            return jsonify({'success': False, 'message': 'URL eksik'}), 400
-        
-        # SSRF koruması
-        if not is_safe_url(url):
-            logger.warning(f"Unsafe URL rejected in download: {url}")
-            return jsonify({'success': False, 'message': 'Güvenli olmayan URL'}), 400
-        
-        # Dosyayı indir
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        
-        # Content type belirle
-        content_type = response.headers.get('Content-Type', 'application/octet-stream')
-        
-        # Dosya adını URL'den çıkar
-        filename = url.split('/')[-1].split('?')[0] or 'download'
-        
-        return send_file(
-            io.BytesIO(response.content),
-            mimetype=content_type,
-            as_attachment=True,
-            download_name=filename
-        )
-        
-    except requests.RequestException as e:
-        logger.error(f"Download error: {str(e)}")
-        return jsonify({'success': False, 'message': 'İndirme başarısız'}), 500
-
-# ============================================
-# ROUTES: MOBILE (No auth required)
-# ============================================
 @app.route('/process_single', methods=['POST'])
 def process_single():
-    """
-    Mobil endpoint - Auth gerekmez
-    NOT: Credit kontrolü YOK (dikkat!)
-    """
+    global init_error
     try:
         data = request.get_json()
+        u_id = data.get('user_id')
+        f_name = data.get('font_name')
+        b64 = data.get('image_base64')
         
-        if not data:
-            return jsonify({'success': False, 'message': 'Veri eksik'}), 400
+        # Repetition parametresini al (Yoksa 3 varsay)
+        # Frontend'den gönderilmesi iyi olur ama gönderilmezse varsayılanı kullanırız.
+        # Mobil uygulamadan henüz gönderilmiyor, o yüzden 3 varsayıyoruz.
+        repetition = int(data.get('variation_count', 3))
         
-        # reCAPTCHA kontrolü
-        recaptcha_token = data.get('recaptchaToken')
-        if not verify_recaptcha(recaptcha_token):
-            return jsonify({'success': False, 'message': 'Bot koruması başarısız'}), 403
+        # Dinamik sistem oluştur (Eğer varsayılan 3'ten farklıysa)
+        current_sistem = default_sistem
+        if repetition != 3:
+            current_sistem = HarfSistemi(repetition=repetition)
+
+        if not u_id or not b64: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
         
-        # Image processing
-        image_data = data.get('image')
-        if not image_data:
-            return jsonify({'success': False, 'message': 'Resim eksik'}), 400
+        nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        try:
-            img_bytes = validate_base64_image(image_data, max_size_mb=5)
-        except ValueError as e:
-            return jsonify({'success': False, 'message': str(e)}), 400
+        if img is None: return jsonify({'success': False, 'message': 'Resim okunamadı'}), 400
+
+        res, err = current_sistem.process_single_page(img)
         
-        # TODO: Font processing
-        logger.info("Processing single image (mobile)")
-        
+        if err: return jsonify({'success': False, 'message': err}), 400
+
+        database = init_firebase()
+        if database:
+            try:
+                fid = f"{u_id}_{f_name.replace(' ', '_')}"
+                d_ref = database.collection('fonts').document(fid)
+                u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
+                
+                doc = d_ref.get()
+                
+                # Toplam karakter sayısını hesapla
+                total_chars = len(current_sistem.char_list)
+                
+                # Yeni veriyi hazırla
+                new_harfler = res['harfler']
+                new_section = res['section_id']
+                
+                if not doc.exists:
+                    payload = {
+                        'harfler': new_harfler, 
+                        'harf_sayisi': len(new_harfler), 
+                        'sections_completed': [new_section],
+                        'owner_id': u_id, 
+                        'user_id': u_id, 
+                        'font_name': f_name, 
+                        'font_id': fid, 
+                        'repetition': repetition,
+                        'total_expected': total_chars,
+                        'created_at': firestore.SERVER_TIMESTAMP
+                    }
+                    d_ref.set(payload)
+                    u_ref.set(payload)
+                else:
+                    curr = doc.to_dict()
+                    h = curr.get('harfler', {})
+                    h.update(new_harfler)
+                    
+                    s = curr.get('sections_completed', [])
+                    if new_section not in s: s.append(new_section)
+                    s.sort()
+                    
+                    payload = {
+                        'harfler': h, 
+                        'harf_sayisi': len(h), 
+                        'sections_completed': s, 
+                        'font_id': fid
+                    }
+                    d_ref.update(payload)
+                    u_ref.update(payload)
+            except Exception as e: print(f"DB Kayıt Hatası: {e}")
+
         return jsonify({
             'success': True,
-            'message': 'İşlem başarılı'
-        }), 200
-        
+            'section_id': res['section_id'],
+            'detected_chars': res['detected'],
+            'total_chars_found': len(res['harfler']),
+            'db_project_id': connected_project_id
+        })
     except Exception as e:
-        logger.error(f"Process single error: {str(e)}")
-        return jsonify({'success': False, 'message': 'İşlem başarısız'}), 500
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
-# ============================================
-# RUN SERVER
-# ============================================
+@app.route('/api/upload_form', methods=['POST'])
+def upload_form():
+    # PDF Upload Endpoint'i (Gelecekte PDF'ten ayırma eklenebilir)
+    # Şimdilik basitçe process_single'a yönlendirmek zor çünkü PDF çok sayfalı.
+    # PDF'i görüntülere ayırıp tek tek process_single çağırmak gerekir.
+    # Bu özellik şu an prompt'ta istenmedi ama 'ekle.html'de var. 
+    # O yüzden basit bir "Yapım aşamasında" veya PDF split mantığı gerekebilir.
+    # Ancak kullanıcı "Telefondan foto çekecek" dediği için şimdilik mobil odaklı gidiyoruz.
+    return jsonify({'success': False, 'message': 'PDF yükleme sunucu tarafında henüz aktif değil. Lütfen mobil taramayı kullanın.'})
+
+@app.route('/download', methods=['POST'])
+def download():
+    try:
+        metin = request.form.get('metin', '')
+        font_id = request.form.get('font_id')
+        user_id = request.form.get('user_id')
+        yazi_boyutu = int(request.form.get('yazi_boyutu', 140))
+        satir_araligi = int(request.form.get('satir_araligi', 220))
+        kelime_boslugu = int(request.form.get('kelime_boslugu', 55))
+        jitter = int(request.form.get('jitter', 3))
+        murekkep_rengi_str = request.form.get('murekkep_rengi', 'tukenmez')
+        paper_type = request.form.get('paper_type', 'cizgili')
+
+        active_harfler = {}
+        database = init_firebase()
+        if database and font_id:
+            doc = database.collection('fonts').document(font_id).get()
+            if not doc.exists and user_id:
+                doc = database.collection('users').document(user_id).collection('fonts').document(font_id).get()
+            
+            if doc.exists:
+                raw_harfler = doc.to_dict().get('harfler', {})
+                for key, b64_data in raw_harfler.items():
+                    try:
+                        if "," in b64_data: b64_data = b64_data.split(",")[1]
+                        img_data = base64.b64decode(b64_data)
+                        img = core_generator.Image.open(io.BytesIO(img_data)).convert("RGBA")
+                        
+                        # Key formatını kontrol et (kucuk_a_1 -> kucuk_a)
+                        parts = key.rsplit('_', 1)
+                        if len(parts) > 1 and parts[1].isdigit():
+                            base_key = parts[0]
+                        else:
+                            base_key = key
+                            
+                        if base_key not in active_harfler: active_harfler[base_key] = []
+                        active_harfler[base_key].append(img)
+                    except: continue
+
+        if not active_harfler:
+            HARFLER_KLASORU = 'static/harfler'
+            if os.path.exists(HARFLER_KLASORU):
+                active_harfler = core_generator.harf_resimlerini_yukle(HARFLER_KLASORU)
+
+        renkler = {'tukenmez':(27,27,29), 'bic_mavi':(0,35,102), 'pilot_mavi':(0,51,153), 'eski_murekkep':(40,60,120), 'kirmizi':(180,20,20), 'lacivert':(24,18,110)}
+        murekkep = renkler.get(murekkep_rengi_str, renkler['tukenmez'])
+
+        config = {
+            'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150,
+            'target_letter_height': yazi_boyutu, 'line_spacing': satir_araligi, 'word_spacing': kelime_boslugu,
+            'murekkep_rengi': murekkep, 'opacity': 0.95, 'jitter': jitter, 'paper_type': paper_type, 'line_slope': 5
+        }
+
+        sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
+        pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
+        
+        if pdf_buffer:
+            return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
+        return "Hata", 500
+    except Exception as e:
+        traceback.print_exc()
+        return str(e), 500
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    
-    # Development vs Production
-    is_production = os.environ.get('FLASK_ENV') == 'production'
-    
-    if is_production:
-        logger.info(f"🚀 Starting PRODUCTION server on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=False)
-    else:
-        logger.info(f"🔧 Starting DEVELOPMENT server on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
