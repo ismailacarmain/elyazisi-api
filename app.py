@@ -22,8 +22,16 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 
 # 1. GÜVENLİK: CORS Sıkılaştırması (Production)
 CORS(app, resources={
-    r"/api/*": {"origins": ["https://fontify.online", "https://elyazisi-api.onrender.com", "https://long-lake-bcfa.ismailacarmain.workers.dev"]},
-    r"/process_single": {"origins": ["https://fontify.online", "https://long-lake-bcfa.ismailacarmain.workers.dev"]}
+    r"/api/*": {
+        "origins": ["https://fontify.online", "https://elyazisi-api.onrender.com", "https://long-lake-bcfa.ismailacarmain.workers.dev"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    },
+    r"/process_single": {
+        "origins": ["https://fontify.online", "https://long-lake-bcfa.ismailacarmain.workers.dev"],
+        "methods": ["POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
 })
 
 # --- FIREBASE BAĞLANTISI ---
