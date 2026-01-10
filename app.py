@@ -19,7 +19,7 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
 
 # --- CONFIG ---
-RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY', '6LfEIUUsAAAAANamEZ_p_9PxSgx4hckW-9n9wI9e') # Fallback for dev
+RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY', '6LcLXEYsAAAAAJfHokIfnc4v3MrhSKHX4gqbY8AX') # Fallback for dev
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -506,6 +506,11 @@ def list_fonts():
 
 @app.route('/api/get_assets')
 def get_assets():
+    token = request.args.get('recaptcha_token')
+    # Doğrulama (Opsiyonel: Sadece token varsa kontrol et)
+    if token and not verify_recaptcha(token):
+        return jsonify({"success": False, "error": "Güvenlik doğrulaması başarısız"}), 403
+
     font_id = request.args.get('font_id')
     user_id = request.args.get('user_id')
     assets = {}
@@ -539,6 +544,12 @@ def process_single():
     global init_error
     try:
         data = request.get_json()
+        
+        # 1. reCAPTCHA Kontrolü
+        recaptcha_token = data.get('recaptcha_token')
+        if not verify_recaptcha(recaptcha_token):
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız (Bot şüphesi).'}), 403
+
         u_id = data.get('user_id')
         f_name = data.get('font_name')
         b64 = data.get('image_base64')
@@ -574,13 +585,13 @@ def process_single():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 def verify_recaptcha(token):
-    """reCAPTCHA v3 token doğrula"""
+    """reCAPTCHA v2/v3 token doğrula"""
     if not token:
+        print("reCAPTCHA Hatası: Token gönderilmedi.")
         return False
     
-    # Dev ortamında veya secret key yoksa geçici bypass (Production'da kaldırılmalı)
     if not RECAPTCHA_SECRET_KEY:
-        print("UYARI: RECAPTCHA_SECRET_KEY eksik, doğrulama atlanıyor.")
+        print("UYARI: RECAPTCHA_SECRET_KEY tanımlanmamış!")
         return True
 
     try:
@@ -590,15 +601,14 @@ def verify_recaptcha(token):
         })
         
         result = response.json()
+        print(f"reCAPTCHA Sonucu: {result}")
         
-        # v3: score kontrolü (0.0 - 1.0). 0.5 ve üzeri insan kabul edilir.
-        if result.get('success') and result.get('score', 0) >= 0.5:
+        if result.get('success'):
             return True
-        
-        print(f"reCAPTCHA Fail: {result}")
+            
         return False
     except Exception as e:
-        print(f"reCAPTCHA Error: {e}")
+        print(f"reCAPTCHA Hatası: {e}")
         return False
 
 @app.route('/api/upload_form', methods=['POST'])
