@@ -1,7 +1,8 @@
-Flask
-firebase-admin
+flask
 flask-cors
-gunicorn
-opencv-contrib-python-headless
+opencv-python-headless
 numpy
+firebase-admin
+gunicorn
+pdf2image
 Pillow
