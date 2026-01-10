@@ -355,10 +355,12 @@ def save_font_data(user_id, font_name, res, repetition, total_expected):
     if not database: return
     try:
         fid = f"{user_id}_{font_name.replace(' ', '_')}"
-        d_ref = database.collection('fonts').document(fid)
+        # SADECE Kullanıcı Koleksiyonuna Kaydet (Varsayılan olarak GİZLİ)
         u_ref = database.collection('users').document(user_id).collection('fonts').document(fid)
         
-        doc = d_ref.get()
+        # Global 'fonts' koleksiyonuna kaydetmiyoruz! Sadece 'toggle_visibility' ile oraya taşınacak.
+        
+        doc = u_ref.get()
         new_harfler = res['harfler']
         new_section = res['section_id']
         
@@ -373,9 +375,9 @@ def save_font_data(user_id, font_name, res, repetition, total_expected):
                 'font_id': fid, 
                 'repetition': repetition,
                 'total_expected': total_expected,
+                'is_public': False, # Varsayılan Gizli
                 'created_at': firestore.SERVER_TIMESTAMP
             }
-            d_ref.set(payload)
             u_ref.set(payload)
         else:
             curr = doc.to_dict()
@@ -392,8 +394,11 @@ def save_font_data(user_id, font_name, res, repetition, total_expected):
                 'sections_completed': s, 
                 'font_id': fid
             }
-            d_ref.update(payload)
             u_ref.update(payload)
+            
+            # Eğer font daha önce Public yapıldıysa, oradaki veriyi de güncellemek gerekir
+            # Ama şimdilik basit tutalım, kullanıcı tekrar yayınla derse güncellenir.
+            
     except Exception as e: print(f"DB Kayıt Hatası: {e}")
 
 def pdf_process_worker(job_id, file_bytes, user_id, font_name, repetition):
@@ -651,6 +656,45 @@ def toggle_visibility():
             user_font_ref.update({'is_public': False})
             
         return jsonify({'success': True, 'message': 'Görünürlük güncellendi'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/copy_font', methods=['POST'])
+def copy_font():
+    try:
+        data = request.get_json()
+        source_font_id = data.get('font_id')
+        user_id = data.get('user_id')
+        
+        database = init_firebase()
+        
+        # 1. Kaynak fontu bul (Public koleksiyondan)
+        src_ref = database.collection('fonts').document(source_font_id)
+        doc = src_ref.get()
+        
+        if not doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+            
+        font_data = doc.to_dict()
+        
+        # 2. Yeni ID oluştur (Çakışmayı önlemek için UUID ekle)
+        import uuid
+        new_font_id = f"{user_id}_{font_data.get('font_name', 'Kopya').replace(' ', '_')}_{str(uuid.uuid4())[:4]}"
+        
+        # 3. Meta verileri güncelle (Sahibi artık sensin)
+        font_data['owner_id'] = user_id
+        font_data['user_id'] = user_id
+        font_data['font_id'] = new_font_id
+        font_data['is_public'] = False # Kopyası gizli olur
+        font_data['font_name'] = f"{font_data.get('font_name')} (Kopya)"
+        font_data['original_source'] = source_font_id
+        font_data['created_at'] = firestore.SERVER_TIMESTAMP
+        
+        # 4. Kullanıcının koleksiyonuna kaydet
+        database.collection('users').document(user_id).collection('fonts').document(new_font_id).set(font_data)
+        
+        return jsonify({'success': True, 'message': 'Font kütüphanenize eklendi', 'new_font_id': new_font_id})
+        
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
