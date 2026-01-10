@@ -1,8 +1,8 @@
-flask
-flask-cors
-opencv-python-headless
-numpy
+Flask
 firebase-admin
+flask-cors
 gunicorn
-pdf2image
+opencv-contrib-python-headless
+numpy
 Pillow
+pdf2image
