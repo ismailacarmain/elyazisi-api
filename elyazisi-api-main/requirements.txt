@@ -1,7 +1,0 @@
-Flask
-firebase-admin
-flask-cors
-gunicorn
-opencv-contrib-python-headless
-numpy
-Pillow
