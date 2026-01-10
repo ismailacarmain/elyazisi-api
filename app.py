@@ -77,7 +77,15 @@ def init_firebase():
             db = firestore.client()
             print(f"Firestore BAĞLANDI (Secure Mod): {connected_project_id}")
         else:
-            print("UYARI: Firebase credentials bulunamadı.")
+            print("UYARI: Env Var yok, yerel dosya aranıyor...")
+            if os.path.exists('serviceAccountKey.json'):
+                 cred = credentials.Certificate('serviceAccountKey.json')
+                 if not firebase_admin._apps: firebase_admin.initialize_app(cred)
+                 db = firestore.client()
+                 print(f"Firestore BAĞLANDI (Dosya Modu): {cred.service_account_email}")
+            else:
+                 print("KRİTİK HATA: Ne Env Var ne de serviceAccountKey.json bulundu!")
+                 db = None
     except Exception as e:
         init_error = str(e)
         db = None
