@@ -21,7 +21,13 @@ from functools import wraps
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 # 1. GÜVENLİK: CORS Sıkılaştırması (Production)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={
+    r"/*": {
+        "origins": ["https://fontify.online", "https://elyazisi-api.onrender.com", "https://long-lake-bcfa.ismailacarmain.workers.dev"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+    }
+}, supports_credentials=True)
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -90,7 +96,13 @@ def login_required(f):
             id_token = request.headers['Authorization'].split(' ').pop()
         
         if not id_token:
-            return jsonify({'success': False, 'message': 'Token eksik!'}), 401
+            # DEBUG: Headerları response içinde döndür ki tarayıcıda görelim
+            headers_list = dict(request.headers)
+            return jsonify({
+                'success': False, 
+                'message': 'Token eksik!', 
+                'debug_headers': headers_list
+            }), 401
             
         try:
             decoded_token = auth.verify_id_token(id_token)
