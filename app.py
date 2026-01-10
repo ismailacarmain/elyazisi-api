@@ -321,24 +321,12 @@ def index(): return render_template('index.html')
 def mobil_page(): return send_file('web/mobil_yukle.html')
 
 @app.route('/api/upload_form', methods=['POST'])
-@login_required # TOKEN ZORUNLU
 def upload_form():
     try:
-        # Token'dan gelen UID'yi kullan (Formdan gelene güvenme)
-        user_id = request.uid 
+        # Token ve Kredi kontrolü kaldırıldı (Sınırsız mod)
+        user_id = request.form.get('user_id', 'anonymous') 
         
         if not verify_recaptcha(request.form.get('recaptcha_token')):
-            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
-
-        font_name = request.form.get('font_name')
-        variation_count = int(request.form.get('variation_count', 3))
-        file = request.files.get('file')
-        
-        if not file or not font_name: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
-        
-        # Kredi Kontrolü
-        allowed, msg = check_and_deduct_credit(user_id)
-        if not allowed: return jsonify({'success': False, 'message': msg}), 402
 
         job_id = str(uuid.uuid4())
         if db:
@@ -361,8 +349,7 @@ def process_single():
         u_id, f_name, b64 = data.get('user_id'), data.get('font_name'), data.get('image_base64')
         repetition = int(data.get('variation_count', 3))
         
-        allowed, msg = check_and_deduct_credit(u_id)
-        if not allowed: return jsonify({'success': False, 'message': msg}), 402
+        # Kredi kontrolü kaldırıldı
 
         h_sistemi = HarfSistemi(repetition=repetition)
         nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
@@ -397,12 +384,11 @@ def process_single():
     except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/toggle_visibility', methods=['POST'])
-@login_required
 def toggle_visibility():
     try:
         data = request.get_json()
         font_id = data.get('font_id')
-        user_id = request.uid # Token'dan gelen güvenli ID
+        user_id = data.get('user_id') # Formdan al
         
         database = init_firebase()
         font_ref = database.collection('fonts').document(font_id)
@@ -417,12 +403,11 @@ def toggle_visibility():
     except Exception as e: return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/update_char', methods=['POST'])
-@login_required
 def update_char():
     try:
         data = request.get_json()
         font_id, char_key, image_base64 = data.get('font_id'), data.get('char_key'), data.get('image_base64')
-        user_id = request.uid # Token'dan gelen güvenli ID
+        user_id = data.get('user_id') # Formdan al
         
         database = init_firebase()
         font_ref = database.collection('fonts').document(font_id)
