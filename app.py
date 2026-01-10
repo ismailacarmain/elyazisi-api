@@ -327,6 +327,13 @@ def upload_form():
         user_id = request.form.get('user_id', 'anonymous') 
         
         if not verify_recaptcha(request.form.get('recaptcha_token')):
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
+
+        font_name = request.form.get('font_name')
+        variation_count = int(request.form.get('variation_count', 3))
+        file = request.files.get('file')
+        
+        if not file or not font_name: return jsonify({'success': False, 'message': 'Eksik veri'}), 400
 
         job_id = str(uuid.uuid4())
         if db:
