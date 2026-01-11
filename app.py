@@ -154,8 +154,8 @@ class HarfSistemi:
         coords = cv2.findNonZero(binary_img)
         if coords is None: return None
         x, y, w, h = cv2.boundingRect(coords)
-        # Çok küçük gürültüleri ele (Noktalama işaretleri için limiti düşürdüm: 2px)
-        if w < 2 or h < 2: return None
+        # Minimum boyut kontrolü kaldırıldı - Küçük harfler ve noktalama korunuyor
+        if w < 1 or h < 1: return None  # Sadece tamamen boş olanları filtrele
         return binary_img[y:y+h, x:x+w]
 
     def process_roi(self, roi):
@@ -168,14 +168,14 @@ class HarfSistemi:
         # Adaptive Threshold
         thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10)
         
-        # --- ÇERÇEVE TEMİZLİĞİ (Gelişmiş) ---
+        # --- ÇERÇEVE TEMİZLİĞİ (KÜÇÜK HARFLER İÇİN OPTİMİZE) ---
         # Eğer threshold sonucu ROI kenarlarına çok yakınsa (çerçeve çizgisi), onu maskele.
         h_roi, w_roi = thresh.shape
-        # Kenarlardan 3px içeri kadar olan kısımları sıfırla (siyah yap)
-        cv2.rectangle(thresh, (0, 0), (w_roi, 3), 0, -1) # Üst
-        cv2.rectangle(thresh, (0, h_roi-3), (w_roi, h_roi), 0, -1) # Alt
-        cv2.rectangle(thresh, (0, 0), (3, h_roi), 0, -1) # Sol
-        cv2.rectangle(thresh, (w_roi-3, 0), (w_roi, h_roi), 0, -1) # Sağ
+        # Kenarlardan 1px içeri kadar olan kısımları sıfırla (Küçük harfler için azaltıldı)
+        cv2.rectangle(thresh, (0, 0), (w_roi, 1), 0, -1) # Üst
+        cv2.rectangle(thresh, (0, h_roi-1), (w_roi, h_roi), 0, -1) # Alt
+        cv2.rectangle(thresh, (0, 0), (1, h_roi), 0, -1) # Sol
+        cv2.rectangle(thresh, (w_roi-1, 0), (w_roi, h_roi), 0, -1) # Sağ
         
         tight = self.crop_tight(thresh)
         if tight is None: return None
@@ -258,8 +258,8 @@ class HarfSistemi:
                 idx = start_idx + (r * 10 + c)
                 if idx >= len(self.char_list): continue
                 
-                # Padding optimizasyonu: Harflerin kesilmemesi için güvenli değer
-                p = 20 
+                # Padding optimizasyonu: Küçük harfler için azaltıldı (20 → 8)
+                p = 8  # Önceden 20 idi, küçük harfleri kesiyordu!
                 roi = warped[sy+r*b_px+p : sy+r*b_px+b_px-p, sx+c*b_px+p : sx+c*b_px+b_px-p]
                 
                 processed_img = self.process_roi(roi)
@@ -533,6 +533,28 @@ def mobil_page():
     # dosya yapısına göre statik sunum daha kolay olabilir.
     # Şimdilik template klasöründe olduğunu varsayalım ya da direkt static'den okuyalım.
     return send_file('web/mobil_yukle.html')
+
+@app.route('/api/get_job_status', methods=['GET'])
+def get_job_status():
+    job_id = request.args.get('job_id')
+    if not job_id: return jsonify({'error': 'No job_id'}), 400
+    
+    database = init_firebase()
+    if database:
+        try:
+            doc = database.collection('operations').document(job_id).get()
+            if doc.exists: return jsonify(doc.to_dict())
+        except Exception as e: return jsonify({'error': str(e)}), 500
+    else:
+        # Local check
+        try:
+            path = os.path.join(LOCAL_DATA_DIR, f"job_{job_id}.json")
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f: 
+                    return jsonify(json.load(f))
+        except Exception as e: return jsonify({'error': str(e)}), 500
+            
+    return jsonify({'status': 'not_found'}), 404
 
 @app.route('/api/list_fonts')
 def list_fonts():
