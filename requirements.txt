@@ -2,7 +2,7 @@ Flask
 firebase-admin
 flask-cors
 gunicorn
-opencv-contrib-python-headless
+opencv-python-headless
 numpy
 Pillow
 pdf2image

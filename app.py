@@ -458,12 +458,13 @@ def pdf_process_worker(job_id, file_bytes, user_id, font_name, repetition):
             with open(local_job_path, 'w') as f: json.dump(initial_status, f)
 
         # PDF -> Images
-        images = convert_from_bytes(file_bytes, dpi=200, fmt='jpeg')
+        images = convert_from_bytes(file_bytes, dpi=300, fmt='jpeg')
         total_sections = len(images) * 2
         update_job({'total_sections': total_sections})
         
         processed_chars_count = 0
         sections_done = 0
+        failed_sections = []
         
         current_sistem = HarfSistemi(repetition=repetition)
         total_expected_chars = len(current_sistem.char_list)
@@ -478,12 +479,15 @@ def pdf_process_worker(job_id, file_bytes, user_id, font_name, repetition):
             half_h = h // 2
             parts = [open_cv_image[0:half_h, :], open_cv_image[half_h:h, :]]
             
-            for part_img in parts:
+            for part_idx, part_img in enumerate(parts):
                 res, err = current_sistem.process_single_page(part_img)
                 
                 if res and res['detected'] > 0:
                      save_font_data(user_id, font_name, res, repetition, total_expected_chars)
                      processed_chars_count += len(res['harfler'])
+                else:
+                    failed_sections.append(sections_done + 1)
+                    print(f"Bölüm {sections_done + 1} başarısız: {err}")
                 
                 sections_done += 1
                 progress = int((sections_done / total_sections) * 100)
@@ -495,11 +499,15 @@ def pdf_process_worker(job_id, file_bytes, user_id, font_name, repetition):
                     'total_chars': total_expected_chars
                 })
 
+        final_msg = 'Tamamlandı.'
+        if failed_sections:
+            final_msg += f" (Uyarı: Bölüm {', '.join(map(str, failed_sections))} okunamadı. Işık/Netlik kontrol edin.)"
+
         update_job({
             'status': 'completed',
             'font_id': f"{user_id}_{font_name.replace(' ', '_')}",
             'progress': 100,
-            'message': 'Tamamlandı.'
+            'message': final_msg
         })
 
     except Exception as e:
