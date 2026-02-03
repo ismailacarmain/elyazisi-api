@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. KULLANICILAR (users)
+    // Herkes sadece kendi profilini okuyabilir ve yazabilir.
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // 2. KULLANICI FONT LARI (users -> fonts)
+      // Sadece sahibi okuyabilir/yazabilir.
+      match /fonts/{fontId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // 3. GENEL FONTLAR (fonts) - Public Olanlar
+    // Herkes okuyabilir, ama kimse kafasına göre yazamaz (Yazma işlemini sadece Backend yapar).
+    match /fonts/{fontId} {
+      allow read: if true; 
+      allow write: if false; 
+    }
+    
+    // 4. OPERASYONLAR (operations - Job Status için)
+    match /operations/{jobId} {
+       // Şimdilik auth olan herkes okuyabilsin (Backend zaten user_id kontrolü yapıyor ama kurallar da desteklesin)
+       allow read: if request.auth != null;
+       allow write: if false; 
+    }
+    
+    // 5. MOBİL OTURUMLAR
+    // Mobil cihaz token/uid eşleşmesi için gerekli
+    match /mobile_sessions/{sessionId} {
+      allow read, write: if true; 
+    }
+  }
+}

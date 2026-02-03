@@ -1,0 +1,9 @@
+Flask
+firebase-admin
+flask-cors
+gunicorn
+opencv-python-headless
+numpy
+Pillow
+pdf2image
+requests
