@@ -210,6 +210,23 @@ def init_firebase():
                         data = json.load(f)
                         connected_project_id = data.get('project_id', 'File')
                     break
+                    
+        if not cred and os.environ.get('FIREBASE_PROJECT_ID') and os.environ.get('FIREBASE_PRIVATE_KEY'):
+            logger.info("Ayrı ayrı FIREBASE_* environment değişkenleri bulundu. Credential oluşturuluyor...")
+            cred_dict = {
+                "type": "service_account",
+                "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
+                "private_key_id": os.environ.get('FIREBASE_PRIVATE_KEY_ID', ''),
+                "private_key": os.environ.get('FIREBASE_PRIVATE_KEY', '').replace('\\n', '\n'),
+                "client_email": os.environ.get('FIREBASE_CLIENT_EMAIL', ''),
+                "client_id": os.environ.get('FIREBASE_CLIENT_ID', ''),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{os.environ.get('FIREBASE_CLIENT_EMAIL', '').replace('@', '%40')}"
+            }
+            cred = credentials.Certificate(cred_dict)
+            connected_project_id = cred_dict.get('project_id', 'EnvVars')
         
         if cred:
             if not firebase_admin._apps:
