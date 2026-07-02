@@ -934,7 +934,12 @@ def download():
                 key, b64 = doc.id, doc.to_dict().get('data')
                 try:
                     img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
-                    base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                    parts = key.rsplit('_', 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        base_key = parts[0]
+                    else:
+                        base_key = key
+                        
                     if base_key not in active_harfler: active_harfler[base_key] = []
                     active_harfler[base_key].append(img)
                 except: continue
@@ -960,12 +965,26 @@ def download():
                             else:
                                 b64 = val.split(",")[1] if "," in val else val
                                 img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
-                            base_key = key.rsplit('_', 1)[0] if '_' in key else key
+                            parts = key.rsplit('_', 1)
+                            if len(parts) == 2 and parts[1].isdigit():
+                                base_key = parts[0]
+                            else:
+                                base_key = key
                             if base_key not in active_harfler: active_harfler[base_key] = []
                             active_harfler[base_key].append(img)
                         except: continue
         
-        config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': (27,27,29), 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
+        # Renk ayari
+        raw_color = request.form.get('murekkep_rengi', 'tukenmez')
+        if raw_color == 'tukenmez': ink_rgb = (27, 27, 29)
+        elif raw_color == 'bic_mavi': ink_rgb = (15, 82, 186)
+        elif raw_color == 'kirmizi': ink_rgb = (220, 20, 60)
+        elif raw_color.startswith('#'):
+            raw_color = raw_color.lstrip('#')
+            ink_rgb = tuple(int(raw_color[i:i+2], 16) for i in (0, 2, 4))
+        else: ink_rgb = (27, 27, 29)
+
+        config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': ink_rgb, 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
         pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
         return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
