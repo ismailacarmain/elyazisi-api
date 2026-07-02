@@ -986,6 +986,21 @@ def download():
 
         config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': ink_rgb, 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
         sayfalar = core_generator.metni_sayfaya_yaz(metin, active_harfler, config)
+        
+        # Overlay Ekle (Serbest Çizim)
+        overlay_b64 = request.form.get('overlay_b64')
+        if overlay_b64 and sayfalar:
+            try:
+                overlay_data = overlay_b64.split(",")[1] if "," in overlay_b64 else overlay_b64
+                overlay_img = core_generator.Image.open(io.BytesIO(base64.b64decode(overlay_data))).convert("RGBA")
+                # overlay_img boyutunu sayfa boyutuyla aynı yap
+                if overlay_img.size != sayfalar[0].size:
+                    overlay_img = overlay_img.resize(sayfalar[0].size, core_generator.Image.Resampling.LANCZOS)
+                # Sadece ilk sayfaya (veya o anki ekrana) yapıştırıyoruz
+                sayfalar[0].paste(overlay_img, (0, 0), overlay_img)
+            except Exception as e:
+                logger.error(f"Overlay error: {e}")
+
         pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
         return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True, download_name='el_yazisi.pdf')
     except ValueError as e:
