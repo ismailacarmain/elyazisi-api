@@ -836,6 +836,51 @@ def list_fonts():
         logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
+@app.route('/api/add_to_library', methods=['POST'])
+@login_required
+def add_to_library():
+    try:
+        data = request.get_json()
+        user_id = request.uid
+        font_id = data.get('font_id')
+        if not font_id: return jsonify({'success':False}), 400
+        
+        orig_ref = db.collection('fonts').document(font_id).get()
+        if not orig_ref.exists: return jsonify({'success':False, 'message': 'Font bulunamadı'}), 404
+        
+        orig_data = orig_ref.to_dict()
+        new_font_id = f"{user_id}_{orig_data['font_name'].replace(' ', '_')}_{str(uuid.uuid4())[:8]}"
+        
+        new_font_data = orig_data.copy()
+        new_font_data['owner_id'] = user_id
+        new_font_data['user_id'] = user_id
+        new_font_data['font_id'] = new_font_id
+        new_font_data['type'] = 'private'
+        new_font_data['is_public'] = False
+        new_font_data['created_at'] = firestore.SERVER_TIMESTAMP
+        
+        db.collection('fonts').document(new_font_id).set(new_font_data)
+        db.collection('users').document(user_id).collection('fonts').document(new_font_id).set(new_font_data)
+        
+        chars = db.collection('fonts').document(font_id).collection('chars').stream()
+        batch = db.batch()
+        count = 0
+        for char_doc in chars:
+            new_char_ref = db.collection('fonts').document(new_font_id).collection('chars').document(char_doc.id)
+            batch.set(new_char_ref, char_doc.to_dict())
+            count += 1
+            if count == 400:
+                batch.commit()
+                batch = db.batch()
+                count = 0
+        if count > 0:
+            batch.commit()
+            
+        return jsonify({'success': True, 'new_font_id': new_font_id})
+    except Exception as e:
+        logger.error(f"Error in add_to_library: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/get_assets', methods=['GET'])
 def get_assets():
     try:
