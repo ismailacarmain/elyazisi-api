@@ -836,6 +836,33 @@ def list_fonts():
         logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
+@app.route('/api/update_char', methods=['POST'])
+@login_required
+def update_char():
+    try:
+        data = request.get_json()
+        user_id = request.uid
+        font_id = data.get('font_id')
+        char_id = data.get('char_id')
+        img_data = data.get('data') # Base64
+        
+        if not all([font_id, char_id, img_data]):
+            return jsonify({'success': False, 'message': 'Eksik veri'}), 400
+            
+        font_ref = db.collection('fonts').document(font_id).get()
+        if not font_ref.exists or font_ref.to_dict().get('owner_id') != user_id:
+            return jsonify({'success': False, 'message': 'Yetkisiz işlem'}), 403
+            
+        # Resim verisini base64'ten bytes (Blob) formatına çevir
+        import base64
+        img_bytes = base64.b64decode(img_data)
+        
+        db.collection('fonts').document(font_id).collection('chars').document(char_id).set({'data': img_bytes}, merge=True)
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error in update_char: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/add_to_library', methods=['POST'])
 @login_required
 def add_to_library():
