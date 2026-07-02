@@ -473,7 +473,8 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         
         images = []
         try:
-            images = convert_from_bytes(file_bytes, dpi=300)
+            # DPI'yi 200'e çekerek Render'ın 512MB RAM limitine takılmayı önlüyoruz
+            images = convert_from_bytes(file_bytes, dpi=200)
             logger.info(f"PDF converted to {len(images)} images")
         except Exception as pdf_err:
             logger.warning(f"PDF conversion failed: {pdf_err}. Trying as raw image.")
@@ -486,16 +487,8 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         if not images:
             raise ValueError("İşlenecek sayfa bulunamadı.")
 
-        sections_to_process = []
-        for i, pil_img in enumerate(images):
-            cv_img = np.array(pil_img)[:, :, ::-1].copy()
-            h, w, _ = cv_img.shape
-            half_h = h // 2
-            sections_to_process.append({'img': cv_img[0:half_h, :], 'id': i*2})
-            sections_to_process.append({'img': cv_img[half_h:h, :], 'id': i*2+1})
-
         harf_sistemi = HarfSistemi(repetition=variation_count)
-        total_sections = len(sections_to_process)
+        total_sections = len(images) * 2
         total_processed_chars = 0
         all_completed_sections = []
 
@@ -514,25 +507,53 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             d_ref.set(init_payload)
             u_ref.set(init_payload)
 
-        for idx, section in enumerate(sections_to_process):
-            msg = f'Bölüm {idx+1}/{total_sections} taranıyor...'
-            progress = 20 + int((idx / total_sections) * 75)
+        # Belleği şişirmemek için her sayfayı tek tek işle
+        section_idx = 0
+        for i, pil_img in enumerate(images):
+            cv_img = np.array(pil_img)[:, :, ::-1]
+            h, w, _ = cv_img.shape
+            half_h = h // 2
+            
+            # --- ÜST BÖLÜM (Section 1) ---
+            msg = f'Bölüm {section_idx+1}/{total_sections} taranıyor...'
+            progress = 20 + int((section_idx / total_sections) * 75)
             op_ref.update({'message': msg, 'progress': progress})
             
-            res, err = harf_sistemi.process_single_page(section['img'], forced_section_id=section['id'])
+            res, err = harf_sistemi.process_single_page(cv_img[0:half_h, :].copy(), forced_section_id=i*2)
             if err:
-                logger.warning(f"Section {idx} skip: {err}")
-                continue
-                
-            if res and res['harfler']:
+                logger.warning(f"Section {section_idx} skip: {err}")
+            elif res and res['harfler']:
                 batch = database.batch()
                 for char_name, b_bytes in res['harfler'].items():
-                    # Orijinal sistemdeki gibi doğrudan bytes (Blob) olarak kaydet
                     char_ref = d_ref.collection('chars').document(char_name)
                     batch.set(char_ref, {'data': b_bytes})
                 batch.commit()
                 total_processed_chars += res['detected']
                 all_completed_sections.append(res['section_id'])
+            
+            section_idx += 1
+            
+            # --- ALT BÖLÜM (Section 2) ---
+            msg = f'Bölüm {section_idx+1}/{total_sections} taranıyor...'
+            progress = 20 + int((section_idx / total_sections) * 75)
+            op_ref.update({'message': msg, 'progress': progress})
+            
+            res, err = harf_sistemi.process_single_page(cv_img[half_h:h, :].copy(), forced_section_id=i*2+1)
+            if err:
+                logger.warning(f"Section {section_idx} skip: {err}")
+            elif res and res['harfler']:
+                batch = database.batch()
+                for char_name, b_bytes in res['harfler'].items():
+                    char_ref = d_ref.collection('chars').document(char_name)
+                    batch.set(char_ref, {'data': b_bytes})
+                batch.commit()
+                total_processed_chars += res['detected']
+                all_completed_sections.append(res['section_id'])
+                
+            section_idx += 1
+            
+            # İşlenmiş sayfayı bellekten at
+            images[i] = None
 
         # Final güncelleme
         current_doc = d_ref.get().to_dict()
