@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: elyazisi-api
+    env: docker
+    plan: free
+    healthCheckPath: /health
