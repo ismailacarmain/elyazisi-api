@@ -815,19 +815,24 @@ def list_fonts():
         logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
-@app.route('/api/get_assets')
+@app.route('/api/get_assets', methods=['GET'])
 def get_assets():
     try:
         font_id = request.args.get('font_id')
         assets = {}
         database = init_firebase()
         if database and font_id:
-            # Hibrit okuma (Önce alt koleksiyon, yoksa ana doküman)
+            # Hibrit okuma (önce alt koleksiyon, yoksa ana doküman)
             char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
             has_sub = False
             for doc in char_docs:
                 has_sub = True
                 key, val = doc.id, doc.to_dict().get('data')
+                
+                # IMPORTANT: Convert bytes (Blob) to Base64 string for JSON serialization
+                if isinstance(val, bytes):
+                    val = base64.b64encode(val).decode('utf-8')
+                
                 base_key = key.rsplit('_', 1)[0] if '_' in key else key
                 if base_key not in assets: assets[base_key] = []
                 assets[base_key].append(val)
@@ -837,6 +842,8 @@ def get_assets():
                 if doc.exists:
                     raw = doc.to_dict().get('harfler', {})
                     for key, val in raw.items():
+                        if isinstance(val, bytes):
+                            val = base64.b64encode(val).decode('utf-8')
                         base_key = key.rsplit('_', 1)[0] if '_' in key else key
                         if base_key not in assets: assets[base_key] = []
                         assets[base_key].append(val)
