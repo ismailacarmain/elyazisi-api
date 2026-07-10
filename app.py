@@ -22,6 +22,7 @@ from pdf2image import convert_from_bytes
 from PIL import Image as PILImage
 import requests
 from functools import wraps
+from werkzeug.exceptions import HTTPException
 
 from character_manifest import (
     CHARACTER_MANIFEST,
@@ -34,6 +35,7 @@ from glyph_normalizer import (
     GlyphValidationError,
     normalize_digital_glyph,
 )
+import ai_document
 
 # Logging setup
 logging.basicConfig(
@@ -62,7 +64,8 @@ def is_safe_url(url):
             return False
         
         # Sadece izin verilen domainler
-        if not any(parsed.netloc.endswith(domain) for domain in ALLOWED_IMAGE_DOMAINS):
+        hostname = (parsed.hostname or '').lower()
+        if not any(hostname == domain or hostname.endswith('.' + domain) for domain in ALLOWED_IMAGE_DOMAINS):
             return False
         
         # Localhost ve private IP'ler yasak
@@ -125,12 +128,24 @@ def validate_base64_image(b64_string, max_size_mb=5):
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
-# 1. GÜVENLİK: CORS Sıkılaştırması (Production)
+def _configured_frontend_origins():
+    configured = os.environ.get('FRONTEND_ORIGINS', '')
+    origins = [item.strip().rstrip('/') for item in configured.split(',') if item.strip()]
+    if not origins:
+        origins = ['https://fontify.online', 'https://www.fontify.online']
+    if app.debug:
+        origins.extend(['http://localhost:5500', 'http://127.0.0.1:5500'])
+    return sorted(set(origins))
+
+
+# Production API calls are accepted only from configured Fontify origins.
 CORS(app, resources={
-    r"/api/*": {"origins": ["*"]}, 
-    r"/process_single": {"origins": ["*"]},
-    r"/download": {"origins": ["*"]}
-})
+    r"/api/*": {"origins": _configured_frontend_origins()},
+    r"/process_single": {"origins": _configured_frontend_origins()},
+    r"/download": {"origins": _configured_frontend_origins()}
+}, supports_credentials=False, allow_headers=[
+    'Authorization', 'Content-Type', 'X-Gemini-Api-Key'
+], methods=['GET', 'POST', 'OPTIONS'])
 
 @app.route('/health')
 def health():
@@ -162,9 +177,13 @@ init_error = None
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 def verify_recaptcha(token):
-    if not RECAPTCHA_SECRET_KEY: 
-        logger.warning("reCAPTCHA Secret Key is missing in environment variables. Bypassing check for development.")
-        return True # Secret yoksa şimdilik izin ver (kullanıcıyı üzmeyelim)
+    if not RECAPTCHA_SECRET_KEY:
+        allow_insecure = app.debug or os.environ.get('ALLOW_INSECURE_RECAPTCHA', '').lower() == 'true'
+        if allow_insecure:
+            logger.warning("reCAPTCHA secret is missing; insecure development bypass is active.")
+            return True
+        logger.error("RECAPTCHA_SECRET_KEY is required in production.")
+        return False
     
     if not token: 
         logger.warning(f"reCAPTCHA Token missing - IP: {request.remote_addr}")
@@ -184,9 +203,6 @@ def init_firebase():
     global db, init_error, connected_project_id
     if db is not None: return db
     try:
-        # HATA AYIKLAMA: Render'daki tüm değişken isimlerini yazdır (İçeriklerini değil!)
-        logger.info(f"Mevcut Environment Değişkenleri: {list(os.environ.keys())}")
-        
         cred = None
         env_creds = os.environ.get('FIREBASE_CREDENTIALS')
         
@@ -260,6 +276,8 @@ init_firebase()
 
 @app.errorhandler(Exception)
 def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return jsonify({"success": False, "message": e.description}), e.code
     # Log the error
     logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
     return jsonify({
@@ -281,8 +299,6 @@ def set_secure_headers(response):
     """Güvenlik header'ları ekle"""
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
     if not app.debug:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     
@@ -297,70 +313,107 @@ def set_secure_headers(response):
     
     return response
 
-# 4. GÜVENLİK: Auth Token Middleware
-def login_required(f):
+def verified_login_required(f):
+    """Require a valid Firebase Bearer token; never trust a client supplied UID."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        authorization = request.headers.get('Authorization')
-
-        # Bir istemci Authorization gönderiyorsa kimlik doğrulamayı kapalı
-        # başarısız yap. Geçersiz token'ı user_id form alanına düşürmek, saldırganın
-        # başka bir kullanıcının UID'sini seçmesine izin veriyordu.
-        if authorization is not None:
-            try:
-                parts = authorization.strip().split()
-                if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
-                    raise ValueError('Malformed Authorization header')
-                id_token = parts[1]
-                decoded_token = auth.verify_id_token(id_token)
-                request.uid = decoded_token['uid']
-                request.auth_verified = True
-            except Exception as e:
-                logger.warning(f"Token verify error: {e}")
-                return jsonify({
-                    'success': False,
-                    'message': 'Oturum doğrulanamadı. Lütfen yeniden giriş yapın.'
-                }), 401
-        else:
-            # Token yoksa form verilerinden al (Mobil ve eski sayfalar için)
-            request.uid = request.form.get('user_id') or request.args.get('user_id')
-            request.auth_verified = False
-        
-        if not request.uid:
-            return jsonify({'success': False, 'message': 'Kullanıcı kimliği (User ID) bulunamadı!'}), 401
-            
+        authorization = request.headers.get('Authorization', '').strip()
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
+            return jsonify({'success': False, 'message': 'Güvenli oturum gerekli.'}), 401
+        try:
+            decoded = auth.verify_id_token(parts[1])
+            request.uid = decoded['uid']
+            request.auth_verified = True
+        except Exception as exc:
+            logger.warning('Firebase token doğrulanamadı: %s', type(exc).__name__)
+            return jsonify({'success': False, 'message': 'Oturum doğrulanamadı. Lütfen yeniden giriş yapın.'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
+
+def optional_verified_uid():
+    """Return the verified Firebase UID, or None when no token was supplied."""
+    authorization = request.headers.get('Authorization', '').strip()
+    if not authorization:
+        return None
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
+        raise ValueError('Geçersiz Authorization başlığı.')
+    try:
+        return auth.verify_id_token(parts[1])['uid']
+    except Exception as exc:
+        logger.warning('Opsiyonel Firebase token doğrulanamadı: %s', type(exc).__name__)
+        raise ValueError('Oturum doğrulanamadı.') from exc
+
 # --- KREDİ SİSTEMİ ---
 def check_and_deduct_credit(user_id):
+    """Atomically deduct one credit; billing failures never grant free work."""
     try:
-        if not db: return True, 999 # DB yoksa engelleme
+        if not db or not user_id:
+            return False, 0
+        default_credits = max(0, int(os.environ.get('DEFAULT_USER_CREDITS', '10')))
         user_ref = db.collection('users').document(user_id)
-        doc = user_ref.get()
-        current_credits = 1000 # Başlangıç kredisini artırdık
-        
-        if doc.exists:
-            data = doc.to_dict()
-            current_credits = data.get('credits', 1000)
-        else:
-            user_ref.set({'credits': 1000}, merge=True)
-            
-        if current_credits <= 0:
-            # Test aşamasında krediyi otomatik yenile
-            user_ref.update({'credits': 1000})
-            return True, 1000
-            
-        user_ref.update({'credits': firestore.Increment(-1)})
-        return True, current_credits - 1
+        transaction = db.transaction()
+
+        @firestore.transactional
+        def deduct(txn):
+            snapshot = user_ref.get(transaction=txn)
+            data = snapshot.to_dict() if snapshot.exists else {}
+            current = int(data.get('credits', default_credits))
+            if current <= 0:
+                return False, 0
+            remaining = current - 1
+            txn.set(user_ref, {'credits': remaining}, merge=True)
+            return True, remaining
+
+        return deduct(transaction)
     except Exception as e:
         logger.error(f"Credit error: {e}")
-        return True, 999 # Hata olsa da işleme izin ver
+        return False, 0
+
+
+def charge_mobile_session_once(session_ref, user_id):
+    """Charge a mobile upload session exactly once, even under concurrent requests."""
+    if not db or not session_ref or not user_id:
+        return False, 0
+    try:
+        default_credits = max(0, int(os.environ.get('DEFAULT_USER_CREDITS', '10')))
+        user_ref = db.collection('users').document(user_id)
+        transaction = db.transaction()
+
+        @firestore.transactional
+        def charge(txn):
+            session_snapshot = session_ref.get(transaction=txn)
+            if not session_snapshot.exists:
+                return False, 0
+            session = session_snapshot.to_dict() or {}
+            if session.get('owner_id') != user_id or int(session.get('expires_at', 0)) < int(time.time()):
+                return False, 0
+            if session.get('credit_charged'):
+                return True, None
+            user_snapshot = user_ref.get(transaction=txn)
+            user_data = user_snapshot.to_dict() if user_snapshot.exists else {}
+            current = int(user_data.get('credits', default_credits))
+            if current <= 0:
+                return False, 0
+            remaining = current - 1
+            txn.set(user_ref, {'credits': remaining}, merge=True)
+            txn.update(session_ref, {
+                'credit_charged': True,
+                'first_upload_at': firestore.SERVER_TIMESTAMP,
+            })
+            return True, remaining
+
+        return charge(transaction)
+    except Exception as exc:
+        logger.error('Mobile session credit error: %s', type(exc).__name__, exc_info=True)
+        return False, 0
 
 @app.route('/api/get_user_credits')
+@verified_login_required
 def get_user_credits():
-    # Public okuma yapılabilir veya token eklenebilir. Şimdilik açık kalsın.
-    user_id = request.args.get('user_id')
+    user_id = request.uid
     
     # Veritabanı henüz bağlanmamışsa veya user_id yoksa bile 10 göster (UI kırılmasın)
     if not db:
@@ -502,7 +555,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             init_payload = {
                 'font_name': font_name, 'font_id': font_id, 'owner_id': user_id, 'user_id': user_id,
                 'repetition': variation_count, 'created_at': firestore.SERVER_TIMESTAMP,
-                'harf_sayisi': 0, 'sections_completed': [], 'is_public': True
+                'harf_sayisi': 0, 'sections_completed': [], 'is_public': False
             }
             d_ref.set(init_payload)
             u_ref.set(init_payload)
@@ -603,14 +656,17 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/api/upload_form', methods=['POST'])
-@login_required
+@verified_login_required
 def upload_form():
     try:
         user_id = request.uid
+        if request.content_length and request.content_length > MAX_FILE_SIZE + (512 * 1024):
+            return jsonify({'success': False, 'message': 'Dosya en fazla 10 MB olabilir.'}), 413
         
-        # 1. reCAPTCHA Kontrolü (Sadece Logla, Engelleme)
+        # 1. Bot koruması
         if not verify_recaptcha(request.form.get('recaptcha_token')):
-            logger.warning(f"reCAPTCHA validation failed or skipped - User: {user_id}")
+            logger.warning(f"reCAPTCHA validation failed - User: {user_id}")
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
         # 2. Dosya Kontrolü
         uploaded_files = request.files.getlist('file') or request.files.getlist('files')
@@ -622,15 +678,6 @@ def upload_form():
         
         if not allowed_file(file.filename):
             return jsonify({'success': False, 'message': 'Geçersiz dosya türü.'}), 400
-            
-        # 3. Kredi Kontrolü
-        allowed, msg = check_and_deduct_credit(user_id)
-        if not allowed: return jsonify({'success': False, 'message': msg}), 402
-
-        # Zaman damgasını güncelle (Bilgi amaçlı)
-        try:
-            db.collection('users').document(user_id).update({'last_upload_time': firestore.SERVER_TIMESTAMP})
-        except: pass
 
         try:
             font_name = validate_font_name(request.form.get('font_name'))
@@ -638,14 +685,43 @@ def upload_form():
             return jsonify({'success': False, 'message': str(e)}), 400
 
         variation_count = validate_variation_count(request.form.get('variation_count', 3))
+        file_bytes = file.stream.read(MAX_FILE_SIZE + 1)
+        if len(file_bytes) > MAX_FILE_SIZE:
+            return jsonify({'success': False, 'message': 'Dosya en fazla 10 MB olabilir.'}), 413
+        extension = file.filename.rsplit('.', 1)[1].lower()
+        if extension == 'pdf':
+            if not file_bytes.startswith(b'%PDF-'):
+                return jsonify({'success': False, 'message': 'Dosya geçerli bir PDF değil.'}), 400
+        else:
+            try:
+                with PILImage.open(io.BytesIO(file_bytes)) as probe:
+                    probe.verify()
+                    if (probe.format or '').upper() not in {'PNG', 'JPEG', 'JPG'}:
+                        raise ValueError('unsupported image')
+            except Exception:
+                return jsonify({'success': False, 'message': 'Dosya geçerli bir PNG/JPEG değil.'}), 400
+
+        database = init_firebase()
+        if database is None:
+            return jsonify({'success': False, 'message': 'Veritabanı şu anda kullanılamıyor.'}), 503
+
+        # Kredi ancak tüm doğrulamalar başarıyla geçtikten sonra düşülür.
+        allowed, msg = check_and_deduct_credit(user_id)
+        if not allowed:
+            return jsonify({'success': False, 'message': msg}), 402
+
+        try:
+            database.collection('users').document(user_id).update({'last_upload_time': firestore.SERVER_TIMESTAMP})
+        except Exception:
+            pass
         
         job_id = str(uuid.uuid4())
-        if db:
-            db.collection('operations').document(job_id).set({
+        if database:
+            database.collection('operations').document(job_id).set({
                 'status': 'queued', 'progress': 0, 'user_id': user_id, 
                 'created_at': firestore.SERVER_TIMESTAMP, 'type': 'pdf_upload'
             })
-        threading.Thread(target=process_pdf_job, args=(job_id, user_id, font_name, variation_count, file.read())).start()
+        threading.Thread(target=process_pdf_job, args=(job_id, user_id, font_name, variation_count, file_bytes), daemon=True).start()
         return jsonify({'success': True, 'job_id': job_id})
     except ValueError as e:
         logger.warning(f"Validation error in upload_form: {str(e)}")
@@ -654,25 +730,76 @@ def upload_form():
         logger.error(f"System error in upload_form: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
+@app.route('/api/mobile_upload_session', methods=['POST'])
+@verified_login_required
+def create_mobile_upload_session():
+    try:
+        data = request.get_json(silent=True) or {}
+        font_name = validate_font_name(data.get('font_name'))
+        repetition = validate_variation_count(data.get('variation_count', 3))
+        database = init_firebase()
+        if database is None:
+            return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
+        session_id = uuid.uuid4().hex
+        expires_at = int(time.time()) + 3600
+        database.collection('mobile_upload_sessions').document(session_id).set({
+            'owner_id': request.uid,
+            'font_name': font_name,
+            'variation_count': repetition,
+            'expires_at': expires_at,
+            'credit_charged': False,
+            'created_at': firestore.SERVER_TIMESTAMP,
+        })
+        return jsonify({'success': True, 'session_id': session_id, 'expires_at': expires_at})
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+    except Exception as exc:
+        logger.error('Mobile session error: %s', type(exc).__name__, exc_info=True)
+        return jsonify({'success': False, 'message': 'Mobil yükleme oturumu oluşturulamadı.'}), 500
+
+
 @app.route('/process_single', methods=['POST'])
-# Mobil için token doğrulaması şu an eklemiyorum çünkü mobil_yukle.html'de auth yok (URL'den uid geliyor)
-# Mobil güvenlik için ileride URL'e token eklenmeli. Şimdilik reCAPTCHA yeterli.
 def process_single():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         if not verify_recaptcha(data.get('recaptcha_token')): return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
         try:
-            u_id = data.get('user_id')
-            f_name = validate_font_name(data.get('font_name'))
+            database = init_firebase()
+            if database is None:
+                return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
+            session_id = str(data.get('session_id', '')).strip()
+            session_ref = None
+            session_data = None
+            if re.fullmatch(r'[0-9a-f]{32}', session_id):
+                session_ref = database.collection('mobile_upload_sessions').document(session_id)
+                session_snapshot = session_ref.get()
+                if not session_snapshot.exists:
+                    return jsonify({'success': False, 'message': 'Mobil yükleme oturumu bulunamadı.'}), 401
+                session_data = session_snapshot.to_dict() or {}
+                if int(session_data.get('expires_at', 0)) < int(time.time()):
+                    return jsonify({'success': False, 'message': 'Mobil yükleme oturumunun süresi doldu.'}), 401
+                u_id = session_data.get('owner_id')
+                f_name = validate_font_name(session_data.get('font_name'))
+                repetition = validate_variation_count(session_data.get('variation_count'))
+            elif app.debug or os.environ.get('ALLOW_LEGACY_MOBILE_UPLOADS', '').lower() == 'true':
+                u_id = data.get('user_id')
+                f_name = validate_font_name(data.get('font_name'))
+                repetition = validate_variation_count(data.get('variation_count', 3))
+            else:
+                return jsonify({'success': False, 'message': 'Güvenli mobil yükleme oturumu gerekli.'}), 401
             b64 = validate_base64_image(data.get('image_base64'))
         except ValueError as e:
             return jsonify({'success': False, 'message': str(e)}), 400
 
-        repetition = validate_variation_count(data.get('variation_count', 3))
-        
-        allowed, msg = check_and_deduct_credit(u_id)
-        if not allowed: return jsonify({'success': False, 'message': msg}), 402
+        if session_ref is not None:
+            allowed, msg = charge_mobile_session_once(session_ref, u_id)
+            if not allowed:
+                return jsonify({'success': False, 'message': 'Yetersiz kredi veya geçersiz mobil oturum.'}), 402
+        elif session_ref is None:
+            allowed, msg = check_and_deduct_credit(u_id)
+            if not allowed:
+                return jsonify({'success': False, 'message': 'Yetersiz kredi.'}), 402
 
         h_sistemi = HarfSistemi(repetition=repetition)
         nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
@@ -682,16 +809,16 @@ def process_single():
         res, err = h_sistemi.process_single_page(img)
         if err: return jsonify({'success': False, 'message': err}), 400
         
-        if db:
+        if database:
             fid = f"{u_id}_{f_name.replace(' ', '_')}"
-            d_ref = db.collection('fonts').document(fid)
-            u_ref = db.collection('users').document(u_id).collection('fonts').document(fid)
+            d_ref = database.collection('fonts').document(fid)
+            u_ref = database.collection('users').document(u_id).collection('fonts').document(fid)
             
             if not d_ref.get().exists:
-                payload = {'font_name': f_name, 'font_id': fid, 'owner_id': u_id, 'user_id': u_id, 'repetition': repetition, 'created_at': firestore.SERVER_TIMESTAMP, 'harf_sayisi': 0, 'sections_completed': [], 'is_public': True}
+                payload = {'font_name': f_name, 'font_id': fid, 'owner_id': u_id, 'user_id': u_id, 'repetition': repetition, 'created_at': firestore.SERVER_TIMESTAMP, 'harf_sayisi': 0, 'sections_completed': [], 'is_public': False}
                 d_ref.set(payload); u_ref.set(payload)
             
-            batch = db.batch()
+            batch = database.batch()
             for char_name, b64_char in res['harfler'].items():
                 batch.set(d_ref.collection('chars').document(char_name), {'data': b64_char})
             batch.commit()
@@ -712,7 +839,7 @@ def process_single():
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 @app.route('/api/toggle_visibility', methods=['POST'])
-@login_required
+@verified_login_required
 def toggle_visibility():
     try:
         data = request.get_json()
@@ -726,7 +853,7 @@ def toggle_visibility():
         if not doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
         if doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz işlem'}), 403
             
-        new_status = not doc.to_dict().get('is_public', True)
+        new_status = not doc.to_dict().get('is_public', False)
         font_ref.update({'is_public': new_status})
         return jsonify({'success': True, 'new_status': new_status})
     except ValueError as e:
@@ -735,6 +862,50 @@ def toggle_visibility():
     except Exception as e:
         logger.error(f"System error in toggle_visibility: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'İşlem başarısız.'}), 500
+
+
+@app.route('/api/delete_font', methods=['POST'])
+@verified_login_required
+def delete_font():
+    """Remove a library entry, or delete the full font when the requester owns it."""
+    try:
+        data = request.get_json(silent=True) or {}
+        font_id = str(data.get('font_id', '')).strip()
+        if len(font_id) < 3 or len(font_id) > 180 or '/' in font_id or '..' in font_id or re.search(r'[\x00-\x1f]', font_id):
+            return jsonify({'success': False, 'message': 'Geçersiz font kimliği.'}), 400
+        database = init_firebase()
+        if database is None:
+            return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
+        user_font_ref = database.collection('users').document(request.uid).collection('fonts').document(font_id)
+        font_ref = database.collection('fonts').document(font_id)
+        snapshot = font_ref.get()
+        if not snapshot.exists or (snapshot.to_dict() or {}).get('owner_id') != request.uid:
+            user_font_ref.delete()
+            return jsonify({'success': True, 'deleted': 'library_entry'})
+
+        pending = []
+        for char_doc in font_ref.collection('chars').stream():
+            pending.append(char_doc.reference)
+            if len(pending) == 400:
+                batch = database.batch()
+                for reference in pending:
+                    batch.delete(reference)
+                batch.commit()
+                pending = []
+        if pending:
+            batch = database.batch()
+            for reference in pending:
+                batch.delete(reference)
+            batch.commit()
+        batch = database.batch()
+        batch.delete(font_ref)
+        batch.delete(user_font_ref)
+        batch.commit()
+        return jsonify({'success': True, 'deleted': 'font'})
+    except Exception as exc:
+        logger.error('Delete font error: %s', type(exc).__name__, exc_info=True)
+        return jsonify({'success': False, 'message': 'Font silinemedi.'}), 500
+
 MAX_DRAWN_FONT_REQUEST_BYTES = 20 * 1024 * 1024
 MAX_DRAWN_FONT_CHARS_PER_APPEND = 50
 
@@ -1062,7 +1233,7 @@ def _legacy_digital_upload(database, owner_id, data):
 
 
 @app.route('/api/upload_drawn_font', methods=['POST'])
-@login_required
+@verified_login_required
 def upload_drawn_font():
     try:
         # This JSON endpoint never trusts body.user_id.  Unlike legacy form
@@ -1149,7 +1320,7 @@ def upload_drawn_font():
 
 
 @app.route('/api/update_char', methods=['POST'])
-@login_required
+@verified_login_required
 def update_char():
     try:
         data = request.get_json()
@@ -1179,33 +1350,39 @@ def update_char():
 
 @app.route('/api/list_fonts')
 def list_fonts():
-    # Public okuma herkese açık, token gerekmez.
-    user_id = request.args.get('user_id')
     database = init_firebase()
-    if not database: return jsonify({"success": False})
+    if not database:
+        return jsonify({"success": False, "message": "Veritabanı kullanılamıyor."}), 503
     fonts = []
     try:
+        user_id = optional_verified_uid()
+        seen = set()
         public_query = database.collection('fonts').where('is_public', '==', True).stream()
         for doc in public_query:
             d = doc.to_dict()
             if d.get('status') not in (None, 'ready'):
                 continue
+            seen.add(doc.id)
             fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'public', 'owner_id': d.get('owner_id')})
-            
+
         if user_id:
-            private_query = database.collection('fonts').where('owner_id', '==', user_id).where('is_public', '==', False).stream()
-            for doc in private_query:
+            owned_query = database.collection('users').document(user_id).collection('fonts').stream()
+            for doc in owned_query:
+                if doc.id in seen:
+                    continue
                 d = doc.to_dict()
                 if d.get('status') not in (None, 'ready'):
                     continue
-                fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'private', 'owner_id': user_id})
+                fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'private' if not d.get('is_public', False) else 'owned', 'owner_id': user_id})
         return jsonify({"success": True, "fonts": fonts})
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 401
     except Exception as e:
         logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
 @app.route('/api/add_to_library', methods=['POST'])
-@login_required
+@verified_login_required
 def add_to_library():
     try:
         data = request.get_json()
@@ -1217,6 +1394,10 @@ def add_to_library():
         if not orig_ref.exists: return jsonify({'success':False, 'message': 'Font bulunamadı'}), 404
         
         orig_data = orig_ref.to_dict()
+        if orig_data.get('status') not in (None, 'ready'):
+            return jsonify({'success': False, 'message': 'Taslak font kütüphaneye eklenemez.'}), 409
+        if not orig_data.get('is_public', False) and orig_data.get('owner_id') != user_id:
+            return jsonify({'success': False, 'message': 'Bu özel fontu kopyalama yetkiniz yok.'}), 403
         new_font_id = f"{user_id}_{orig_data['font_name'].replace(' ', '_')}_{str(uuid.uuid4())[:8]}"
         
         new_font_data = orig_data.copy()
@@ -1256,32 +1437,55 @@ def get_assets():
         assets = {}
         database = init_firebase()
         if database and font_id:
+            font_ref = database.collection('fonts').document(font_id)
+            font_snapshot = font_ref.get()
+            font_data = font_snapshot.to_dict() if font_snapshot.exists else {}
+            if font_snapshot.exists:
+                if font_data.get('source') == 'digital' and font_data.get('status') != 'ready':
+                    return jsonify({'success': False, 'message': 'Font henüz tamamlanmadı.'}), 409
+                if not font_data.get('is_public', False):
+                    try:
+                        requester = optional_verified_uid()
+                    except ValueError as exc:
+                        return jsonify({'success': False, 'message': str(exc)}), 401
+                    if requester != font_data.get('owner_id'):
+                        return jsonify({'success': False, 'message': 'Bu özel fonta erişim yetkiniz yok.'}), 403
             # Hibrit okuma (önce alt koleksiyon, yoksa ana doküman)
-            char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
+            char_docs = list(font_ref.collection('chars').stream())
+            char_docs.sort(key=lambda item: (
+                re.sub(r'_\d+$', '', item.id),
+                int(item.id.rsplit('_', 1)[1]) if item.id.rsplit('_', 1)[-1].isdigit() else 0
+            ))
             has_sub = False
             for doc in char_docs:
                 has_sub = True
                 key, val = doc.id, doc.to_dict().get('data')
                 
                 # IMPORTANT: Convert bytes (Blob) to Base64 string for JSON serialization
-                if isinstance(val, bytes):
-                    val = base64.b64encode(val).decode('utf-8')
+                if not isinstance(val, str):
+                    try:
+                        val = base64.b64encode(bytes(val)).decode('utf-8')
+                    except Exception:
+                        continue
                 
                 base_key = key.rsplit('_', 1)[0] if '_' in key else key
                 if base_key not in assets: assets[base_key] = []
                 assets[base_key].append(val)
                 
             if not has_sub:
-                doc = database.collection('fonts').document(font_id).get()
-                if doc.exists:
-                    raw = doc.to_dict().get('harfler', {})
+                if font_snapshot.exists:
+                    raw = font_data.get('harfler', {})
                     for key, val in raw.items():
                         if isinstance(val, bytes):
                             val = base64.b64encode(val).decode('utf-8')
                         base_key = key.rsplit('_', 1)[0] if '_' in key else key
                         if base_key not in assets: assets[base_key] = []
                         assets[base_key].append(val)
-            return jsonify({"success": True, "assets": assets, "source": "firebase"})
+            return jsonify({"success": True, "assets": assets, "source": "firebase", "font": {
+                "id": font_id,
+                "name": font_data.get('font_name') if font_data else None,
+                "repetition": font_data.get('repetition', 1) if font_data else 1,
+            }})
         return jsonify({"success": True, "assets": {}}), 200
     except Exception as e:
         logger.error(f"System error in get_assets: {str(e)}", exc_info=True)
@@ -1294,6 +1498,18 @@ def download():
         active_harfler = {}
         database = init_firebase()
         if database and font_id:
+            font_snapshot = database.collection('fonts').document(font_id).get()
+            if not font_snapshot.exists:
+                return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
+            font_data = font_snapshot.to_dict() or {}
+            if not font_data.get('is_public', False):
+                id_token = request.form.get('id_token', '')
+                try:
+                    requester = auth.verify_id_token(id_token).get('uid')
+                except Exception:
+                    return jsonify({'success': False, 'message': 'Özel font için güvenli oturum gerekli.'}), 401
+                if requester != font_data.get('owner_id'):
+                    return jsonify({'success': False, 'message': 'Bu özel fonta erişim yetkiniz yok.'}), 403
             # get_assets mantığıyla aynısını yap (Hibrit)
             char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
             has_sub = False
@@ -1301,7 +1517,7 @@ def download():
                 has_sub = True
                 key, b64 = doc.id, doc.to_dict().get('data')
                 try:
-                    img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
+                    img = core_generator.Image.open(io.BytesIO(_raw_character_bytes(b64))).convert("RGBA")
                     parts = key.rsplit('_', 1)
                     if len(parts) == 2 and parts[1].isdigit():
                         base_key = parts[0]
@@ -1379,150 +1595,236 @@ def download():
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AI ÖDEV / BELGE OLUŞTURMA ENDPOINT'LERİ
+# AI DOCUMENT STUDIO
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.route('/api/ai_generate_pdf', methods=['POST'])
-@login_required
-def ai_generate_pdf():
-    """
-    Kullanıcının fontunu kullanarak AI layout JSON veya düz metni PDF'e dönüştürür.
+def _font_access_for_user(font_id, user_id, *, require_ready=True):
+    if not isinstance(font_id, str) or not font_id.strip() or len(font_id) > 180:
+        raise ai_document.AiDocumentError('Geçerli bir font_id gerekli.')
+    database = init_firebase()
+    if database is None:
+        raise ai_document.AiDocumentError('Veritabanı şu anda kullanılamıyor.', 503)
+    font_ref = database.collection('fonts').document(font_id.strip())
+    snapshot = font_ref.get()
+    if not snapshot.exists:
+        raise ai_document.AiDocumentError('Font bulunamadı.', 404)
+    font_data = snapshot.to_dict() or {}
+    is_public = bool(font_data.get('is_public', False))
+    if not is_public and font_data.get('owner_id') != user_id:
+        raise ai_document.AiDocumentError('Bu font için erişim yetkiniz yok.', 403)
+    if require_ready and font_data.get('source') == 'digital' and font_data.get('status') != 'ready':
+        raise ai_document.AiDocumentError('Bu font henüz tamamlanmamış bir taslak.', 409)
+    return font_ref, font_data
 
-    Body (JSON):
-      - font_id: str
-      - text_content: str           – Yazdırılacak metin
-      - page_settings: dict         – Global ayarlar
-          (paper_type, ink_color, letter_scale, line_spacing, word_spacing,
-           jitter, line_slope, margin_top, margin_left, margin_right, letter_spacing)
-      - per_line_overrides: dict    – {satir_no: {param: deger}} (opsiyonel)
-          Desteklenen: letter_scale, letter_spacing, word_spacing,
-                       line_slope, jitter, ink_color, line_offset_y
 
-    Returns: application/pdf binary
-    """
+def _raw_character_bytes(raw):
+    if isinstance(raw, str):
+        encoded = raw.split(',', 1)[1] if ',' in raw else raw
+        return base64.b64decode(encoded, validate=True)
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        return bytes(raw)
     try:
-        data = request.get_json(force=True)
-        if not data:
-            return jsonify({'success': False, 'message': 'JSON verisi eksik.'}), 400
+        return bytes(raw)
+    except Exception as exc:
+        raise ValueError('Karakter verisi okunamadı.') from exc
 
-        user_id            = request.uid
-        font_id            = data.get('font_id', '').strip()
-        page_settings      = data.get('page_settings', {})
-        text_content       = data.get('text_content', '').strip()
-        per_line_overrides = data.get('per_line_overrides', {})
 
-        if not font_id:
-            return jsonify({'success': False, 'message': 'font_id zorunludur.'}), 400
-        if not text_content:
-            return jsonify({'success': False, 'message': 'Metin içeriği boş.'}), 400
-        if len(text_content) > 50000:
-            return jsonify({'success': False, 'message': 'Metin çok uzun (max 50.000 karakter).'}), 400
-
-        # Kredi kontrolü
-        allowed, remaining = check_and_deduct_credit(user_id)
-        if not allowed:
-            return jsonify({'success': False, 'message': 'Yetersiz kredi.'}), 402
-
-        # Font verilerini yükle
-        database = init_firebase()
-        font_ref = database.collection('fonts').document(font_id)
-        font_doc = font_ref.get()
-        if not font_doc.exists:
-            return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
-
-        # Font karakterlerini PIL RGBA olarak yükle (core_generator v2 formatı)
-        chars_stream = font_ref.collection('chars').stream()
-        active_harfler = {}
-        for char_doc in chars_stream:
-            char_data = char_doc.to_dict()
-            raw = char_data.get('data')
-            if raw is None:
-                continue
-            try:
-                raw_bytes = raw if isinstance(raw, bytes) else base64.b64decode(raw)
-                pil_img   = PILImage.open(io.BytesIO(raw_bytes)).convert('RGBA')
-                if char_doc.id not in active_harfler:
-                    active_harfler[char_doc.id] = []
-                active_harfler[char_doc.id].append(pil_img)
-            except Exception as cerr:
-                logger.warning(f'Karakter yüklenemedi {char_doc.id}: {cerr}')
-                continue
-
-        if not active_harfler:
-            return jsonify({'success': False, 'message': 'Font karakterleri yüklenemedi.'}), 500
-
-        # Ink rengi
-        ink_color = page_settings.get('ink_color', '#1b1b1d')
+def _load_font_images(font_ref):
+    grouped = {}
+    documents = list(font_ref.collection('chars').stream())
+    if len(documents) > 2000:
+        raise ai_document.AiDocumentError('Font karakter sınırını aşıyor.', 413)
+    documents.sort(key=lambda item: item.id)
+    for char_doc in documents:
+        raw = (char_doc.to_dict() or {}).get('data')
+        if raw is None:
+            continue
         try:
-            raw_c = ink_color.lstrip('#')
-            ink_rgb = tuple(int(raw_c[i:i+2], 16) for i in (0, 2, 4))
-        except Exception:
-            ink_rgb = (27, 27, 29)
+            raw_bytes = _raw_character_bytes(raw)
+            if len(raw_bytes) > 2 * 1024 * 1024:
+                continue
+            with PILImage.open(io.BytesIO(raw_bytes)) as image:
+                image.load()
+                if image.width > 2048 or image.height > 2048:
+                    continue
+                glyph = image.convert('RGBA')
+            match = re.match(r'^(.*)_(\d+)$', char_doc.id)
+            base_key = match.group(1) if match else char_doc.id
+            grouped.setdefault(base_key, []).append(glyph)
+        except Exception as exc:
+            logger.warning('Font karakteri atlandı (%s): %s', char_doc.id, type(exc).__name__)
+    if not grouped:
+        raise ai_document.AiDocumentError('Font karakterleri yüklenemedi.', 422)
+    return grouped
 
-        config = {
-            'page_width'          : 2480,
-            'page_height'         : 3508,
-            'margin_top'          : int(page_settings.get('margin_top', 220)),
-            'margin_left'         : int(page_settings.get('margin_left', 180)),
-            'margin_right'        : int(page_settings.get('margin_right', 180)),
-            'target_letter_height': int(page_settings.get('letter_scale', 135)),
-            'line_spacing'        : int(page_settings.get('line_spacing', 215)),
-            'word_spacing'        : int(page_settings.get('word_spacing', 55)),
-            'letter_spacing'      : int(page_settings.get('letter_spacing', 0)),
-            'murekkep_rengi'      : ink_rgb,
-            'opacity'             : 0.95,
-            'jitter'              : int(page_settings.get('jitter', 4)),
-            'paper_type'          : page_settings.get('paper_type', 'cizgili'),
-            'line_slope'          : float(page_settings.get('line_slope', 3)),
-        }
 
-        # per_line_overrides: string key → int key
-        plo = {int(k): v for k, v in per_line_overrides.items()} if per_line_overrides else {}
+def _ai_error_response(exc):
+    if isinstance(exc, ai_document.AiDocumentError):
+        return jsonify({'success': False, 'message': str(exc)}), exc.status_code
+    logger.error('AI Document Studio error: %s', type(exc).__name__, exc_info=True)
+    return jsonify({'success': False, 'message': 'Belge işlemi şu anda tamamlanamadı.'}), 500
 
-        sayfalar = core_generator.metni_sayfaya_yaz(text_content, active_harfler, config, per_line_overrides=plo)
-        pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
 
-        return send_file(
-            pdf_buffer,
-            mimetype='application/pdf',
-            as_attachment=False,
-            download_name='fontify_belge.pdf'
-        )
+@app.route('/api/ai/test', methods=['POST'])
+@verified_login_required
+def ai_connection_test():
+    try:
+        data = request.get_json(silent=True) or {}
+        model = data.get('model', 'gemini-3.1-pro-preview')
+        ai_document.test_gemini_connection(request.headers.get('X-Gemini-Api-Key'), model)
+        return jsonify({'success': True, 'model': ai_document.validate_model(model)})
+    except Exception as exc:
+        return _ai_error_response(exc)
 
-    except Exception as e:
-        logger.error(f'ai_generate_pdf error: {e}', exc_info=True)
-        return jsonify({'success': False, 'message': f'PDF oluşturulamadı: {str(e)}'}), 500
+
+@app.route('/api/ai/plan', methods=['POST'])
+@verified_login_required
+def ai_document_plan():
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
+        font_ref, font_data = _font_access_for_user(data.get('font_id', ''), request.uid)
+        harfler = _load_font_images(font_ref)
+        source = str(data.get('source', 'ai'))
+        if source == 'manual':
+            blocks = ai_document.manual_blocks(
+                ai_document.normalize_text(data.get('text_content', '')),
+                ai_document.normalize_text(data.get('title', ''), maximum=180),
+            )
+            layout = ai_document.build_layout(blocks, harfler, data.get('page_settings'))
+            result = {
+                'layout': layout,
+                'blocks': blocks,
+                'full_text': '\n'.join(block['text'] for block in blocks),
+                'summary': 'Metin gerçek font ölçüleriyle mizanpajlandı.',
+                'font_profile': ai_document.font_profile(
+                    harfler,
+                    font_data.get('repetition', 1),
+                    layout['settings']['letter_scale'],
+                ),
+                'model': None,
+            }
+        elif source == 'ai':
+            result = ai_document.create_ai_layout(
+                api_key=request.headers.get('X-Gemini-Api-Key'),
+                model=data.get('model', 'gemini-3.1-pro-preview'),
+                template=str(data.get('template', 'odev')),
+                topic=data.get('topic', ''),
+                instructions=data.get('instructions', ''),
+                harfler=harfler,
+                repetition=font_data.get('repetition', 1),
+                page_settings=data.get('page_settings'),
+            )
+        else:
+            raise ai_document.AiDocumentError("source yalnızca 'ai' veya 'manual' olabilir.")
+        return jsonify({'success': True, 'font_name': font_data.get('font_name'), **result})
+    except Exception as exc:
+        return _ai_error_response(exc)
 
 
 @app.route('/api/font_chars_meta', methods=['GET'])
-@login_required
+@verified_login_required
 def font_chars_meta():
-    """Bir fontun mevcut karakter listesini döndürür (AI prompt için özet)."""
     try:
-        font_id = request.args.get('font_id', '').strip()
-        if not font_id:
-            return jsonify({'success': False, 'message': 'font_id zorunludur.'}), 400
-
-        database = init_firebase()
-        font_ref = database.collection('fonts').document(font_id)
-        font_doc = font_ref.get()
-        if not font_doc.exists:
-            return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
-
-        font_data = font_doc.to_dict()
-        chars_stream = font_ref.collection('chars').stream()
-        char_list = [c.id for c in chars_stream]
-
+        font_ref, font_data = _font_access_for_user(request.args.get('font_id', ''), request.uid)
+        harfler = _load_font_images(font_ref)
+        profile = ai_document.font_profile(harfler, font_data.get('repetition', 1), 135)
         return jsonify({
             'success': True,
             'font_name': font_data.get('font_name', 'Bilinmiyor'),
-            'char_count': len(char_list),
+            'char_count': len(harfler),
             'repetition': font_data.get('repetition', 1),
-            'chars': char_list[:50]
+            'profile': profile,
         })
-    except Exception as e:
-        logger.error(f'font_chars_meta error: {e}', exc_info=True)
-        return jsonify({'success': False, 'message': str(e)}), 500
+    except Exception as exc:
+        return _ai_error_response(exc)
+
+
+@app.route('/api/font_dimensions', methods=['GET'])
+@verified_login_required
+def font_dimensions():
+    try:
+        scale = int(request.args.get('letter_scale', 135))
+        if not 50 <= scale <= 260:
+            raise ai_document.AiDocumentError('letter_scale 50-260 arasında olmalı.')
+        font_ref, font_data = _font_access_for_user(request.args.get('font_id', ''), request.uid)
+        harfler = _load_font_images(font_ref)
+        metrics = core_generator.get_font_metrics(harfler, scale)
+        return jsonify({
+            'success': True,
+            'font_name': font_data.get('font_name'),
+            'repetition': font_data.get('repetition', 1),
+            'scale': scale,
+            'page_width_px': ai_document.PAGE_WIDTH_PX,
+            'page_height_px': ai_document.PAGE_HEIGHT_PX,
+            'px_per_mm': ai_document.PX_PER_MM,
+            'metrics': metrics,
+        })
+    except Exception as exc:
+        return _ai_error_response(exc)
+
+
+def _send_layout_pdf(layout, harfler, filename='fontify_belge.pdf'):
+    clean_layout = ai_document.validate_layout(layout)
+    pages = core_generator.metni_koordinatli_yaz(clean_layout, harfler)
+    pdf_buffer = core_generator.sayfalari_pdf_olustur(pages)
+    if pdf_buffer is None:
+        raise ai_document.AiDocumentError('PDF sayfası oluşturulamadı.', 422)
+    response = send_file(
+        pdf_buffer,
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=filename,
+        max_age=0,
+    )
+    response.headers['X-Fontify-Pages'] = str(len(pages))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/ai_layout_pdf', methods=['POST'])
+@verified_login_required
+def ai_layout_pdf():
+    try:
+        if request.content_length and request.content_length > 2 * 1024 * 1024:
+            raise ai_document.AiDocumentError('Layout isteği en fazla 2 MB olabilir.', 413)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
+        font_ref, _ = _font_access_for_user(data.get('font_id', ''), request.uid)
+        return _send_layout_pdf(data.get('layout'), _load_font_images(font_ref), 'fontify_ai_belge.pdf')
+    except Exception as exc:
+        return _ai_error_response(exc)
+
+
+@app.route('/api/ai_generate_pdf', methods=['POST'])
+@verified_login_required
+def ai_generate_pdf():
+    """Backward-compatible manual text renderer using the safe layout engine."""
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
+        font_ref, _ = _font_access_for_user(data.get('font_id', ''), request.uid)
+        harfler = _load_font_images(font_ref)
+        blocks = ai_document.manual_blocks(ai_document.normalize_text(data.get('text_content', '')))
+        layout = ai_document.build_layout(blocks, harfler, data.get('page_settings'))
+        overrides = data.get('per_line_overrides') if isinstance(data.get('per_line_overrides'), dict) else {}
+        flat_lines = [line for page in layout['pages'] for line in page['lines']]
+        for key, values in overrides.items():
+            try:
+                target = flat_lines[int(key)]
+            except (ValueError, IndexError, TypeError):
+                continue
+            if not isinstance(values, dict):
+                continue
+            for field in ('letter_scale', 'letter_spacing', 'word_spacing', 'line_slope', 'jitter', 'ink_color', 'line_offset_y'):
+                if field in values:
+                    target[field] = values[field]
+        return _send_layout_pdf(layout, harfler)
+    except Exception as exc:
+        return _ai_error_response(exc)
 
 
 if __name__ == '__main__':

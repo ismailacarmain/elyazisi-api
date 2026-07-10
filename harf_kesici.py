@@ -3,59 +3,13 @@ import numpy as np
 import os
 import shutil
 
+from character_manifest import validate_variation_count, variation_keys
+
 class HarfSistemi:
     def __init__(self, repetition=3, output_folder="harfler"):
         self.output = output_folder
-        self.repetition = repetition
-        self.char_list = []
-        
-        # --- KARAKTER LİSTESİ ---
-        lowers = "abcçdefgğhıijklmnoöpqrsştuüvwxyz"
-        uppers = "ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZ"
-        digits = "0123456789"
-        symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺&#"
-        symbols_str = symbols_str.replace(" ", "")
-        
-        symbols = ""
-        seen = set()
-        for char in symbols_str:
-            if char not in seen:
-                symbols += char
-                seen.add(char)
-        
-        sym_map = {
-            ".": "nokta", ",": "virgul", ":": "iki_nokta", ";": "noktali_virgul", 
-            "?": "soru", "!": "unlem", "-": "tire", "_": "alt_tire",
-            "\"": "cift_tirnak", "'": "tek_tirnak", 
-            "(": "parantez_ac", ")": "parantez_kapat",
-            "[": "koseli_parantez_ac", "]": "koseli_parantez_kapat",
-            "{": "suslu_parantez_ac", "}": "suslu_parantez_kapat",
-            "/": "slash", "\\": "ters_slash", "|": "dikey_cizgi",
-            "+": "arti", "*": "yildiz", "=": "esittir",
-            "<": "kucuktur", ">": "buyuktur",
-            "%": "yuzde", "^": "sapka", "~": "yaklasik",
-            "@": "at_isareti", "$": "dolar", "€": "euro", "₺": "tl",
-            "&": "ve_isareti", "#": "kare"
-        }
-        
-        for char in lowers:
-            safe = sym_map.get(char, char)
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"küçük_{safe}_{i}")
-                
-        for char in uppers:
-            safe = sym_map.get(char, char)
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"büyük_{safe}_{i}")
-                
-        for char in digits:
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"rakam_{char}_{i}")
-                
-        for char in symbols:
-            safe = sym_map.get(char, f"sembol_{ord(char)}")
-            for i in range(1, self.repetition + 1):
-                self.char_list.append(f"{safe}_{i}")
+        self.repetition = validate_variation_count(repetition)
+        self.char_list = list(variation_keys(self.repetition))
 
     def clean(self):
         if os.path.exists(self.output): shutil.rmtree(self.output)

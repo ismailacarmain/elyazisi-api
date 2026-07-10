@@ -4,3 +4,16 @@ services:
     env: docker
     plan: free
     healthCheckPath: /health
+    envVars:
+      - key: FRONTEND_ORIGINS
+        value: https://fontify.online,https://www.fontify.online
+      - key: DEFAULT_USER_CREDITS
+        value: "10"
+      - key: ALLOW_LEGACY_MOBILE_UPLOADS
+        value: "false"
+      - key: ALLOW_INSECURE_RECAPTCHA
+        value: "false"
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      - key: RECAPTCHA_SECRET_KEY
+        sync: false

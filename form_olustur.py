@@ -7,24 +7,24 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import os
 
+from character_manifest import (
+    DIGIT_CHARACTERS,
+    LOWERCASE_CHARACTERS,
+    SYMBOL_CHARACTERS,
+    UPPERCASE_CHARACTERS,
+    validate_variation_count,
+)
+
 # ---------------------------------------------------------
 # ORTAK VERİ YAPILARI
 # ---------------------------------------------------------
 def get_base_characters():
-    lowers = "abcçdefgğhıijklmnoöpqrsştuüvwxyz"
-    uppers = "ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZ"
-    digits = "0123456789"
-    symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺&#"
-    symbols_str = symbols_str.replace(" ", "")
-    
-    symbols = ""
-    seen = set()
-    for char in symbols_str:
-        if char not in seen:
-            symbols += char
-            seen.add(char)
-            
-    return lowers, uppers, digits, symbols
+    return (
+        LOWERCASE_CHARACTERS,
+        UPPERCASE_CHARACTERS,
+        DIGIT_CHARACTERS,
+        SYMBOL_CHARACTERS,
+    )
 
 def generate_marker(marker_id):
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -34,6 +34,7 @@ def generate_marker(marker_id):
     return path
 
 def create_form(filename="form.pdf", repetition=3, test_mode=False):
+    repetition = validate_variation_count(repetition)
     try:
         pdfmetrics.registerFont(TTFont('Arial', "C:/Windows/Fonts/arial.ttf"))
         font = 'Arial'
