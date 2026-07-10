@@ -15,11 +15,25 @@ import uuid
 import time
 import re
 import logging
+import hashlib
+import math
 from urllib.parse import urlparse
 from pdf2image import convert_from_bytes
 from PIL import Image as PILImage
 import requests
 from functools import wraps
+
+from character_manifest import (
+    CHARACTER_MANIFEST,
+    validate_variation_count,
+    variation_key_set,
+    variation_keys,
+)
+from glyph_normalizer import (
+    GlyphTooLargeError,
+    GlyphValidationError,
+    normalize_digital_glyph,
+)
 
 # Logging setup
 logging.basicConfig(
@@ -287,21 +301,30 @@ def set_secure_headers(response):
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        id_token = None
-        if 'Authorization' in request.headers:
-            id_token = request.headers['Authorization'].split(' ').pop()
-        
-        if id_token:
+        authorization = request.headers.get('Authorization')
+
+        # Bir istemci Authorization gönderiyorsa kimlik doğrulamayı kapalı
+        # başarısız yap. Geçersiz token'ı user_id form alanına düşürmek, saldırganın
+        # başka bir kullanıcının UID'sini seçmesine izin veriyordu.
+        if authorization is not None:
             try:
+                parts = authorization.strip().split()
+                if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
+                    raise ValueError('Malformed Authorization header')
+                id_token = parts[1]
                 decoded_token = auth.verify_id_token(id_token)
                 request.uid = decoded_token['uid']
+                request.auth_verified = True
             except Exception as e:
-                logger.error(f"Token verify error: {e}")
-                # Token geçersizse ama formda user_id varsa devam etmesine izin ver
-                request.uid = request.form.get('user_id') or request.args.get('user_id')
+                logger.warning(f"Token verify error: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': 'Oturum doğrulanamadı. Lütfen yeniden giriş yapın.'
+                }), 401
         else:
             # Token yoksa form verilerinden al (Mobil ve eski sayfalar için)
             request.uid = request.form.get('user_id') or request.args.get('user_id')
+            request.auth_verified = False
         
         if not request.uid:
             return jsonify({'success': False, 'message': 'Kullanıcı kimliği (User ID) bulunamadı!'}), 401
@@ -364,35 +387,12 @@ def get_user_credits():
 # --- HARF TARAMA MOTORU (Aynı Kalıyor) ---
 class HarfSistemi:
     def __init__(self, repetition=3):
-        self.repetition = repetition
-        self.char_list = []
-        self.generate_char_list()
+        self.repetition = validate_variation_count(repetition)
+        self.char_list = list(variation_keys(self.repetition))
 
     def generate_char_list(self):
-        lowers = "abcçdefgğhıijklmnoöpqrsştuüvwxyz"
-        uppers = "ABCÇDEFGĞHIİJKLMNOÖPQRSŞTUÜVWXYZ"
-        digits = "0123456789"
-        symbols_str = ".,:;?!-_\"'()[]{}/\\|+*=< >%^~@$€₺#"
-        symbols_str = symbols_str.replace(" ", "")
-        
-        tr_map = {'ç': 'cc', 'ğ': 'gg', 'ı': 'ii', 'ö': 'oo', 'ş': 'ss', 'ü': 'uu', 'Ç': 'cc', 'Ğ': 'gg', 'I': 'ii', 'İ': 'i', 'Ö': 'oo', 'Ş': 'ss', 'Ü': 'uu'}
-        sym_map = {'.': 'nokta', ',': 'virgul', ':': 'ikiknokta', ';': 'noktalivirgul', '?': 'soru', '!': 'unlem', '-': 'tire', '_': 'alt_tire', '"': 'tirnak', "'": 'tektirnak', '(': 'parantezac', ')': 'parantezkapama', '[': 'koseli_ac', ']': 'koseli_kapa', '{': 'suslu_ac', '}': 'suslu_kapa', '/': 'slash', '\\': 'backslas', '|': 'pipe', '+': 'arti', '*': 'carpi', '=': 'esit', '<': 'kucuktur', '>': 'buyuktur', '%': 'yuzde', '^': 'sapka', '~': 'yaklasik', '@': 'at', '$': 'dolar', '€': 'euro', '₺': 'tl', '&': 'ampersand', '#': 'diyez'}
-
-        for char in lowers:
-            base = tr_map.get(char, char)
-            for i in range(1, self.repetition + 1): self.char_list.append(f"kucuk_{base}_{i}")
-        for char in uppers:
-            base = tr_map.get(char, char.lower())
-            for i in range(1, self.repetition + 1): self.char_list.append(f"buyuk_{base}_{i}")
-        for char in digits:
-            for i in range(1, self.repetition + 1): self.char_list.append(f"rakam_{char}_{i}")
-        
-        seen = set(); unique_symbols = ""
-        for char in symbols_str:
-            if char not in seen: unique_symbols += char; seen.add(char)
-        for char in unique_symbols:
-            safe = sym_map.get(char, f"sembol_{ord(char)}")
-            for i in range(1, self.repetition + 1): self.char_list.append(f"ozel_{safe}_{i}")
+        """Rebuild the list for compatibility with older callers."""
+        self.char_list = list(variation_keys(self.repetition))
 
     def crop_tight(self, binary_img):
         coords = cv2.findNonZero(binary_img)
@@ -637,7 +637,7 @@ def upload_form():
         except ValueError as e:
             return jsonify({'success': False, 'message': str(e)}), 400
 
-        variation_count = int(request.form.get('variation_count', 3))
+        variation_count = validate_variation_count(request.form.get('variation_count', 3))
         
         job_id = str(uuid.uuid4())
         if db:
@@ -669,7 +669,7 @@ def process_single():
         except ValueError as e:
             return jsonify({'success': False, 'message': str(e)}), 400
 
-        repetition = int(data.get('variation_count', 3))
+        repetition = validate_variation_count(data.get('variation_count', 3))
         
         allowed, msg = check_and_deduct_credit(u_id)
         if not allowed: return jsonify({'success': False, 'message': msg}), 402
@@ -735,53 +735,417 @@ def toggle_visibility():
     except Exception as e:
         logger.error(f"System error in toggle_visibility: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'İşlem başarısız.'}), 500
+MAX_DRAWN_FONT_REQUEST_BYTES = 20 * 1024 * 1024
+MAX_DRAWN_FONT_CHARS_PER_APPEND = 50
+
+
+class DigitalUploadAPIError(Exception):
+    def __init__(self, message, status_code=400, **details):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.details = details
+
+
+def _validate_client_upload_id(value):
+    if not isinstance(value, str):
+        raise DigitalUploadAPIError('client_upload_id zorunludur.', 400)
+    value = value.strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', value):
+        raise DigitalUploadAPIError('client_upload_id biçimi geçersiz.', 400)
+    return value
+
+
+def _validate_server_font_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r'digital_[0-9a-f]{32}', value):
+        raise DigitalUploadAPIError('font_id geçersiz.', 400)
+    return value
+
+
+def _load_digital_font(database, font_id, owner_id):
+    font_id = _validate_server_font_id(font_id)
+    font_ref = database.collection('fonts').document(font_id)
+    snapshot = font_ref.get()
+    if not snapshot.exists:
+        raise DigitalUploadAPIError('Dijital font yüklemesi bulunamadı.', 404)
+    font_data = snapshot.to_dict() or {}
+    if font_data.get('owner_id') != owner_id:
+        raise DigitalUploadAPIError('Bu font üzerinde işlem yetkiniz yok.', 403)
+    if font_data.get('source') != 'digital':
+        raise DigitalUploadAPIError('Bu font dijital yükleme protokolüne ait değil.', 409)
+    return font_ref, font_data
+
+
+def _start_digital_upload(database, owner_id, font_name, repetition, client_upload_id):
+    client_upload_id = _validate_client_upload_id(client_upload_id)
+    session_id = hashlib.sha256(
+        f'{owner_id}\0{client_upload_id}'.encode('utf-8')
+    ).hexdigest()
+    session_ref = database.collection('digital_font_uploads').document(session_id)
+    expected_count = len(CHARACTER_MANIFEST) * repetition
+
+    transaction = database.transaction()
+
+    @firestore.transactional
+    def ensure_session(txn):
+        session_snapshot = session_ref.get(transaction=txn)
+        if session_snapshot.exists:
+            session_data = session_snapshot.to_dict() or {}
+            if (
+                session_data.get('owner_id') != owner_id
+                or session_data.get('font_name') != font_name
+                or session_data.get('repetition') != repetition
+            ):
+                raise DigitalUploadAPIError(
+                    'Bu client_upload_id farklı bir yükleme için daha önce kullanılmış.',
+                    409,
+                )
+            existing_font_id = session_data.get('font_id')
+            existing_ref = database.collection('fonts').document(existing_font_id)
+            existing_snapshot = existing_ref.get(transaction=txn)
+            if not existing_snapshot.exists:
+                raise DigitalUploadAPIError(
+                    'Yükleme oturumu mevcut ancak font kaydı bulunamıyor.', 409
+                )
+            existing_data = existing_snapshot.to_dict() or {}
+            return {
+                'font_id': existing_font_id,
+                'expected_count': existing_data.get('expected_count', expected_count),
+                'status': existing_data.get('status', 'draft'),
+                'idempotent': True,
+            }
+
+        font_id = f'digital_{uuid.uuid4().hex}'
+        font_ref = database.collection('fonts').document(font_id)
+        mirror_ref = (
+            database.collection('users')
+            .document(owner_id)
+            .collection('fonts')
+            .document(font_id)
+        )
+        font_payload = {
+            'font_name': font_name,
+            'font_id': font_id,
+            'owner_id': owner_id,
+            'user_id': owner_id,
+            'repetition': repetition,
+            'variation_count': repetition,
+            'expected_count': expected_count,
+            'harf_sayisi': 0,
+            'sections_completed': [],
+            'source': 'digital',
+            'status': 'draft',
+            'is_public': False,
+            'client_upload_id': client_upload_id,
+            '_upload_session_id': session_id,
+            'credit_charged': False,
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        session_payload = {
+            'owner_id': owner_id,
+            'font_id': font_id,
+            'font_name': font_name,
+            'repetition': repetition,
+            'expected_count': expected_count,
+            'status': 'draft',
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        txn.set(font_ref, font_payload)
+        txn.set(mirror_ref, font_payload)
+        txn.set(session_ref, session_payload)
+        return {
+            'font_id': font_id,
+            'expected_count': expected_count,
+            'status': 'draft',
+            'idempotent': False,
+        }
+
+    return ensure_session(transaction)
+
+
+def _append_digital_glyphs(database, owner_id, font_id, chars):
+    if not isinstance(chars, dict) or not chars:
+        raise DigitalUploadAPIError('chars, en az bir harf içeren nesne olmalıdır.', 400)
+    if len(chars) > MAX_DRAWN_FONT_CHARS_PER_APPEND:
+        raise DigitalUploadAPIError(
+            f'Bir append isteğinde en fazla {MAX_DRAWN_FONT_CHARS_PER_APPEND} harf gönderilebilir.',
+            413,
+        )
+
+    font_ref, font_data = _load_digital_font(database, font_id, owner_id)
+    if font_data.get('status') != 'draft':
+        raise DigitalUploadAPIError('Yalnızca draft durumundaki fontlara harf eklenebilir.', 409)
+
+    repetition = validate_variation_count(font_data.get('repetition'))
+    expected_keys = variation_key_set(repetition)
+    supplied_keys = set(chars)
+    invalid_keys = sorted(supplied_keys - expected_keys)
+    if invalid_keys:
+        raise DigitalUploadAPIError(
+            'İzin verilmeyen harf anahtarı gönderildi.',
+            400,
+            invalid_key_sample=invalid_keys[:10],
+        )
+
+    normalized = {}
+    for char_key, image_value in chars.items():
+        try:
+            normalized[char_key] = normalize_digital_glyph(image_value)
+        except GlyphTooLargeError:
+            raise
+        except GlyphValidationError as exc:
+            raise GlyphValidationError(f'{char_key}: {exc}') from exc
+
+    # Validation happens before this batch, so a bad glyph never leaves a
+    # partially written chunk behind.
+    batch = database.batch()
+    for char_key, image_base64 in normalized.items():
+        char_ref = font_ref.collection('chars').document(char_key)
+        batch.set(char_ref, {
+            'data': image_base64,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        })
+    batch.update(font_ref, {'updated_at': firestore.SERVER_TIMESTAMP})
+    batch.commit()
+    return {
+        'font_id': font_id,
+        'accepted_count': len(normalized),
+        'status': 'draft',
+    }
+
+
+def _finalize_digital_upload(database, owner_id, font_id):
+    font_ref, font_data = _load_digital_font(database, font_id, owner_id)
+    repetition = validate_variation_count(font_data.get('repetition'))
+    expected_keys = variation_key_set(repetition)
+    expected_count = len(expected_keys)
+    sections_completed = list(range(math.ceil(expected_count / 60)))
+
+    if font_data.get('status') == 'ready':
+        return {
+            'font_id': font_id,
+            'status': 'ready',
+            'harf_sayisi': expected_count,
+            'sections_completed': sections_completed,
+            'idempotent': True,
+        }
+    if font_data.get('status') != 'draft':
+        raise DigitalUploadAPIError('Font finalize edilebilir durumda değil.', 409)
+
+    received_keys = {
+        char_snapshot.id for char_snapshot in font_ref.collection('chars').stream()
+    }
+    missing_keys = sorted(expected_keys - received_keys)
+    unexpected_keys = sorted(received_keys - expected_keys)
+    if missing_keys or unexpected_keys:
+        details = {
+            'missing_count': len(missing_keys),
+            'missing_sample': missing_keys[:10],
+        }
+        if unexpected_keys:
+            details.update({
+                'unexpected_count': len(unexpected_keys),
+                'unexpected_sample': unexpected_keys[:10],
+            })
+        raise DigitalUploadAPIError(
+            'Font henüz tamamlanmadı; beklenen harf seti eksik veya geçersiz.',
+            409,
+            **details,
+        )
+
+    transaction = database.transaction()
+
+    @firestore.transactional
+    def finish(txn):
+        latest_snapshot = font_ref.get(transaction=txn)
+        if not latest_snapshot.exists:
+            raise DigitalUploadAPIError('Dijital font yüklemesi bulunamadı.', 404)
+        latest = latest_snapshot.to_dict() or {}
+        if latest.get('owner_id') != owner_id:
+            raise DigitalUploadAPIError('Bu font üzerinde işlem yetkiniz yok.', 403)
+        if latest.get('status') == 'ready':
+            return True, None
+        if latest.get('status') != 'draft':
+            raise DigitalUploadAPIError('Font finalize edilebilir durumda değil.', 409)
+
+        user_ref = database.collection('users').document(owner_id)
+        user_snapshot = user_ref.get(transaction=txn)
+        user_data = user_snapshot.to_dict() if user_snapshot.exists else {}
+        current_credits = user_data.get('credits', 1000)
+        if not isinstance(current_credits, (int, float)) or current_credits <= 0:
+            raise DigitalUploadAPIError('Yetersiz kredi.', 402)
+        remaining_credits = current_credits - 1
+
+        final_fields = {
+            'status': 'ready',
+            'harf_sayisi': expected_count,
+            'sections_completed': sections_completed,
+            'source': 'digital',
+            'is_public': False,
+            'expected_count': expected_count,
+            'credit_charged': True,
+            'credit_charged_at': firestore.SERVER_TIMESTAMP,
+            'finalized_at': firestore.SERVER_TIMESTAMP,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        mirror_ref = user_ref.collection('fonts').document(font_id)
+        mirror_fields = {
+            'font_name': latest.get('font_name'),
+            'font_id': font_id,
+            'owner_id': owner_id,
+            'user_id': owner_id,
+            'repetition': repetition,
+            'variation_count': repetition,
+            'client_upload_id': latest.get('client_upload_id'),
+            **final_fields,
+        }
+        if latest.get('created_at') is not None:
+            mirror_fields['created_at'] = latest.get('created_at')
+
+        txn.set(font_ref, final_fields, merge=True)
+        txn.set(mirror_ref, mirror_fields, merge=True)
+        txn.set(user_ref, {
+            'credits': remaining_credits,
+            'last_upload_time': firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+        session_id = latest.get('_upload_session_id')
+        if session_id:
+            session_ref = database.collection('digital_font_uploads').document(session_id)
+            txn.set(session_ref, {
+                'status': 'ready',
+                'updated_at': firestore.SERVER_TIMESTAMP,
+                'finalized_at': firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+        return False, remaining_credits
+
+    idempotent, remaining_credits = finish(transaction)
+    result = {
+        'font_id': font_id,
+        'status': 'ready',
+        'harf_sayisi': expected_count,
+        'sections_completed': sections_completed,
+        'idempotent': idempotent,
+    }
+    if remaining_credits is not None:
+        result['remaining_credits'] = remaining_credits
+    return result
+
+
+def _legacy_digital_upload(database, owner_id, data):
+    font_name = validate_font_name(data.get('font_name'))
+    repetition = validate_variation_count(data.get('variation_count', 3))
+    chars = data.get('chars')
+    if not isinstance(chars, dict) or not chars:
+        raise DigitalUploadAPIError('chars, en az bir harf içeren nesne olmalıdır.', 400)
+    if len(chars) > len(variation_key_set(repetition)):
+        raise DigitalUploadAPIError('Beklenenden fazla harf gönderildi.', 400)
+
+    client_upload_id = data.get('client_upload_id') or f'legacy-{uuid.uuid4().hex}'
+    started = _start_digital_upload(
+        database, owner_id, font_name, repetition, client_upload_id
+    )
+    font_id = started['font_id']
+    items = list(chars.items())
+    for offset in range(0, len(items), MAX_DRAWN_FONT_CHARS_PER_APPEND):
+        _append_digital_glyphs(
+            database,
+            owner_id,
+            font_id,
+            dict(items[offset : offset + MAX_DRAWN_FONT_CHARS_PER_APPEND]),
+        )
+    result = _finalize_digital_upload(database, owner_id, font_id)
+    result['legacy'] = True
+    return result
+
+
 @app.route('/api/upload_drawn_font', methods=['POST'])
+@login_required
 def upload_drawn_font():
     try:
-        data = request.get_json()
-        u_id = data.get('user_id')
-        f_name = validate_font_name(data.get('font_name'))
-        repetition = int(data.get('variation_count', 3))
-        chars = data.get('chars', {})
-        
-        allowed, msg = check_and_deduct_credit(u_id)
-        if not allowed: return jsonify({'success': False, 'message': msg}), 402
+        # This JSON endpoint never trusts body.user_id.  Unlike legacy form
+        # routes, it requires request.uid to come from a verified Firebase token.
+        if not getattr(request, 'auth_verified', False):
+            return jsonify({
+                'success': False,
+                'message': 'Dijital font yüklemek için doğrulanmış oturum gereklidir.',
+            }), 401
 
-        if db:
-            fid = f"{u_id}_{f_name.replace(' ', '_')}"
-            d_ref = db.collection('fonts').document(fid)
-            u_ref = db.collection('users').document(u_id).collection('fonts').document(fid)
-            
-            payload = {
-                'font_name': f_name, 
-                'font_id': fid, 
-                'owner_id': u_id, 
-                'user_id': u_id, 
-                'repetition': repetition, 
-                'created_at': firestore.SERVER_TIMESTAMP, 
-                'harf_sayisi': len(chars), 
-                'sections_completed': [1,2,3,4,5,6],
-                'is_public': True
-            }
-            d_ref.set(payload)
-            u_ref.set(payload)
-            
-            batch = db.batch()
-            batch_count = 0
-            for char_key, b64_char in chars.items():
-                batch.set(d_ref.collection('chars').document(char_key), {'data': b64_char})
-                batch_count += 1
-                if batch_count >= 400:
-                    batch.commit()
-                    batch = db.batch()
-                    batch_count = 0
-            if batch_count > 0:
-                batch.commit()
-                
-        return jsonify({'success': True, 'font_id': fid})
+        if (
+            request.content_length is not None
+            and request.content_length > MAX_DRAWN_FONT_REQUEST_BYTES
+        ):
+            return jsonify({
+                'success': False,
+                'message': 'İstek gövdesi çok büyük (en fazla 20 MB).',
+            }), 413
+        raw_body = request.get_data(cache=True)
+        if len(raw_body) > MAX_DRAWN_FONT_REQUEST_BYTES:
+            return jsonify({
+                'success': False,
+                'message': 'İstek gövdesi çok büyük (en fazla 20 MB).',
+            }), 413
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise DigitalUploadAPIError('Geçerli bir JSON nesnesi gönderilmelidir.', 400)
+
+        database = init_firebase()
+        if database is None:
+            return jsonify({
+                'success': False,
+                'message': 'Veritabanı şu anda kullanılamıyor. Lütfen tekrar deneyin.',
+            }), 503
+
+        mode = data.get('mode')
+        if mode is None:
+            result = _legacy_digital_upload(database, request.uid, data)
+            status_code = 200
+        elif mode == 'start':
+            font_name = validate_font_name(data.get('font_name'))
+            repetition = validate_variation_count(data.get('variation_count', 3))
+            result = _start_digital_upload(
+                database,
+                request.uid,
+                font_name,
+                repetition,
+                data.get('client_upload_id'),
+            )
+            status_code = 200 if result.get('idempotent') else 201
+        elif mode == 'append':
+            result = _append_digital_glyphs(
+                database, request.uid, data.get('font_id'), data.get('chars')
+            )
+            status_code = 200
+        elif mode == 'finalize':
+            result = _finalize_digital_upload(
+                database, request.uid, data.get('font_id')
+            )
+            status_code = 200
+        else:
+            raise DigitalUploadAPIError(
+                'mode; start, append veya finalize olmalıdır.', 400
+            )
+
+        return jsonify({'success': True, **result}), status_code
+    except DigitalUploadAPIError as exc:
+        return jsonify({
+            'success': False,
+            'message': exc.message,
+            **exc.details,
+        }), exc.status_code
+    except GlyphTooLargeError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 413
+    except (GlyphValidationError, ValueError) as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
     except Exception as e:
         logger.error(f"System error in upload_drawn_font: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'İşlem başarısız.'}), 500
+        return jsonify({
+            'success': False,
+            'message': 'Dijital font yükleme servisi şu anda kullanılamıyor.',
+        }), 503
 
 
 @app.route('/api/update_char', methods=['POST'])
@@ -824,12 +1188,16 @@ def list_fonts():
         public_query = database.collection('fonts').where('is_public', '==', True).stream()
         for doc in public_query:
             d = doc.to_dict()
+            if d.get('status') not in (None, 'ready'):
+                continue
             fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'public', 'owner_id': d.get('owner_id')})
             
         if user_id:
             private_query = database.collection('fonts').where('owner_id', '==', user_id).where('is_public', '==', False).stream()
             for doc in private_query:
                 d = doc.to_dict()
+                if d.get('status') not in (None, 'ready'):
+                    continue
                 fonts.append({'id': doc.id, 'name': d.get('font_name'), 'char_count': d.get('harf_sayisi'), 'type': 'private', 'owner_id': user_id})
         return jsonify({"success": True, "fonts": fonts})
     except Exception as e:
@@ -1009,6 +1377,153 @@ def download():
     except Exception as e:
         logger.error(f"System error in download: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI ÖDEV / BELGE OLUŞTURMA ENDPOINT'LERİ
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/ai_generate_pdf', methods=['POST'])
+@login_required
+def ai_generate_pdf():
+    """
+    Kullanıcının fontunu kullanarak AI layout JSON veya düz metni PDF'e dönüştürür.
+
+    Body (JSON):
+      - font_id: str
+      - text_content: str           – Yazdırılacak metin
+      - page_settings: dict         – Global ayarlar
+          (paper_type, ink_color, letter_scale, line_spacing, word_spacing,
+           jitter, line_slope, margin_top, margin_left, margin_right, letter_spacing)
+      - per_line_overrides: dict    – {satir_no: {param: deger}} (opsiyonel)
+          Desteklenen: letter_scale, letter_spacing, word_spacing,
+                       line_slope, jitter, ink_color, line_offset_y
+
+    Returns: application/pdf binary
+    """
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({'success': False, 'message': 'JSON verisi eksik.'}), 400
+
+        user_id            = request.uid
+        font_id            = data.get('font_id', '').strip()
+        page_settings      = data.get('page_settings', {})
+        text_content       = data.get('text_content', '').strip()
+        per_line_overrides = data.get('per_line_overrides', {})
+
+        if not font_id:
+            return jsonify({'success': False, 'message': 'font_id zorunludur.'}), 400
+        if not text_content:
+            return jsonify({'success': False, 'message': 'Metin içeriği boş.'}), 400
+        if len(text_content) > 50000:
+            return jsonify({'success': False, 'message': 'Metin çok uzun (max 50.000 karakter).'}), 400
+
+        # Kredi kontrolü
+        allowed, remaining = check_and_deduct_credit(user_id)
+        if not allowed:
+            return jsonify({'success': False, 'message': 'Yetersiz kredi.'}), 402
+
+        # Font verilerini yükle
+        database = init_firebase()
+        font_ref = database.collection('fonts').document(font_id)
+        font_doc = font_ref.get()
+        if not font_doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
+
+        # Font karakterlerini PIL RGBA olarak yükle (core_generator v2 formatı)
+        chars_stream = font_ref.collection('chars').stream()
+        active_harfler = {}
+        for char_doc in chars_stream:
+            char_data = char_doc.to_dict()
+            raw = char_data.get('data')
+            if raw is None:
+                continue
+            try:
+                raw_bytes = raw if isinstance(raw, bytes) else base64.b64decode(raw)
+                pil_img   = PILImage.open(io.BytesIO(raw_bytes)).convert('RGBA')
+                if char_doc.id not in active_harfler:
+                    active_harfler[char_doc.id] = []
+                active_harfler[char_doc.id].append(pil_img)
+            except Exception as cerr:
+                logger.warning(f'Karakter yüklenemedi {char_doc.id}: {cerr}')
+                continue
+
+        if not active_harfler:
+            return jsonify({'success': False, 'message': 'Font karakterleri yüklenemedi.'}), 500
+
+        # Ink rengi
+        ink_color = page_settings.get('ink_color', '#1b1b1d')
+        try:
+            raw_c = ink_color.lstrip('#')
+            ink_rgb = tuple(int(raw_c[i:i+2], 16) for i in (0, 2, 4))
+        except Exception:
+            ink_rgb = (27, 27, 29)
+
+        config = {
+            'page_width'          : 2480,
+            'page_height'         : 3508,
+            'margin_top'          : int(page_settings.get('margin_top', 220)),
+            'margin_left'         : int(page_settings.get('margin_left', 180)),
+            'margin_right'        : int(page_settings.get('margin_right', 180)),
+            'target_letter_height': int(page_settings.get('letter_scale', 135)),
+            'line_spacing'        : int(page_settings.get('line_spacing', 215)),
+            'word_spacing'        : int(page_settings.get('word_spacing', 55)),
+            'letter_spacing'      : int(page_settings.get('letter_spacing', 0)),
+            'murekkep_rengi'      : ink_rgb,
+            'opacity'             : 0.95,
+            'jitter'              : int(page_settings.get('jitter', 4)),
+            'paper_type'          : page_settings.get('paper_type', 'cizgili'),
+            'line_slope'          : float(page_settings.get('line_slope', 3)),
+        }
+
+        # per_line_overrides: string key → int key
+        plo = {int(k): v for k, v in per_line_overrides.items()} if per_line_overrides else {}
+
+        sayfalar = core_generator.metni_sayfaya_yaz(text_content, active_harfler, config, per_line_overrides=plo)
+        pdf_buffer = core_generator.sayfalari_pdf_olustur(sayfalar)
+
+        return send_file(
+            pdf_buffer,
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name='fontify_belge.pdf'
+        )
+
+    except Exception as e:
+        logger.error(f'ai_generate_pdf error: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': f'PDF oluşturulamadı: {str(e)}'}), 500
+
+
+@app.route('/api/font_chars_meta', methods=['GET'])
+@login_required
+def font_chars_meta():
+    """Bir fontun mevcut karakter listesini döndürür (AI prompt için özet)."""
+    try:
+        font_id = request.args.get('font_id', '').strip()
+        if not font_id:
+            return jsonify({'success': False, 'message': 'font_id zorunludur.'}), 400
+
+        database = init_firebase()
+        font_ref = database.collection('fonts').document(font_id)
+        font_doc = font_ref.get()
+        if not font_doc.exists:
+            return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
+
+        font_data = font_doc.to_dict()
+        chars_stream = font_ref.collection('chars').stream()
+        char_list = [c.id for c in chars_stream]
+
+        return jsonify({
+            'success': True,
+            'font_name': font_data.get('font_name', 'Bilinmiyor'),
+            'char_count': len(char_list),
+            'repetition': font_data.get('repetition', 1),
+            'chars': char_list[:50]
+        })
+    except Exception as e:
+        logger.error(f'font_chars_meta error: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
