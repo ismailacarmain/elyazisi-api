@@ -317,10 +317,13 @@ def verified_login_required(f):
     """Require a valid Firebase Bearer token; never trust a client supplied UID."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        if request.method == 'OPTIONS':
+            return '', 204
+            
         authorization = request.headers.get('Authorization', '').strip()
         parts = authorization.split()
         if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
-            return jsonify({'success': False, 'message': 'GÃ¼venli oturum gerekli.'}), 401
+            return jsonify({'success': False, 'message': 'Güvenli oturum gerekli.'}), 401
         try:
             decoded = auth.verify_id_token(parts[1])
             request.uid = decoded['uid']
@@ -1914,6 +1917,363 @@ def ai_generate_pdf():
         return _send_layout_pdf(layout, harfler, secondary_harfler=secondary_harfler)
     except Exception as exc:
         return _ai_error_response(exc)
+
+# ─── Fontify Copilot Engine endpoints ────────────────────────────────────────
+
+import ai_copilot as _cop
+from flask import Response, stream_with_context
+
+_doc_store = {}
+_doc_store_lock = threading.Lock()
+
+MAX_COPILOT_HISTORY = 30
+MAX_COPILOT_DOCS = 500
+
+def _get_copilot_doc(document_id: str, user_id: str) -> dict:
+    with _doc_store_lock:
+        doc = _doc_store.get(document_id)
+    if doc is None:
+        raise _cop.CopilotError("Belge bulunamadı. Önce kaydedin.", 404)
+    if doc.get("user_id") != user_id:
+        raise _cop.CopilotError("Bu belgeye erişim yetkiniz yok.", 403)
+    return doc
+
+def _copilot_error_response(exc: Exception):
+    if isinstance(exc, _cop.CopilotError):
+        return jsonify({"success": False, "message": str(exc)}), exc.status_code
+    logger.error("Copilot error: %s", type(exc).__name__, exc_info=True)
+    return jsonify({"success": False, "message": "Copilot işlemi tamamlanamadı."}), 500
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+@app.route("/api/ai/documents", methods=["POST", "OPTIONS"])
+@verified_login_required
+def copilot_save_document():
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        data = request.get_json(silent=True) or {}
+        layout = data.get("layout")
+        blocks = data.get("blocks")
+        if not isinstance(layout, dict) or not isinstance(blocks, list):
+            raise _cop.CopilotError("layout ve blocks gerekli.")
+        if len(json.dumps(layout)) > 2_000_000:
+            raise _cop.CopilotError("Layout çok büyük.")
+        if len(blocks) > ai_document.MAX_BLOCKS:
+            raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
+
+        document_id = str(uuid.uuid4())
+        version = int(layout.get("version", 1))
+        with _doc_store_lock:
+            if len(_doc_store) >= MAX_COPILOT_DOCS:
+                oldest = min(_doc_store.keys(), key=lambda k: _doc_store[k].get("created_at", 0))
+                del _doc_store[oldest]
+            _doc_store[document_id] = {
+                "user_id": request.uid,
+                "layout": layout,
+                "blocks": blocks,
+                "version": version,
+                "history": [],
+                "redo_stack": [],
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+        return jsonify({"success": True, "document_id": document_id, "version": version})
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/<document_id>", methods=["GET", "OPTIONS"])
+@verified_login_required
+def copilot_get_document(document_id: str):
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        doc = _get_copilot_doc(document_id, request.uid)
+        page_hashes = {
+            page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+            for i, page in enumerate(doc["layout"].get("pages", []))
+        }
+        return jsonify({
+            "success": True,
+            "version": doc["version"],
+            "layout": doc["layout"],
+            "blocks": doc["blocks"],
+            "page_hashes": page_hashes,
+            "can_undo": len(doc["history"]) > 0,
+            "can_redo": len(doc["redo_stack"]) > 0,
+        })
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/<document_id>/edits", methods=["POST", "OPTIONS"])
+@verified_login_required
+def copilot_edit_document(document_id: str):
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        data = request.get_json(silent=True) or {}
+        instruction = str(data.get("instruction", "")).strip()
+        if len(instruction) > _cop.MAX_INSTRUCTION_CHARS:
+            raise _cop.CopilotError(f"Talimat en fazla {_cop.MAX_INSTRUCTION_CHARS} karakter.")
+        if not instruction:
+            raise _cop.CopilotError("Talimat boş olamaz.")
+
+        selection = data.get("selection") if isinstance(data.get("selection"), dict) else None
+        chat_history = data.get("chat_history") if isinstance(data.get("chat_history"), list) else []
+        idempotency_key = data.get("idempotency_key")
+        client_version = data.get("document_version")
+        use_streaming = request.headers.get("Accept", "").find("text/event-stream") >= 0
+
+        doc = _get_copilot_doc(document_id, request.uid)
+
+        if client_version is not None and int(client_version) != doc["version"]:
+            raise _cop.VersionConflictError()
+
+        if idempotency_key:
+            for h in doc["history"]:
+                if h.get("idempotency_key") == idempotency_key:
+                    return jsonify({"success": True, "cached": True,
+                                    "version": doc["version"],
+                                    "assistant_message": h.get("instruction", "")})
+
+        secondary_available = bool(doc["layout"].get("settings", {}).get("multi_author"))
+        model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
+
+        def _run_edit():
+            return _cop.process_copilot_edit(
+                api_key=_gemini_api_key(),
+                model=model,
+                instruction=instruction,
+                layout=doc["layout"],
+                blocks=doc["blocks"],
+                selection=selection,
+                chat_history=chat_history[-10:],
+                secondary_font_available=secondary_available,
+                current_version=doc["version"],
+            )
+
+        if use_streaming:
+            def generate():
+                yield _sse_event("status", {"message": "İstek yorumlanıyor…"})
+                try:
+                    result = _run_edit()
+                    if result["needs_clarification"]:
+                        yield _sse_event("clarification", {
+                            "question": result["clarification_question"],
+                            "options": result["clarification_options"],
+                            "message": result["assistant_message"],
+                        })
+                        yield _sse_event("complete", {"message": result["assistant_message"]})
+                        return
+
+                    yield _sse_event("plan", {"message": result["assistant_message"]})
+                    yield _sse_event("patch", {"operations": result["operations"]})
+
+                    new_version = result["new_layout"]["version"]
+                    with _doc_store_lock:
+                        doc["layout"] = result["new_layout"]
+                        doc["blocks"] = result["new_blocks"]
+                        doc["version"] = new_version
+                        doc["updated_at"] = time.time()
+                        record = _cop.make_operation_record(
+                            base_version=doc["version"] - 1,
+                            new_version=new_version,
+                            instruction=instruction,
+                            operations=result["operations"],
+                            inverse_operations=result["inverse_operations"],
+                            user_id=request.uid,
+                            idempotency_key=idempotency_key,
+                        )
+                        doc["history"] = (doc["history"] + [record])[-MAX_COPILOT_HISTORY:]
+                        doc["redo_stack"] = []
+
+                    page_hashes = {
+                        page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+                        for i, page in enumerate(result["new_layout"].get("pages", []))
+                    }
+                    affected = list(page_hashes.keys()) if result["reflow_needed"] else []
+                    yield _sse_event("layout", {
+                        "version": new_version,
+                        "affected_pages": affected,
+                        "page_hashes": page_hashes,
+                        "reflow_needed": result["reflow_needed"],
+                        "new_layout": result["new_layout"],
+                        "new_blocks": result["new_blocks"],
+                        "can_undo": True,
+                        "can_redo": False,
+                    })
+                    yield _sse_event("complete", {"message": result["assistant_message"]})
+
+                except _cop.CopilotError as e:
+                    yield _sse_event("error", {"message": str(e), "status": e.status_code})
+                except Exception as e:
+                    logger.error("Copilot stream error: %s", type(e).__name__, exc_info=True)
+                    yield _sse_event("error", {"message": "Copilot işlemi tamamlanamadı."})
+
+            return Response(
+                stream_with_context(generate()),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "Connection": "keep-alive",
+                },
+            )
+        else:
+            result = _run_edit()
+            if result["needs_clarification"]:
+                return jsonify({
+                    "success": True,
+                    "needs_clarification": True,
+                    "clarification_question": result["clarification_question"],
+                    "clarification_options": result["clarification_options"],
+                    "assistant_message": result["assistant_message"],
+                    "version": doc["version"],
+                })
+
+            new_version = result["new_layout"]["version"]
+            with _doc_store_lock:
+                doc["layout"] = result["new_layout"]
+                doc["blocks"] = result["new_blocks"]
+                doc["version"] = new_version
+                doc["updated_at"] = time.time()
+                record = _cop.make_operation_record(
+                    base_version=new_version - 1,
+                    new_version=new_version,
+                    instruction=instruction,
+                    operations=result["operations"],
+                    inverse_operations=result["inverse_operations"],
+                    user_id=request.uid,
+                    idempotency_key=idempotency_key,
+                )
+                doc["history"] = (doc["history"] + [record])[-MAX_COPILOT_HISTORY:]
+                doc["redo_stack"] = []
+
+            page_hashes = {
+                page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+                for i, page in enumerate(result["new_layout"].get("pages", []))
+            }
+            return jsonify({
+                "success": True,
+                "needs_clarification": False,
+                "assistant_message": result["assistant_message"],
+                "operations": result["operations"],
+                "version": new_version,
+                "page_hashes": page_hashes,
+                "affected_pages": list(page_hashes.keys()) if result["reflow_needed"] else [],
+                "reflow_needed": result["reflow_needed"],
+                "new_layout": result["new_layout"],
+                "new_blocks": result["new_blocks"],
+                "can_undo": True,
+                "can_redo": False,
+            })
+
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/<document_id>/undo", methods=["POST", "OPTIONS"])
+@verified_login_required
+def copilot_undo(document_id: str):
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        doc = _get_copilot_doc(document_id, request.uid)
+        if not doc["history"]:
+            raise _cop.CopilotError("Geri alınacak işlem yok.", 400)
+
+        record = doc["history"][-1]
+        inverse_ops = record.get("inverse_operations", [])
+        if not inverse_ops:
+            raise _cop.CopilotError("Bu işlem geri alınamıyor.", 400)
+
+        clean_inv = _cop.validate_and_sanitize_operations(
+            inverse_ops, doc["layout"], doc["blocks"],
+            secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+        )
+        new_layout, new_blocks, redo_inv = _cop.apply_operations(
+            clean_inv, doc["layout"], doc["blocks"]
+        )
+        new_version = doc["version"] + 1
+        new_layout["version"] = new_version
+
+        with _doc_store_lock:
+            doc["redo_stack"] = (doc["redo_stack"] + [{
+                **record,
+                "inverse_operations": redo_inv,
+            }])[-MAX_COPILOT_HISTORY:]
+            doc["history"] = doc["history"][:-1]
+            doc["layout"] = new_layout
+            doc["blocks"] = new_blocks
+            doc["version"] = new_version
+            doc["updated_at"] = time.time()
+
+        page_hashes = {
+            page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+            for i, page in enumerate(new_layout.get("pages", []))
+        }
+        return jsonify({
+            "success": True,
+            "version": new_version,
+            "new_layout": new_layout,
+            "new_blocks": new_blocks,
+            "page_hashes": page_hashes,
+            "can_undo": len(doc["history"]) > 0,
+            "can_redo": True,
+            "message": f"'{record.get('instruction', '...')}' geri alındı.",
+        })
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/<document_id>/redo", methods=["POST", "OPTIONS"])
+@verified_login_required
+def copilot_redo(document_id: str):
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        doc = _get_copilot_doc(document_id, request.uid)
+        if not doc["redo_stack"]:
+            raise _cop.CopilotError("İleri alınacak işlem yok.", 400)
+
+        record = doc["redo_stack"][-1]
+        redo_ops = record.get("operations", [])
+        if not redo_ops:
+            raise _cop.CopilotError("Bu işlem ileri alınamıyor.", 400)
+
+        clean_ops = _cop.validate_and_sanitize_operations(
+            redo_ops, doc["layout"], doc["blocks"],
+            secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+        )
+        new_layout, new_blocks, inv = _cop.apply_operations(
+            clean_ops, doc["layout"], doc["blocks"]
+        )
+        new_version = doc["version"] + 1
+        new_layout["version"] = new_version
+
+        with _doc_store_lock:
+            doc["history"] = (doc["history"] + [{**record, "inverse_operations": inv}])[-MAX_COPILOT_HISTORY:]
+            doc["redo_stack"] = doc["redo_stack"][:-1]
+            doc["layout"] = new_layout
+            doc["blocks"] = new_blocks
+            doc["version"] = new_version
+            doc["updated_at"] = time.time()
+
+        page_hashes = {
+            page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+            for i, page in enumerate(new_layout.get("pages", []))
+        }
+        return jsonify({
+            "success": True,
+            "version": new_version,
+            "new_layout": new_layout,
+            "new_blocks": new_blocks,
+            "page_hashes": page_hashes,
+            "can_undo": True,
+            "can_redo": len(doc["redo_stack"]) > 0,
+            "message": f"'{record.get('instruction', '...')}' yeniden uygulandı.",
+        })
+    except Exception as exc:
+        return _copilot_error_response(exc)
 
 
 if __name__ == '__main__':
