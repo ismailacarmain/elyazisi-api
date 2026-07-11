@@ -1735,16 +1735,16 @@ def ai_status():
     return jsonify({
         'success': True,
         'server_key_configured': bool(os.environ.get('GEMINI_API_KEY', '').strip()),
-        'default_model': 'gemini-3.1-pro-preview',
+        'default_model': 'gemini-1.5-flash',
     })
 
 
-@app.route('/api/ai/test', methods=['POST'])
+@app.route('/api/ai/test', methods=['POST', 'OPTIONS'])
 @verified_login_required
 def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
-        model = data.get('model', 'gemini-3.1-pro-preview')
+        model = data.get('model', 'gemini-1.5-flash')
         ai_document.test_gemini_connection(_gemini_api_key(), model)
         return jsonify({'success': True, 'model': ai_document.validate_model(model)})
     except Exception as exc:
@@ -1785,7 +1785,7 @@ def ai_document_plan():
         elif source == 'ai':
             result = ai_document.create_ai_layout(
                 api_key=_gemini_api_key(),
-                model=data.get('model', 'gemini-3.1-pro-preview'),
+                model=data.get('model', 'gemini-1.5-flash'),
                 template=str(data.get('template', 'odev')),
                 topic=data.get('topic', ''),
                 instructions=data.get('instructions', ''),
