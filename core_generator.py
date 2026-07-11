@@ -1,36 +1,36 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-core_generator.py — Fontify el yazısı render motoru v3.0
-═══════════════════════════════════════════════════════════
-İKİ RENDER MODU:
+core_generator.py â€” Fontify el yazÄ±sÄ± render motoru v3.0
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+Ä°KÄ° RENDER MODU:
 
 1. metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None)
-   Klasik akış render — per-satır parametre override desteğiyle.
+   Klasik akÄ±ÅŸ render â€” per-satÄ±r parametre override desteÄŸiyle.
 
 2. metni_koordinatli_yaz(layout, harfler)
-   Koordinat tabanlı render — AI'ın milimetrik hassasiyetle verdiği
-   satır bazlı layout JSON'ını birebir uygular.
-   Layout JSON şeması:
+   Koordinat tabanlÄ± render â€” AI'Ä±n milimetrik hassasiyetle verdiÄŸi
+   satÄ±r bazlÄ± layout JSON'Ä±nÄ± birebir uygular.
+   Layout JSON ÅŸemasÄ±:
    {
      "pages": [
        {
          "paper_type": "cizgili",       # zorunlu
          "margin_top":  220,             # zorunlu
-         "margin_left": 180,             # yalnızca çizgi çizimi için
-         "line_spacing": 215,            # yalnızca çizgi çizimi için
+         "margin_left": 180,             # yalnÄ±zca Ã§izgi Ã§izimi iÃ§in
+         "line_spacing": 215,            # yalnÄ±zca Ã§izgi Ã§izimi iÃ§in
          "lines": [
            {
-             "text":           "Osmanlı İmparatorluğu",
+             "text":           "OsmanlÄ± Ä°mparatorluÄŸu",
              "baseline_y":     220,       # EXACT harf baseline Y (px)
-             "start_x":        180,       # ilk harfin sol kenarı X (px)
-             "letter_scale":   135,       # hedef harf yüksekliği (px)
-             "letter_spacing": 3,         # harfler arası ek px (+ sağa açar)
-             "word_spacing":   55,        # kelime arası ek px
-             "line_slope":     3.0,       # eğim yoğunluğu
+             "start_x":        180,       # ilk harfin sol kenarÄ± X (px)
+             "letter_scale":   135,       # hedef harf yÃ¼ksekliÄŸi (px)
+             "letter_spacing": 3,         # harfler arasÄ± ek px (+ saÄŸa aÃ§ar)
+             "word_spacing":   55,        # kelime arasÄ± ek px
+             "line_slope":     3.0,       # eÄŸim yoÄŸunluÄŸu
              "jitter":         4,         # titreme
-             "ink_color":      "#1b1b1d", # mürekkep rengi
-             "line_offset_y":  0          # tüm satırı Y ekseninde kaydır
+             "ink_color":      "#1b1b1d", # mÃ¼rekkep rengi
+             "line_offset_y":  0          # tÃ¼m satÄ±rÄ± Y ekseninde kaydÄ±r
            }
          ]
        }
@@ -38,8 +38,8 @@ core_generator.py — Fontify el yazısı render motoru v3.0
    }
 
 3. get_font_metrics(harfler, letter_scale)
-   Verilen ölçekte her karakterin GERÇEK ortalama genişliğini döndürür.
-   → AI bu tabloyu kullanarak satır genişliğini ÖNCEDEN hesaplayabilir.
+   Verilen Ã¶lÃ§ekte her karakterin GERÃ‡EK ortalama geniÅŸliÄŸini dÃ¶ndÃ¼rÃ¼r.
+   â†’ AI bu tabloyu kullanarak satÄ±r geniÅŸliÄŸini Ã–NCEDEN hesaplayabilir.
 """
 
 from PIL import Image, ImageDraw
@@ -56,12 +56,12 @@ except ImportError:
     _HAS_CV2 = False
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# YARDIMCI FONKSİYONLAR
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# YARDIMCI FONKSÄ°YONLAR
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _hex_to_rgb(hex_color, default=(27, 27, 29)):
-    """'#rrggbb' veya '#rgb'  →  (r, g, b)"""
+    """'#rrggbb' veya '#rgb'  â†’  (r, g, b)"""
     try:
         h = hex_color.lstrip('#')
         if len(h) == 3:
@@ -79,7 +79,7 @@ def karakter_anahtarini_bul(karakter):
 
 
 def harf_resimlerini_yukle(klasor_yolu="static/harfler"):
-    """Klasör tabanlı yükleme (eski uyumluluk)."""
+    """KlasÃ¶r tabanlÄ± yÃ¼kleme (eski uyumluluk)."""
     harfler = {}
     if not os.path.exists(klasor_yolu):
         return harfler
@@ -99,7 +99,7 @@ def harf_resimlerini_yukle(klasor_yolu="static/harfler"):
 
 
 def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95, kalinlik=0, rng=None):
-    """Rastgele varyasyon seç, renklendirip döndür."""
+    """Rastgele varyasyon seÃ§, renklendirip dÃ¶ndÃ¼r."""
     anahtar = karakter_anahtarini_bul(karakter)
     if not (anahtar and anahtar in harfler):
         return None
@@ -178,15 +178,15 @@ def yeni_sayfa_olustur(pw, ph, print_bg=False, bg_path=None):
     return Image.new("RGBA", (pw, ph), (255, 255, 255, 255))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FONT METRİKLERİ — AI'ın tahmin yapmasını sağlar
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# FONT METRÄ°KLERÄ° â€” AI'Ä±n tahmin yapmasÄ±nÄ± saÄŸlar
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def get_font_metrics(harfler, letter_scale=135):
     """
-    Verilen ölçekte her karakterin GERÇEK ortalama genişliğini döndürür.
+    Verilen Ã¶lÃ§ekte her karakterin GERÃ‡EK ortalama geniÅŸliÄŸini dÃ¶ndÃ¼rÃ¼r.
 
-    Döndürür:
+    DÃ¶ndÃ¼rÃ¼r:
     {
       "kucuk_a": {"avg_w": 42, "avg_h": 48, "variants": 3},
       "buyuk_A": {"avg_w": 58, "avg_h": 68, "variants": 1},
@@ -240,16 +240,16 @@ def get_font_metrics(harfler, letter_scale=135):
 
 def estimate_line_width(text, metrics, letter_spacing=0, word_spacing=55):
     """
-    Bir metin satırının tahmini piksel genişliğini hesaplar.
+    Bir metin satÄ±rÄ±nÄ±n tahmini piksel geniÅŸliÄŸini hesaplar.
 
     Parametreler
-    ────────────
-    text          : str   – Ölçülecek metin
-    metrics       : dict  – get_font_metrics() çıktısı
-    letter_spacing: int   – Harfler arası ek piksel
-    word_spacing  : int   – Kelimeler arası piksel
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    text          : str   â€“ Ã–lÃ§Ã¼lecek metin
+    metrics       : dict  â€“ get_font_metrics() Ã§Ä±ktÄ±sÄ±
+    letter_spacing: int   â€“ Harfler arasÄ± ek piksel
+    word_spacing  : int   â€“ Kelimeler arasÄ± piksel
 
-    Döndürür: (estimated_px: int, char_count: int, word_count: int)
+    DÃ¶ndÃ¼rÃ¼r: (estimated_px: int, char_count: int, word_count: int)
     """
     from character_manifest import base_key_for_character
 
@@ -273,13 +273,13 @@ def estimate_line_width(text, metrics, letter_spacing=0, word_spacing=55):
     return total, len(text.replace(' ', '')), word_count
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# KLASİK RENDER — per_line_overrides desteği
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# KLASÄ°K RENDER â€” per_line_overrides desteÄŸi
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
     """
-    Klasik satır-akış render.
+    Klasik satÄ±r-akÄ±ÅŸ render.
 
     per_line_overrides: {int_idx: {param: val}}
       Desteklenen: letter_scale, letter_spacing, word_spacing,
@@ -295,7 +295,7 @@ def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
     kalinlik   = config.get('kalinlik', 0)
     global_ls  = config.get('letter_spacing', 0)
 
-    sayfalar = []
+    
 
     def make_page():
         p = yeni_sayfa_olustur(
@@ -341,7 +341,7 @@ def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
         lslope, loffset = line_slope_offset(cur_line)
         y_base = config['margin_top'] + cur_line * config['line_spacing'] - config['target_letter_height']
         if y_base + config['target_letter_height'] > max_y:
-            sayfalar.append(sayfa)
+            yield sayfa
             sayfa = make_page()
             cur_line = 0
             lslope, loffset = line_slope_offset(cur_line)
@@ -386,26 +386,26 @@ def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
 
         advance()
 
-    sayfalar.append(sayfa)
-    return sayfalar
+    yield sayfa
+    
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# KOORDİNAT TABANLI RENDER — milimetrik hassasiyet
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# KOORDÄ°NAT TABANLI RENDER â€” milimetrik hassasiyet
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def metni_koordinatli_yaz(layout, harfler):
     """
-    AI'ın belirlediği koordinat tabanlı layout JSON'ını birebir uygular.
-    Her satır için kesin baseline_y, start_x ve parametre seti.
+    AI'Ä±n belirlediÄŸi koordinat tabanlÄ± layout JSON'Ä±nÄ± birebir uygular.
+    Her satÄ±r iÃ§in kesin baseline_y, start_x ve parametre seti.
 
-    layout: dict  →  {"pages": [ {"paper_type": ..., "lines": [...]} ]}
+    layout: dict  â†’  {"pages": [ {"paper_type": ..., "lines": [...]} ]}
 
-    Döndürür: list[PIL.Image]  (her eleman 1 A4 sayfa, RGBA)
+    DÃ¶ndÃ¼rÃ¼r: list[PIL.Image]  (her eleman 1 A4 sayfa, RGBA)
     """
     PAGE_W = 2480
     PAGE_H = 3508
-    sayfalar = []
+    
 
     for page_data in layout.get('pages', []):
         pt  = page_data.get('paper_type', 'cizgili')
@@ -441,7 +441,7 @@ def metni_koordinatli_yaz(layout, harfler):
             ink_hex     = line_data.get('ink_color', '#1b1b1d')
             ink         = _hex_to_rgb(ink_hex)
 
-            # Aynı layout her önizlemede birebir aynı varyasyon ve jitter'ı üretir.
+            # AynÄ± layout her Ã¶nizlemede birebir aynÄ± varyasyon ve jitter'Ä± Ã¼retir.
             line_rng = random.Random(int(line_data.get('seed', 10_000)))
             slope  = (line_rng.random() - 0.5) * (slope_f * 0.0005)
             loff   = (line_rng.random() - 0.5) * (slope_f * 1.5)
@@ -460,22 +460,22 @@ def metni_koordinatli_yaz(layout, harfler):
                     if not himg:
                         continue
 
-                    # Gürültü: letter_scale ±%1*jitter
+                    # GÃ¼rÃ¼ltÃ¼: letter_scale Â±%1*jitter
                     noise = line_rng.uniform(-0.01 * jitt, 0.01 * jitt)
                     sized = harfi_boyutlandir(himg, max(4, int(lscale * (1 + noise))))
 
-                    # Hafif açı gürültüsü
+                    # Hafif aÃ§Ä± gÃ¼rÃ¼ltÃ¼sÃ¼
                     angle = line_rng.uniform(-0.2 * jitt, 0.2 * jitt)
                     rot   = sized.rotate(angle, resample=Image.BICUBIC, expand=True)
                     gw, gh = rot.size
 
-                    # Taşma koruma — max_x'i geçme
+                    # TaÅŸma koruma â€” max_x'i geÃ§me
                     if x + gw > max_x:
                         break
 
-                    # EXACT Y hesabı:
-                    # baseline_y: harfin ALT hizası (baseline)
-                    # Harfi baseline'a göre hizala
+                    # EXACT Y hesabÄ±:
+                    # baseline_y: harfin ALT hizasÄ± (baseline)
+                    # Harfi baseline'a gÃ¶re hizala
                     slope_dy = (x - start_x) * slope
                     rand_dy  = line_rng.uniform(-jitt, jitt) * 0.4
                     final_y  = int(baseline_y - lscale + slope_dy + loff + rand_dy + off_y)
@@ -486,27 +486,45 @@ def metni_koordinatli_yaz(layout, harfler):
                 if wi < len(words) - 1:
                     x += wspc
 
-        sayfalar.append(sayfa)
+        yield sayfa
 
-    return sayfalar
+    
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PDF ÇIKIŞI
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# PDF Ã‡IKIÅI
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def sayfalari_pdf_olustur(sayfalar):
-    if not sayfalar:
-        return None
+    first_rgb = None
     rgb_list = []
+    
     for s in sayfalar:
+        # Bellek tasarrufu için A4 boyutunu 150 DPI eşdeğerine düşür
+        new_size = (s.width // 2, s.height // 2)
+        try:
+            s.thumbnail(new_size, Image.Resampling.LANCZOS)
+        except AttributeError:
+            s.thumbnail(new_size, Image.LANCZOS)
+            
         rgb = Image.new('RGB', s.size, (255, 255, 255))
         rgb.paste(s, mask=s.split()[3])
-        rgb_list.append(rgb)
+        s.close()
+        
+        if first_rgb is None:
+            first_rgb = rgb
+        else:
+            rgb_list.append(rgb)
+            
+    if not first_rgb:
+        return None
+        
     buf = io.BytesIO()
-    rgb_list[0].save(
-        buf, 'PDF', resolution=300.0,
-        save_all=True, append_images=rgb_list[1:], quality=95
+    first_rgb.save(
+        buf, 'PDF', resolution=150.0,
+        save_all=True, append_images=rgb_list, quality=85
     )
     buf.seek(0)
     return buf
+
+
