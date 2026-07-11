@@ -32,8 +32,8 @@ MAX_PAGES = 20
 MAX_LINES = 400
 
 DEFAULT_MODELS = (
-    "gemini-2.5-pro",
     "gemini-2.5-flash",
+    "gemini-2.5-pro",
     "gemini-1.5-pro",
     "gemini-1.5-flash",
     "gemini-3.1-pro-preview",
@@ -102,7 +102,7 @@ def allowed_models() -> tuple[str, ...]:
 
 
 def validate_model(value: Any) -> str:
-    model = str(value or "gemini-2.5-pro").strip().lower()
+    model = str(value or "gemini-2.5-flash").strip().lower()
     if not MODEL_RE.fullmatch(model) or model not in allowed_models():
         raise AiDocumentError("Bu Gemini modeli sunucuda izinli değil.")
     return model
