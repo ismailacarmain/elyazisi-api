@@ -390,18 +390,18 @@ def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
     
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# KOORDÄ°NAT TABANLI RENDER â€” milimetrik hassasiyet
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ──────────────────────────────────────────────────────────────────────────
+# KOORDİNAT TABANLI RENDER — milimetrik hassasiyet
+# ──────────────────────────────────────────────────────────────────────────
 
 def metni_koordinatli_yaz(layout, harfler):
     """
-    AI'Ä±n belirlediÄŸi koordinat tabanlÄ± layout JSON'Ä±nÄ± birebir uygular.
-    Her satÄ±r iÃ§in kesin baseline_y, start_x ve parametre seti.
+    AI'ın belirlediği koordinat tabanlı layout JSON'ını birebir uygular.
+    Her satır için kesin baseline_y, start_x ve parametre seti.
 
-    layout: dict  â†’  {"pages": [ {"paper_type": ..., "lines": [...]} ]}
+    layout: dict  →  {"pages": [ {"paper_type": ..., "lines": [...]} ]}
 
-    DÃ¶ndÃ¼rÃ¼r: list[PIL.Image]  (her eleman 1 A4 sayfa, RGBA)
+    Döndürür: list[PIL.Image]  (her eleman 1 A4 sayfa, RGBA)
     """
     PAGE_W = 2480
     PAGE_H = 3508
@@ -425,10 +425,15 @@ def metni_koordinatli_yaz(layout, harfler):
         sayfa = yeni_sayfa_olustur(PAGE_W, PAGE_H)
         sayfa = cizgileri_ciz(sayfa, page_cfg)
 
-        opacity  = page_data.get('opacity', 0.95)
-        kalinlik = page_data.get('kalinlik', 0)
+        page_opacity  = page_data.get('opacity', 0.95)
+        page_kalinlik = page_data.get('kalinlik', 0)
 
         for line_data in page_data.get('lines', []):
+            line_rng = random.Random(line_data.get("seed", 42))
+            
+            line_opacity = line_data.get('opacity', page_opacity)
+            line_kalinlik = line_data.get('kalinlik', page_kalinlik)
+
             text        = line_data.get('text', '')
             baseline_y  = int(line_data.get('baseline_y', mt))
             start_x     = int(line_data.get('start_x', ml))
@@ -454,34 +459,77 @@ def metni_koordinatli_yaz(layout, harfler):
                 if not kelime:
                     x += wspc // 2
                     continue
+                
+                is_highlight = False
+                is_underline = False
+                is_strikethrough = False
+
+                if len(kelime) >= 4:
+                    if kelime.startswith('==') and kelime.endswith('=='):
+                        is_highlight = True
+                        kelime = kelime[2:-2]
+                    elif kelime.startswith('__') and kelime.endswith('__'):
+                        is_underline = True
+                        kelime = kelime[2:-2]
+                    elif kelime.startswith('~~') and kelime.endswith('~~'):
+                        is_strikethrough = True
+                        kelime = kelime[2:-2]
+
+                word_start_x = x
 
                 for harf in kelime:
-                    himg = harf_resmini_al(harfler, harf, ink, opacity, kalinlik, rng=line_rng)
+                    himg = harf_resmini_al(harfler, harf, ink, line_opacity, line_kalinlik, rng=line_rng)
                     if not himg:
                         continue
 
-                    # GÃ¼rÃ¼ltÃ¼: letter_scale Â±%1*jitter
+                    # Gürültü: letter_scale ±%1*jitter
                     noise = line_rng.uniform(-0.01 * jitt, 0.01 * jitt)
                     sized = harfi_boyutlandir(himg, max(4, int(lscale * (1 + noise))))
 
-                    # Hafif aÃ§Ä± gÃ¼rÃ¼ltÃ¼sÃ¼
+                    # Hafif açı gürültüsü
                     angle = line_rng.uniform(-0.2 * jitt, 0.2 * jitt)
                     rot   = sized.rotate(angle, resample=Image.BICUBIC, expand=True)
                     gw, gh = rot.size
 
-                    # TaÅŸma koruma â€” max_x'i geÃ§me
+                    # Taşma koruma — max_x'i geçme
                     if x + gw > max_x:
                         break
 
-                    # EXACT Y hesabÄ±:
-                    # baseline_y: harfin ALT hizasÄ± (baseline)
-                    # Harfi baseline'a gÃ¶re hizala
+                    # EXACT Y hesabı:
                     slope_dy = (x - start_x) * slope
                     rand_dy  = line_rng.uniform(-jitt, jitt) * 0.4
                     final_y  = int(baseline_y - lscale + slope_dy + loff + rand_dy + off_y)
 
                     sayfa.paste(rot, (x, final_y), rot)
                     x += gw + lspc + line_rng.randint(0, 3)
+
+                word_end_x = x
+                
+                if is_highlight:
+                    try:
+                        from PIL import ImageDraw
+                        draw = ImageDraw.Draw(sayfa, "RGBA")
+                        draw.rectangle([word_start_x, baseline_y - int(lscale * 0.9), word_end_x, baseline_y + int(lscale * 0.15)], fill=(255, 255, 0, 80))
+                    except:
+                        pass
+                
+                if is_underline or is_strikethrough:
+                    try:
+                        from PIL import ImageDraw
+                        draw = ImageDraw.Draw(sayfa, "RGBA")
+                        line_y = baseline_y + int(lscale * 0.1) if is_underline else baseline_y - int(lscale * 0.45)
+                        color = (220, 20, 20, int(line_opacity * 255)) if is_underline else (ink[0], ink[1], ink[2], int(line_opacity * 255))
+                        
+                        curr_x = word_start_x
+                        curr_y = line_y
+                        while curr_x < word_end_x:
+                            next_x = min(curr_x + line_rng.randint(8, 20), word_end_x)
+                            next_y = line_y + line_rng.randint(-3, 3)
+                            draw.line([(curr_x, curr_y), (next_x, next_y)], fill=color, width=max(2, int(line_kalinlik) + 2))
+                            curr_x = next_x
+                            curr_y = next_y
+                    except:
+                        pass
 
                 if wi < len(words) - 1:
                     x += wspc

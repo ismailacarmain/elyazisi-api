@@ -357,6 +357,20 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
 
         block_type = block["type"]
         style = _style_for_block(block_type, settings)
+        
+        # Override with block-specific settings if provided by AI
+        if "align" in block:
+            style["align"] = str(block["align"])
+        if "color" in block:
+            style["ink_color"] = str(block["color"])
+        
+        is_margin_note = block.get("is_margin_note", False)
+        if is_margin_note:
+            style["letter_scale"] = int(style["letter_scale"] * 0.7)
+            style["jitter"] += 3
+        elif "scale_multiplier" in block:
+            style["letter_scale"] = int(style["letter_scale"] * float(block["scale_multiplier"]))
+            
         scale = style["letter_scale"]
         metrics = _metrics_for_scale(harfler, scale, metrics_cache)
         prefix = "- " if block_type == "list_item" else ""
@@ -377,8 +391,13 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
                     warnings.append(f"'{text[:30]}' satÄ±rÄ± gÃ¼venli geniÅŸliÄŸe sÄ±ÄŸdÄ±rÄ±ldÄ±.")
                     width = content_width
                 start_x = settings["margin_left"]
-                if settings["horizontal_align"] == "center" or style["align"] == "center":
+                if is_margin_note:
+                    import random
+                    start_x = PAGE_WIDTH_PX - settings["margin_right"] - 150 + random.randint(0, 50)
+                elif settings["horizontal_align"] == "center" or style["align"] == "center":
                     start_x += max(0, (content_width - width) // 2)
+                elif settings["horizontal_align"] == "right" or style["align"] == "right":
+                    start_x += max(0, content_width - width)
                 line_counter += 1
                 if line_counter > MAX_LINES:
                     raise AiDocumentError(f"Belge en fazla {MAX_LINES} satÄ±r olabilir.")
@@ -393,13 +412,14 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
                     "letter_scale": scale,
                     "letter_spacing": settings["letter_spacing"],
                     "word_spacing": settings["word_spacing"],
-                    "line_slope": settings["line_slope"],
+                    "line_slope": settings["line_slope"] + 15.0 if is_margin_note else settings["line_slope"],
                     "jitter": style["jitter"],
-                    "ink_color": settings["ink_color"],
+                    "ink_color": style.get("ink_color", settings["ink_color"]),
                     "line_offset_y": 0,
                     "seed": 10_000 + line_counter,
                 })
-                baseline += line_spacing
+                if not is_margin_note:
+                    baseline += line_spacing
             if paragraph_index < len(paragraphs) - 1:
                 baseline += int(settings["line_spacing"] * 0.35)
 
@@ -417,6 +437,16 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
             delta = max(safe_top - content_top, min(delta, safe_bottom - content_bottom))
             for line in centered_page["lines"]:
                 line["baseline_y"] += delta
+
+    if raw_settings.get("pen_dying_effect"):
+        total_lines = sum(len(p["lines"]) for p in pages)
+        if total_lines > 0:
+            global_line_index = 0
+            for p in pages:
+                for line in p["lines"]:
+                    progress = global_line_index / total_lines
+                    line["opacity"] = max(0.40, 0.95 - (progress * 0.55))
+                    global_line_index += 1
 
     return {
         "version": 1,
@@ -560,6 +590,10 @@ def _response_schema() -> dict[str, Any]:
                         "type": {"type": "STRING"},
                         "text": {"type": "STRING"},
                         "page_break_before": {"type": "BOOLEAN"},
+                        "color": {"type": "STRING", "description": "Hex renk, örn: #FF0000 (Sadece kullanıcı özel renk isterse)"},
+                        "align": {"type": "STRING", "description": "'left', 'center', 'right' (Sadece kullanıcı isterse)"},
+                        "scale_multiplier": {"type": "NUMBER", "description": "1.0 normal. (Sadece kullanıcı özel boyut isterse)"},
+                        "is_margin_note": {"type": "BOOLEAN", "description": "Sadece kenar boşluğuna küçük bir not düşülecekse true yap."}
                     },
                     "required": ["type", "text", "page_break_before"],
                 },
@@ -582,7 +616,8 @@ def _response_schema() -> dict[str, Any]:
                     "line_slope": {"type": "NUMBER", "description": "Satırların eğikliği (0 düz, 10 çok eğik)"},
                     "opacity": {"type": "NUMBER", "description": "Mürekkebin solukluğu (0.5 soluk, 1.0 net)"},
                     "kalinlik": {"type": "NUMBER", "description": "Mürekkep kalınlığı (-2 ince, 4 çok kalın)"},
-                    "vertical_align": {"type": "STRING", "description": "'top', 'center' veya 'bottom'"}
+                    "vertical_align": {"type": "STRING", "description": "'top', 'center' veya 'bottom'"},
+                    "pen_dying_effect": {"type": "BOOLEAN", "description": "Tükenmez kalem bitiyormuş gibi aşağı doğru silikleşsin mi?"}
                 }
             }
         }
