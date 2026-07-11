@@ -24,7 +24,7 @@ MAX_INSTRUCTION_CHARS = 1_000
 MAX_OPERATIONS_PER_REQUEST = 12
 MAX_UNDO_STACK = 50
 COPILOT_MODEL_ENV = "COPILOT_GEMINI_MODEL"
-DEFAULT_COPILOT_MODEL = "gemini-2.5-flash"
+DEFAULT_COPILOT_MODEL = "gemini-1.5-flash"
 
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -804,7 +804,10 @@ def call_copilot_gemini(
     except req.exceptions.Timeout:
         raise CopilotError("Gemini zaman aşımı. Lütfen tekrar deneyin.", 504)
     except req.exceptions.RequestException as exc:
-        raise CopilotError(f"Gemini bağlantı hatası: {type(exc).__name__}", 502)
+        err_msg = str(exc)
+        if getattr(exc, 'response', None) is not None:
+            err_msg = f"{exc.response.status_code}: {exc.response.text}"
+        raise CopilotError(f"Gemini bağlantı hatası: {err_msg}", 502)
 
     try:
         body = resp.json()
