@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify, render_template, send_file, redirect
+from flask import Flask, request, jsonify, render_template, send_file, redirect
 from flask_cors import CORS
 import cv2
 import numpy as np
@@ -1580,7 +1580,7 @@ def download():
                 # overlay_img boyutunu sayfa boyutuyla aynÄ± yap
                 if overlay_img.size != sayfalar[0].size:
                     overlay_img = overlay_img.resize(sayfalar[0].size, core_generator.Image.Resampling.LANCZOS)
-                # Sadece ilk sayfaya (veya o anki ekrana) yapÄ±ÅŸtÄ±rÄ±yoruz
+                # Sadece ilk sayfaya (veya o anki ekrana) yapıştırıyoruz
                 sayfalar[0].paste(overlay_img, (0, 0), overlay_img)
             except Exception as e:
                 logger.error(f"Overlay error: {e}")
@@ -1592,28 +1592,28 @@ def download():
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logger.error(f"System error in download: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Ä°ÅŸlem baÅŸarÄ±sÄ±z. LÃ¼tfen tekrar deneyin.'}), 500
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # AI DOCUMENT STUDIO
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _font_access_for_user(font_id, user_id, *, require_ready=True):
     if not isinstance(font_id, str) or not font_id.strip() or len(font_id) > 180:
-        raise ai_document.AiDocumentError('GeÃ§erli bir font_id gerekli.')
+        raise ai_document.AiDocumentError('Geçerli bir font_id gerekli.')
     database = init_firebase()
     if database is None:
-        raise ai_document.AiDocumentError('VeritabanÄ± ÅŸu anda kullanÄ±lamÄ±yor.', 503)
+        raise ai_document.AiDocumentError('Veritabanı şu anda kullanılamıyor.', 503)
     font_ref = database.collection('fonts').document(font_id.strip())
     snapshot = font_ref.get()
     if not snapshot.exists:
-        raise ai_document.AiDocumentError('Font bulunamadÄ±.', 404)
+        raise ai_document.AiDocumentError('Font bulunamadı.', 404)
     font_data = snapshot.to_dict() or {}
     is_public = bool(font_data.get('is_public', False))
     if not is_public and font_data.get('owner_id') != user_id:
-        raise ai_document.AiDocumentError('Bu font iÃ§in eriÅŸim yetkiniz yok.', 403)
+        raise ai_document.AiDocumentError('Bu font için erişim yetkiniz yok.', 403)
     if require_ready and font_data.get('source') == 'digital' and font_data.get('status') != 'ready':
-        raise ai_document.AiDocumentError('Bu font henÃ¼z tamamlanmamÄ±ÅŸ bir taslak.', 409)
+        raise ai_document.AiDocumentError('Bu font henüz tamamlanmamış bir taslak.', 409)
     return font_ref, font_data
 
 
@@ -1626,7 +1626,7 @@ def _raw_character_bytes(raw):
     try:
         return bytes(raw)
     except Exception as exc:
-        raise ValueError('Karakter verisi okunamadÄ±.') from exc
+        raise ValueError('Karakter verisi okunamadı.') from exc
 
 
 def _gemini_api_key():
@@ -1640,28 +1640,28 @@ def _gemini_api_key():
 def _load_glyph_value(raw):
     if isinstance(raw, str) and raw.lower().startswith('https://'):
         if not is_safe_url(raw):
-            raise ValueError('GÃ¼venli olmayan karakter URL adresi.')
+            raise ValueError('Güvenli olmayan karakter URL adresi.')
         response = requests.get(raw, timeout=8, stream=True)
         response.raise_for_status()
         content_length = int(response.headers.get('Content-Length', '0') or 0)
         if content_length > 2 * 1024 * 1024:
-            raise ValueError('Karakter gÃ¶rseli Ã§ok bÃ¼yÃ¼k.')
+            raise ValueError('Karakter görseli çok büyük.')
         chunks = []
         downloaded = 0
         for chunk in response.iter_content(64 * 1024):
             downloaded += len(chunk)
             if downloaded > 2 * 1024 * 1024:
-                raise ValueError('Karakter gÃ¶rseli Ã§ok bÃ¼yÃ¼k.')
+                raise ValueError('Karakter görseli çok büyük.')
             chunks.append(chunk)
         raw_bytes = b''.join(chunks)
     else:
         raw_bytes = _raw_character_bytes(raw)
     if len(raw_bytes) > 2 * 1024 * 1024:
-        raise ValueError('Karakter gÃ¶rseli Ã§ok bÃ¼yÃ¼k.')
+        raise ValueError('Karakter görseli çok büyük.')
     with PILImage.open(io.BytesIO(raw_bytes)) as image:
         image.load()
         if image.width > 2048 or image.height > 2048:
-            raise ValueError('Karakter gÃ¶rseli boyut sÄ±nÄ±rÄ±nÄ± aÅŸÄ±yor.')
+            raise ValueError('Karakter görseli boyut sınırını aşıyor.')
         return image.convert('RGBA')
 
 
@@ -1677,7 +1677,7 @@ def _load_font_images(font_ref):
     grouped = {}
     documents = list(font_ref.collection('chars').stream())
     if len(documents) > 2000:
-        raise ai_document.AiDocumentError('Font karakter sÄ±nÄ±rÄ±nÄ± aÅŸÄ±yor.', 413)
+        raise ai_document.AiDocumentError('Font karakter sınırını aşıyor.', 413)
     documents.sort(key=lambda item: item.id)
     for char_doc in documents:
         raw = (char_doc.to_dict() or {}).get('data')
@@ -1686,7 +1686,7 @@ def _load_font_images(font_ref):
         try:
             _append_font_glyph(grouped, char_doc.id, raw)
         except Exception as exc:
-            logger.warning('Font karakteri atlandÄ± (%s): %s', char_doc.id, type(exc).__name__)
+            logger.warning('Font karakteri atlandı (%s): %s', char_doc.id, type(exc).__name__)
 
     # Paper-scanned legacy fonts (including the existing 3x font) may keep all
     # glyphs in the parent document's `harfler` map instead of /chars.
@@ -1703,17 +1703,27 @@ def _load_font_images(font_ref):
                     try:
                         _append_font_glyph(grouped, str(storage_key), value)
                     except Exception as exc:
-                        logger.warning('Eski font karakteri atlandÄ± (%s): %s', storage_key, type(exc).__name__)
+                        logger.warning('Eski font karakteri atlandı (%s): %s', storage_key, type(exc).__name__)
     if not grouped:
-        raise ai_document.AiDocumentError('Font karakterleri yÃ¼klenemedi.', 422)
+        raise ai_document.AiDocumentError('Font karakterleri yüklenemedi.', 422)
     return grouped
+
+
+def _load_secondary_font(data, user_id, primary_font_id):
+    secondary_id = str((data or {}).get('secondary_font_id') or '').strip()
+    if not secondary_id:
+        return None, None
+    if secondary_id == str(primary_font_id or '').strip():
+        raise ai_document.AiDocumentError('Çoklu yazar için ikinci ve farklı bir font seçmelisin.')
+    secondary_ref, secondary_data = _font_access_for_user(secondary_id, user_id)
+    return _load_font_images(secondary_ref), secondary_data
 
 
 def _ai_error_response(exc):
     if isinstance(exc, ai_document.AiDocumentError):
         return jsonify({'success': False, 'message': str(exc)}), exc.status_code
     logger.error('AI Document Studio error: %s', type(exc).__name__, exc_info=True)
-    return jsonify({'success': False, 'message': 'Belge iÅŸlemi ÅŸu anda tamamlanamadÄ±.'}), 500
+    return jsonify({'success': False, 'message': 'Belge işlemi şu anda tamamlanamadı.'}), 500
 
 
 @app.route('/api/ai/status', methods=['GET'])
@@ -1744,21 +1754,24 @@ def ai_document_plan():
     try:
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            raise ai_document.AiDocumentError('GeÃ§erli bir JSON gÃ¶vdesi gerekli.')
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
         font_ref, font_data = _font_access_for_user(data.get('font_id', ''), request.uid)
         harfler = _load_font_images(font_ref)
+        secondary_harfler, secondary_font_data = _load_secondary_font(data, request.uid, data.get('font_id'))
+        requested_settings = dict(data.get('page_settings') or {}) if isinstance(data.get('page_settings'), dict) else {}
+        requested_settings['multi_author'] = bool(requested_settings.get('multi_author') and secondary_harfler)
         source = str(data.get('source', 'ai'))
         if source == 'manual':
             blocks = ai_document.manual_blocks(
                 ai_document.normalize_text(data.get('text_content', '')),
                 ai_document.normalize_text(data.get('title', ''), maximum=180),
             )
-            layout = ai_document.build_layout(blocks, harfler, data.get('page_settings'))
+            layout = ai_document.build_layout(blocks, harfler, requested_settings, secondary_harfler)
             result = {
                 'layout': layout,
                 'blocks': blocks,
                 'full_text': '\n'.join(block['text'] for block in blocks),
-                'summary': 'Metin gerÃ§ek font Ã¶lÃ§Ã¼leriyle mizanpajlandÄ±.',
+                'summary': 'Metin gerçek font ölçüleriyle mizanpajlandı.',
                 'font_profile': ai_document.font_profile(
                     harfler,
                     font_data.get('repetition', 1),
@@ -1775,11 +1788,18 @@ def ai_document_plan():
                 instructions=data.get('instructions', ''),
                 harfler=harfler,
                 repetition=font_data.get('repetition', 1),
-                page_settings=data.get('page_settings'),
+                page_settings=requested_settings,
+                secondary_harfler=secondary_harfler,
+                secondary_repetition=(secondary_font_data or {}).get('repetition', 1),
             )
         else:
-            raise ai_document.AiDocumentError("source yalnÄ±zca 'ai' veya 'manual' olabilir.")
-        return jsonify({'success': True, 'font_name': font_data.get('font_name'), **result})
+            raise ai_document.AiDocumentError("source yalnızca 'ai' veya 'manual' olabilir.")
+        return jsonify({
+            'success': True,
+            'font_name': font_data.get('font_name'),
+            'secondary_font_name': (secondary_font_data or {}).get('font_name'),
+            **result,
+        })
     except Exception as exc:
         return _ai_error_response(exc)
 
@@ -1808,7 +1828,7 @@ def font_dimensions():
     try:
         scale = int(request.args.get('letter_scale', 135))
         if not 50 <= scale <= 260:
-            raise ai_document.AiDocumentError('letter_scale 50-260 arasÄ±nda olmalÄ±.')
+            raise ai_document.AiDocumentError('letter_scale 50-260 arasında olmalı.')
         font_ref, font_data = _font_access_for_user(request.args.get('font_id', ''), request.uid)
         harfler = _load_font_images(font_ref)
         metrics = core_generator.get_font_metrics(harfler, scale)
@@ -1826,12 +1846,13 @@ def font_dimensions():
         return _ai_error_response(exc)
 
 
-def _send_layout_pdf(layout, harfler, filename='fontify_belge.pdf'):
+def _send_layout_pdf(layout, harfler, filename='fontify_belge.pdf', secondary_harfler=None):
     clean_layout = ai_document.validate_layout(layout)
-    pages = core_generator.metni_koordinatli_yaz(clean_layout, harfler)
+    font_sets = {'secondary': secondary_harfler} if secondary_harfler else None
+    pages = core_generator.metni_koordinatli_yaz(clean_layout, harfler, font_sets)
     pdf_buffer = core_generator.sayfalari_pdf_olustur(pages)
     if pdf_buffer is None:
-        raise ai_document.AiDocumentError('PDF sayfasÄ± oluÅŸturulamadÄ±.', 422)
+        raise ai_document.AiDocumentError('PDF sayfası oluşturulamadı.', 422)
     response = send_file(
         pdf_buffer,
         mimetype='application/pdf',
@@ -1849,12 +1870,18 @@ def _send_layout_pdf(layout, harfler, filename='fontify_belge.pdf'):
 def ai_layout_pdf():
     try:
         if request.content_length and request.content_length > 2 * 1024 * 1024:
-            raise ai_document.AiDocumentError('Layout isteÄŸi en fazla 2 MB olabilir.', 413)
+            raise ai_document.AiDocumentError('Layout isteği en fazla 2 MB olabilir.', 413)
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            raise ai_document.AiDocumentError('GeÃ§erli bir JSON gÃ¶vdesi gerekli.')
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
         font_ref, _ = _font_access_for_user(data.get('font_id', ''), request.uid)
-        return _send_layout_pdf(data.get('layout'), _load_font_images(font_ref), 'fontify_ai_belge.pdf')
+        secondary_harfler, _ = _load_secondary_font(data, request.uid, data.get('font_id'))
+        return _send_layout_pdf(
+            data.get('layout'),
+            _load_font_images(font_ref),
+            'fontify_ai_belge.pdf',
+            secondary_harfler,
+        )
     except Exception as exc:
         return _ai_error_response(exc)
 
@@ -1866,11 +1893,12 @@ def ai_generate_pdf():
     try:
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            raise ai_document.AiDocumentError('GeÃ§erli bir JSON gÃ¶vdesi gerekli.')
+            raise ai_document.AiDocumentError('Geçerli bir JSON gövdesi gerekli.')
         font_ref, _ = _font_access_for_user(data.get('font_id', ''), request.uid)
         harfler = _load_font_images(font_ref)
+        secondary_harfler, _ = _load_secondary_font(data, request.uid, data.get('font_id'))
         blocks = ai_document.manual_blocks(ai_document.normalize_text(data.get('text_content', '')))
-        layout = ai_document.build_layout(blocks, harfler, data.get('page_settings'))
+        layout = ai_document.build_layout(blocks, harfler, data.get('page_settings'), secondary_harfler)
         overrides = data.get('per_line_overrides') if isinstance(data.get('per_line_overrides'), dict) else {}
         flat_lines = [line for page in layout['pages'] for line in page['lines']]
         for key, values in overrides.items():
@@ -1880,10 +1908,10 @@ def ai_generate_pdf():
                 continue
             if not isinstance(values, dict):
                 continue
-            for field in ('letter_scale', 'letter_spacing', 'word_spacing', 'line_slope', 'jitter', 'ink_color', 'line_offset_y'):
+            for field in ('letter_scale', 'letter_spacing', 'word_spacing', 'line_slope', 'jitter', 'scale_jitter', 'ink_color', 'opacity', 'kalinlik', 'font_slot', 'line_offset_y'):
                 if field in values:
                     target[field] = values[field]
-        return _send_layout_pdf(layout, harfler)
+        return _send_layout_pdf(layout, harfler, secondary_harfler=secondary_harfler)
     except Exception as exc:
         return _ai_error_response(exc)
 

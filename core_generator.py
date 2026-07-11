@@ -1,36 +1,36 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-core_generator.py â€” Fontify el yazÄ±sÄ± render motoru v3.0
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-Ä°KÄ° RENDER MODU:
+core_generator.py — Fontify el yazısı render motoru v3.0
+==============================================================================
+İKİ RENDER MODU:
 
 1. metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None)
-   Klasik akÄ±ÅŸ render â€” per-satÄ±r parametre override desteÄŸiyle.
+   Klasik akış render — per-satır parametre override desteğiyle.
 
 2. metni_koordinatli_yaz(layout, harfler)
-   Koordinat tabanlÄ± render â€” AI'Ä±n milimetrik hassasiyetle verdiÄŸi
-   satÄ±r bazlÄ± layout JSON'Ä±nÄ± birebir uygular.
-   Layout JSON ÅŸemasÄ±:
+   Koordinat tabanlı render — AI'ın milimetrik hassasiyetle verdiği
+   satır bazlı layout JSON'ını birebir uygular.
+   Layout JSON şeması:
    {
      "pages": [
        {
          "paper_type": "cizgili",       # zorunlu
          "margin_top":  220,             # zorunlu
-         "margin_left": 180,             # yalnÄ±zca Ã§izgi Ã§izimi iÃ§in
-         "line_spacing": 215,            # yalnÄ±zca Ã§izgi Ã§izimi iÃ§in
+         "margin_left": 180,             # yalnızca çizgi çizimi için
+         "line_spacing": 215,            # yalnızca çizgi çizimi için
          "lines": [
            {
-             "text":           "OsmanlÄ± Ä°mparatorluÄŸu",
+             "text":           "Osmanlı İmparatorluğu",
              "baseline_y":     220,       # EXACT harf baseline Y (px)
-             "start_x":        180,       # ilk harfin sol kenarÄ± X (px)
-             "letter_scale":   135,       # hedef harf yÃ¼ksekliÄŸi (px)
-             "letter_spacing": 3,         # harfler arasÄ± ek px (+ saÄŸa aÃ§ar)
-             "word_spacing":   55,        # kelime arasÄ± ek px
-             "line_slope":     3.0,       # eÄŸim yoÄŸunluÄŸu
+             "start_x":        180,       # ilk harfin sol kenarı X (px)
+             "letter_scale":   135,       # hedef harf yüksekliği (px)
+             "letter_spacing": 3,         # harfler arası ek px (+ sağa açar)
+             "word_spacing":   55,        # kelime arası ek px
+             "line_slope":     3.0,       # eğim yoğunluğu
              "jitter":         4,         # titreme
-             "ink_color":      "#1b1b1d", # mÃ¼rekkep rengi
-             "line_offset_y":  0          # tÃ¼m satÄ±rÄ± Y ekseninde kaydÄ±r
+             "ink_color":      "#1b1b1d", # mürekkep rengi
+             "line_offset_y":  0          # tüm satırı Y ekseninde kaydır
            }
          ]
        }
@@ -38,14 +38,16 @@ core_generator.py â€” Fontify el yazÄ±sÄ± render motoru v3.0
    }
 
 3. get_font_metrics(harfler, letter_scale)
-   Verilen Ã¶lÃ§ekte her karakterin GERÃ‡EK ortalama geniÅŸliÄŸini dÃ¶ndÃ¼rÃ¼r.
-   â†’ AI bu tabloyu kullanarak satÄ±r geniÅŸliÄŸini Ã–NCEDEN hesaplayabilir.
+   Verilen ölçekte her karakterin GERÇEK ortalama genişliğini döndürür.
+   → AI bu tabloyu kullanarak satır genişliğini ÖNCEDEN hesaplayabilir.
 """
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import os
 import random
 import io
+import re
+import hashlib
 import numpy as np
 from character_manifest import base_key_for_character
 
@@ -56,12 +58,12 @@ except ImportError:
     _HAS_CV2 = False
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# YARDIMCI FONKSÄ°YONLAR
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ==============================================================================
+# YARDIMCI FONKSİYONLAR
+# ==============================================================================
 
 def _hex_to_rgb(hex_color, default=(27, 27, 29)):
-    """'#rrggbb' veya '#rgb'  â†’  (r, g, b)"""
+    """'#rrggbb' veya '#rgb'  →  (r, g, b)"""
     try:
         h = hex_color.lstrip('#')
         if len(h) == 3:
@@ -79,7 +81,7 @@ def karakter_anahtarini_bul(karakter):
 
 
 def harf_resimlerini_yukle(klasor_yolu="static/harfler"):
-    """KlasÃ¶r tabanlÄ± yÃ¼kleme (eski uyumluluk)."""
+    """Klasör tabanlı yükleme (eski uyumluluk)."""
     harfler = {}
     if not os.path.exists(klasor_yolu):
         return harfler
@@ -99,25 +101,32 @@ def harf_resimlerini_yukle(klasor_yolu="static/harfler"):
 
 
 def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95, kalinlik=0, rng=None):
-    """Rastgele varyasyon seÃ§, renklendirip dÃ¶ndÃ¼r."""
+    """Rastgele varyasyon seç, renklendirip döndür."""
     anahtar = karakter_anahtarini_bul(karakter)
     if not (anahtar and anahtar in harfler):
         return None
 
     random_source = rng or random
-    harf_resmi = random_source.choice(harfler[anahtar]).copy()
-    pixels = harf_resmi.load()
-    for i in range(harf_resmi.size[0]):
-        for j in range(harf_resmi.size[1]):
-            r, g, b, a = pixels[i, j]
-            if r < 200 and g < 200 and b < 200 and a > 0:
-                dr = max(0, min(255, murekkep_rengi[0] + random_source.randint(-5, 5)))
-                dg = max(0, min(255, murekkep_rengi[1] + random_source.randint(-5, 5)))
-                db = max(0, min(255, murekkep_rengi[2] + random_source.randint(-5, 5)))
-                pixels[i, j] = (dr, dg, db, int(a * opacity))
+    harf_resmi = random_source.choice(harfler[anahtar]).copy().convert("RGBA")
+    arr = np.array(harf_resmi, dtype=np.uint8)
+    ink_mask = (
+        (arr[:, :, 0] < 200)
+        & (arr[:, :, 1] < 200)
+        & (arr[:, :, 2] < 200)
+        & (arr[:, :, 3] > 0)
+    )
+    opacity = max(0.0, min(1.0, float(opacity)))
+    if np.any(ink_mask):
+        noise_rng = np.random.default_rng(random_source.randint(0, 2_000_000_000))
+        noise = noise_rng.integers(-5, 6, size=arr[:, :, :3].shape, dtype=np.int16)
+        base = np.asarray(murekkep_rengi, dtype=np.int16).reshape((1, 1, 3))
+        coloured = np.clip(base + noise, 0, 255).astype(np.uint8)
+        arr[:, :, :3][ink_mask] = coloured[ink_mask]
+        alpha = arr[:, :, 3].astype(np.float32)
+        alpha[ink_mask] *= opacity
+        arr[:, :, 3] = np.clip(alpha, 0, 255).astype(np.uint8)
 
     if kalinlik != 0 and _HAS_CV2:
-        arr   = np.array(harf_resmi)
         alpha = arr[:, :, 3]
         ks    = abs(kalinlik) + 1
         kern  = np.ones((ks, ks), np.uint8)
@@ -126,9 +135,35 @@ def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95
         else:
             alpha = _cv2.erode(alpha, kern, iterations=abs(kalinlik))
         arr[:, :, 3] = alpha
-        harf_resmi = Image.fromarray(arr)
 
-    return harf_resmi
+    return Image.fromarray(arr)
+
+
+def _styled_words(text):
+    """Yield (word, style) pairs for ==highlight==, **underline** and ~~strike~~ spans."""
+    active_style = None
+    active_marker = None
+    markers = (("==", "highlight"), ("**", "underline"), ("__", "underline"), ("~~", "strikethrough"))
+    for raw_word in str(text or "").split():
+        word = raw_word
+        style = active_style
+        if active_style is None:
+            for marker, marker_style in markers:
+                if word.startswith(marker):
+                    active_marker = marker
+                    active_style = marker_style
+                    style = marker_style
+                    word = word[len(marker):]
+                    break
+        if active_style and active_marker:
+            close_index = word.find(active_marker)
+            if close_index >= 0:
+                word = word[:close_index] + word[close_index + len(active_marker):]
+                style = active_style
+                active_style = None
+                active_marker = None
+        if word:
+            yield word, style
 
 
 def harfi_boyutlandir(harf_resmi, hedef_yukseklik):
@@ -178,15 +213,78 @@ def yeni_sayfa_olustur(pw, ph, print_bg=False, bg_path=None):
     return Image.new("RGBA", (pw, ph), (255, 255, 255, 255))
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# FONT METRÄ°KLERÄ° â€” AI'Ä±n tahmin yapmasÄ±nÄ± saÄŸlar
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+def kagit_efektlerini_uygula(sayfa, config, seed=1):
+    """Apply deterministic, print-safe aging, coffee rings and fold creases."""
+    age = max(0, min(100, int(config.get("paper_age", 0) or 0)))
+    coffee = config.get("coffee_stains") is True
+    creases = config.get("crease_effect") is True
+    if age <= 0 and not coffee and not creases:
+        return sayfa
+
+    width, height = sayfa.size
+    rng = random.Random(int(seed))
+    base = (
+        max(205, 255 - round(age * 0.28)),
+        max(195, 255 - round(age * 0.42)),
+        max(175, 255 - round(age * 0.65)),
+        255,
+    )
+    result = Image.new("RGBA", (width, height), base)
+
+    if age > 0:
+        noise_rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+        small_w, small_h = max(32, width // 24), max(44, height // 24)
+        noise = noise_rng.normal(128, 24, (small_h, small_w)).clip(0, 255).astype(np.uint8)
+        texture = Image.fromarray(noise).resize((width, height), Image.Resampling.BICUBIC)
+        texture_alpha = texture.point(lambda value: int(abs(value - 128) * age / 220))
+        texture_layer = Image.new("RGBA", (width, height), (116, 83, 42, 0))
+        texture_layer.putalpha(texture_alpha)
+        result = Image.alpha_composite(result, texture_layer)
+
+    if coffee:
+        stain_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(stain_layer, "RGBA")
+        for _ in range(2 + (1 if age > 55 else 0)):
+            radius_x = rng.randint(max(90, width // 18), max(150, width // 8))
+            radius_y = int(radius_x * rng.uniform(0.65, 1.15))
+            center_x = rng.choice((rng.randint(30, width // 3), rng.randint(width * 2 // 3, width - 30)))
+            center_y = rng.randint(height // 8, height * 7 // 8)
+            box = (center_x - radius_x, center_y - radius_y, center_x + radius_x, center_y + radius_y)
+            for ring in range(5):
+                inset = ring * 3
+                alpha = max(12, 46 - ring * 7)
+                draw.ellipse(
+                    (box[0] + inset, box[1] + inset, box[2] - inset, box[3] - inset),
+                    outline=(126, 72, 27, alpha),
+                    width=max(2, 7 - ring),
+                )
+        stain_layer = stain_layer.filter(ImageFilter.GaussianBlur(radius=1.2))
+        result = Image.alpha_composite(result, stain_layer)
+
+    if creases:
+        crease_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(crease_layer, "RGBA")
+        for position, vertical in ((width // 2 + rng.randint(-80, 80), True), (height // 2 + rng.randint(-100, 100), False)):
+            if vertical:
+                draw.line((position - 3, 0, position - 3, height), fill=(78, 59, 38, 22), width=5)
+                draw.line((position + 3, 0, position + 3, height), fill=(255, 255, 245, 42), width=4)
+            else:
+                draw.line((0, position - 3, width, position - 3), fill=(78, 59, 38, 20), width=5)
+                draw.line((0, position + 3, width, position + 3), fill=(255, 255, 245, 38), width=4)
+        result = Image.alpha_composite(result, crease_layer.filter(ImageFilter.GaussianBlur(radius=0.8)))
+
+    return result
+
+
+# ==============================================================================
+# FONT METRİKLERİ — AI'ın tahmin yapmasını sağlar
+# ==============================================================================
 
 def get_font_metrics(harfler, letter_scale=135):
     """
-    Verilen Ã¶lÃ§ekte her karakterin GERÃ‡EK ortalama geniÅŸliÄŸini dÃ¶ndÃ¼rÃ¼r.
+    Verilen ölçekte her karakterin GERÇEK ortalama genişliğini döndürür.
 
-    DÃ¶ndÃ¼rÃ¼r:
+    Döndürür:
     {
       "kucuk_a": {"avg_w": 42, "avg_h": 48, "variants": 3},
       "buyuk_A": {"avg_w": 58, "avg_h": 68, "variants": 1},
@@ -240,16 +338,16 @@ def get_font_metrics(harfler, letter_scale=135):
 
 def estimate_line_width(text, metrics, letter_spacing=0, word_spacing=55):
     """
-    Bir metin satÄ±rÄ±nÄ±n tahmini piksel geniÅŸliÄŸini hesaplar.
+    Bir metin satırının tahmini piksel genişliğini hesaplar.
 
     Parametreler
-    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    text          : str   â€“ Ã–lÃ§Ã¼lecek metin
-    metrics       : dict  â€“ get_font_metrics() Ã§Ä±ktÄ±sÄ±
-    letter_spacing: int   â€“ Harfler arasÄ± ek piksel
-    word_spacing  : int   â€“ Kelimeler arasÄ± piksel
+    ────────────
+    text          : str   – Ölçülecek metin
+    metrics       : dict  – get_font_metrics() çıktısı
+    letter_spacing: int   – Harfler arası ek piksel
+    word_spacing  : int   – Kelimeler arası piksel
 
-    DÃ¶ndÃ¼rÃ¼r: (estimated_px: int, char_count: int, word_count: int)
+    Döndürür: (estimated_px: int, char_count: int, word_count: int)
     """
     from character_manifest import base_key_for_character
 
@@ -273,13 +371,13 @@ def estimate_line_width(text, metrics, letter_spacing=0, word_spacing=55):
     return total, len(text.replace(' ', '')), word_count
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# KLASÄ°K RENDER â€” per_line_overrides desteÄŸi
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ==============================================================================
+# KLASİK RENDER — per_line_overrides desteği
+# ==============================================================================
 
 def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
     """
-    Klasik satÄ±r-akÄ±ÅŸ render.
+    Klasik satır-akış render.
 
     per_line_overrides: {int_idx: {param: val}}
       Desteklenen: letter_scale, letter_spacing, word_spacing,
@@ -394,7 +492,7 @@ def metni_sayfaya_yaz(metin, harfler, config, per_line_overrides=None):
 # KOORDİNAT TABANLI RENDER — milimetrik hassasiyet
 # ──────────────────────────────────────────────────────────────────────────
 
-def metni_koordinatli_yaz(layout, harfler):
+def metni_koordinatli_yaz(layout, harfler, font_sets=None):
     """
     AI'ın belirlediği koordinat tabanlı layout JSON'ını birebir uygular.
     Her satır için kesin baseline_y, start_x ve parametre seti.
@@ -407,7 +505,11 @@ def metni_koordinatli_yaz(layout, harfler):
     PAGE_H = 3508
     
 
-    for page_data in layout.get('pages', []):
+    available_fonts = {'primary': harfler}
+    if isinstance(font_sets, dict):
+        available_fonts.update({key: value for key, value in font_sets.items() if isinstance(value, dict) and value})
+
+    for page_index, page_data in enumerate(layout.get('pages', [])):
         pt  = page_data.get('paper_type', 'cizgili')
         mt  = page_data.get('margin_top',   220)
         ml  = page_data.get('margin_left',  180)
@@ -423,16 +525,25 @@ def metni_koordinatli_yaz(layout, harfler):
             'paper_type':  pt,
         }
         sayfa = yeni_sayfa_olustur(PAGE_W, PAGE_H)
+        page_seed_text = str(page_data.get('id', page_index + 1)).encode('utf-8', 'replace')
+        page_seed = int(hashlib.sha256(page_seed_text).hexdigest()[:8], 16)
+        sayfa = kagit_efektlerini_uygula(sayfa, page_data, page_seed)
         sayfa = cizgileri_ciz(sayfa, page_cfg)
 
         page_opacity  = page_data.get('opacity', 0.95)
         page_kalinlik = page_data.get('kalinlik', 0)
+        page_lines = page_data.get('lines', [])
+        pen_dying_effect = page_data.get('pen_dying_effect') is True
 
-        for line_data in page_data.get('lines', []):
-            line_rng = random.Random(line_data.get("seed", 42))
-            
+        for line_index, line_data in enumerate(page_lines):
             line_opacity = line_data.get('opacity', page_opacity)
+            if pen_dying_effect and 'opacity' not in line_data:
+                progress = line_index / max(1, len(page_lines) - 1)
+                line_opacity = max(0.40, float(page_opacity) - progress * max(0.0, float(page_opacity) - 0.40))
             line_kalinlik = line_data.get('kalinlik', page_kalinlik)
+            line_scale_jitter = max(0.0, min(35.0, float(line_data.get('scale_jitter', page_data.get('scale_jitter', 0)) or 0)))
+            font_slot = 'secondary' if line_data.get('font_slot') == 'secondary' else 'primary'
+            line_font = available_fonts.get(font_slot, harfler)
 
             text        = line_data.get('text', '')
             baseline_y  = int(line_data.get('baseline_y', mt))
@@ -446,44 +557,31 @@ def metni_koordinatli_yaz(layout, harfler):
             ink_hex     = line_data.get('ink_color', '#1b1b1d')
             ink         = _hex_to_rgb(ink_hex)
 
-            # AynÄ± layout her Ã¶nizlemede birebir aynÄ± varyasyon ve jitter'Ä± Ã¼retir.
+            # Aynı layout her önizlemede birebir aynı varyasyon ve jitter'ı üretir.
             line_rng = random.Random(int(line_data.get('seed', 10_000)))
             slope  = (line_rng.random() - 0.5) * (slope_f * 0.0005)
             loff   = (line_rng.random() - 0.5) * (slope_f * 1.5)
 
             x = start_x
-            max_x = PAGE_W - mr
+            max_x = int(line_data.get('max_x', PAGE_W - mr))
+            max_x = max(start_x + 1, min(PAGE_W, max_x))
 
-            words = text.split(' ')
-            for wi, kelime in enumerate(words):
-                if not kelime:
-                    x += wspc // 2
-                    continue
-                
-                is_highlight = False
-                is_underline = False
-                is_strikethrough = False
-
-                if len(kelime) >= 4:
-                    if kelime.startswith('==') and kelime.endswith('=='):
-                        is_highlight = True
-                        kelime = kelime[2:-2]
-                    elif kelime.startswith('__') and kelime.endswith('__'):
-                        is_underline = True
-                        kelime = kelime[2:-2]
-                    elif kelime.startswith('~~') and kelime.endswith('~~'):
-                        is_strikethrough = True
-                        kelime = kelime[2:-2]
+            words = list(_styled_words(text))
+            for wi, (kelime, word_style) in enumerate(words):
+                is_highlight = word_style == "highlight"
+                is_underline = word_style == "underline"
+                is_strikethrough = word_style == "strikethrough"
 
                 word_start_x = x
+                rendered_glyphs = []
 
                 for harf in kelime:
-                    himg = harf_resmini_al(harfler, harf, ink, line_opacity, line_kalinlik, rng=line_rng)
+                    himg = harf_resmini_al(line_font, harf, ink, line_opacity, line_kalinlik, rng=line_rng)
                     if not himg:
                         continue
 
-                    # Gürültü: letter_scale ±%1*jitter
-                    noise = line_rng.uniform(-0.01 * jitt, 0.01 * jitt)
+                    # Harf boyutu rastgeleliği, konum/eğim jitter'ından bağımsızdır.
+                    noise = line_rng.uniform(-line_scale_jitter / 100.0, line_scale_jitter / 100.0)
                     sized = harfi_boyutlandir(himg, max(4, int(lscale * (1 + noise))))
 
                     # Hafif açı gürültüsü
@@ -500,36 +598,31 @@ def metni_koordinatli_yaz(layout, harfler):
                     rand_dy  = line_rng.uniform(-jitt, jitt) * 0.4
                     final_y  = int(baseline_y - lscale + slope_dy + loff + rand_dy + off_y)
 
-                    sayfa.paste(rot, (x, final_y), rot)
+                    rendered_glyphs.append((rot, x, final_y))
                     x += gw + lspc + line_rng.randint(0, 3)
 
                 word_end_x = x
-                
-                if is_highlight:
-                    try:
-                        from PIL import ImageDraw
-                        draw = ImageDraw.Draw(sayfa, "RGBA")
-                        draw.rectangle([word_start_x, baseline_y - int(lscale * 0.9), word_end_x, baseline_y + int(lscale * 0.15)], fill=(255, 255, 0, 80))
-                    except:
-                        pass
-                
+                draw = ImageDraw.Draw(sayfa, "RGBA")
+                if is_highlight and word_end_x > word_start_x:
+                    draw.rectangle(
+                        [word_start_x - 3, baseline_y - int(lscale * 0.9), word_end_x + 3, baseline_y + int(lscale * 0.15)],
+                        fill=(255, 224, 64, 72),
+                    )
+
+                for glyph, glyph_x, glyph_y in rendered_glyphs:
+                    sayfa.paste(glyph, (glyph_x, glyph_y), glyph)
+
                 if is_underline or is_strikethrough:
-                    try:
-                        from PIL import ImageDraw
-                        draw = ImageDraw.Draw(sayfa, "RGBA")
-                        line_y = baseline_y + int(lscale * 0.1) if is_underline else baseline_y - int(lscale * 0.45)
-                        color = (220, 20, 20, int(line_opacity * 255)) if is_underline else (ink[0], ink[1], ink[2], int(line_opacity * 255))
-                        
-                        curr_x = word_start_x
-                        curr_y = line_y
-                        while curr_x < word_end_x:
-                            next_x = min(curr_x + line_rng.randint(8, 20), word_end_x)
-                            next_y = line_y + line_rng.randint(-3, 3)
-                            draw.line([(curr_x, curr_y), (next_x, next_y)], fill=color, width=max(2, int(line_kalinlik) + 2))
-                            curr_x = next_x
-                            curr_y = next_y
-                    except:
-                        pass
+                    line_y = baseline_y + int(lscale * 0.1) if is_underline else baseline_y - int(lscale * 0.45)
+                    color = (220, 20, 20, int(line_opacity * 255)) if is_underline else (ink[0], ink[1], ink[2], int(line_opacity * 255))
+                    curr_x = word_start_x
+                    curr_y = line_y
+                    while curr_x < word_end_x:
+                        next_x = min(curr_x + line_rng.randint(8, 20), word_end_x)
+                        next_y = line_y + line_rng.randint(-3, 3)
+                        draw.line([(curr_x, curr_y), (next_x, next_y)], fill=color, width=max(2, int(line_kalinlik) + 2))
+                        curr_x = next_x
+                        curr_y = next_y
 
                 if wi < len(words) - 1:
                     x += wspc
@@ -539,9 +632,9 @@ def metni_koordinatli_yaz(layout, harfler):
     
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# PDF Ã‡IKIÅI
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ==============================================================================
+# PDF ÇIKIŞI
+# ==============================================================================
 
 def sayfalari_pdf_olustur(sayfalar):
     first_rgb = None

@@ -1,6 +1,7 @@
 import base64
 import io
 import unittest
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
@@ -30,11 +31,19 @@ class AiDocumentTests(unittest.TestCase):
             "letter_spacing_mm": 0.5,
             "paper_type": "kareli",
             "ink_color": "#123abc",
+            "paper_age": 120,
+            "coffee_stains": True,
+            "crease_effect": True,
+            "scale_jitter": 50,
         })
         self.assertEqual("kareli", settings["paper_type"])
         self.assertEqual("#123abc", settings["ink_color"])
         self.assertAlmostEqual(18, ai_document.px_to_mm(settings["margin_left"]), places=1)
         self.assertAlmostEqual(12, ai_document.px_to_mm(settings["letter_scale"]), places=1)
+        self.assertEqual(100, settings["paper_age"])
+        self.assertTrue(settings["coffee_stains"])
+        self.assertTrue(settings["crease_effect"])
+        self.assertEqual(35, settings["scale_jitter"])
 
     def test_real_metrics_drive_wrapping_and_coordinates(self):
         blocks = [{
@@ -112,6 +121,86 @@ class AiDocumentTests(unittest.TestCase):
     def test_byok_key_precedes_server_fallback(self):
         self.assertEqual("user-key", ai_document.choose_api_key(" user-key ", "server-key"))
         self.assertEqual("server-key", ai_document.choose_api_key("", " server-key "))
+
+    def test_block_styles_are_sanitized_and_preserved(self):
+        blocks = ai_document.sanitize_blocks([{
+            "type": "paragraph",
+            "text": "Önemli metin",
+            "page_break_before": False,
+            "color": "#AABBCC",
+            "align": "right",
+            "scale_multiplier": 9,
+            "is_margin_note": True,
+        }])
+        self.assertEqual("#aabbcc", blocks[0]["color"])
+        self.assertEqual("right", blocks[0]["align"])
+        self.assertEqual(1.6, blocks[0]["scale_multiplier"])
+        self.assertTrue(blocks[0]["is_margin_note"])
+
+    def test_margin_note_uses_right_margin_without_advancing_flow(self):
+        blocks = [
+            {"type": "paragraph", "text": "abc", "page_break_before": False},
+            {"type": "paragraph", "text": "abc", "page_break_before": False, "is_margin_note": True},
+            {"type": "paragraph", "text": "abc", "page_break_before": False},
+        ]
+        layout = ai_document.build_layout(blocks, fake_font(), {})
+        page = layout["pages"][0]
+        flow = [line for line in page["lines"] if not line.get("is_margin_note")]
+        notes = [line for line in page["lines"] if line.get("is_margin_note")]
+        self.assertEqual(2, len(flow))
+        self.assertTrue(notes)
+        self.assertGreaterEqual(notes[0]["start_x"], ai_document.PAGE_WIDTH_PX - page["margin_right"] - 150)
+        self.assertEqual(ai_document.PAGE_WIDTH_PX - 24, notes[0]["max_x"])
+
+    def test_pen_dying_effect_reaches_last_line(self):
+        layout = ai_document.build_layout([{
+            "type": "paragraph",
+            "text": "abc " * 100,
+            "page_break_before": False,
+        }], fake_font(), {"pen_dying_effect": True})
+        lines = [line for page in layout["pages"] for line in page["lines"]]
+        self.assertGreater(len(lines), 2)
+        self.assertAlmostEqual(0.95, lines[0]["opacity"], places=2)
+        self.assertAlmostEqual(0.40, lines[-1]["opacity"], places=2)
+
+    def test_response_schema_is_supported_and_well_formed(self):
+        schema = ai_document._response_schema()
+        self.assertEqual("OBJECT", schema["type"])
+        self.assertNotIn("additionalProperties", schema)
+        self.assertIn("is_margin_note", schema["properties"]["blocks"]["items"]["properties"])
+        self.assertIn("author_slot", schema["properties"]["blocks"]["items"]["properties"])
+        self.assertIn("coffee_stains", schema["properties"]["page_settings_override"]["properties"])
+
+    def test_multi_author_switches_fonts_by_block(self):
+        blocks = [
+            {"type": "paragraph", "text": "abc", "page_break_before": False, "author_slot": "primary"},
+            {"type": "paragraph", "text": "abc", "page_break_before": False, "author_slot": "secondary"},
+        ]
+        layout = ai_document.build_layout(blocks, fake_font(), {"multi_author": True}, fake_font())
+        slots = [line["font_slot"] for page in layout["pages"] for line in page["lines"]]
+        self.assertEqual(["primary", "secondary"], slots)
+        clean = ai_document.validate_layout(layout)
+        self.assertEqual(["primary", "secondary"], [line["font_slot"] for line in clean["pages"][0]["lines"]])
+
+    @patch("ai_document.call_gemini")
+    def test_gemini_multi_author_requires_a_second_font(self, mock_call):
+        mock_call.return_value = {
+            "needs_clarification": False,
+            "document_title": "Ortak çalışma",
+            "blocks": [{"type": "paragraph", "text": "abc"}],
+            "page_settings_override": {"multi_author": True},
+        }
+        with self.assertRaisesRegex(ai_document.AiDocumentError, "ikinci bir font"):
+            ai_document.create_ai_layout(
+                api_key="test-key",
+                model="gemini-2.5-flash",
+                template="odev",
+                topic="İki kişi yazmış gibi hazırla",
+                instructions="",
+                harfler=fake_font(),
+                repetition=1,
+                page_settings={},
+            )
 
 
 if __name__ == "__main__":
