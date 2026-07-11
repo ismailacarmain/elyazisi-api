@@ -113,6 +113,44 @@ def validate_api_key(value: Any) -> str:
     return key
 
 
+def choose_api_key(request_key: Any, server_key: Any) -> str:
+    """Choose BYOK first without ever serializing or logging either secret."""
+    return str(request_key or "").strip() or str(server_key or "").strip()
+
+
+def decode_embedded_font_map(value: Any) -> dict[str, list[Image.Image]]:
+    """Decode legacy parent-document glyph maps while ignoring URL entries."""
+    if not isinstance(value, dict) or len(value) > 2000:
+        return {}
+    grouped: dict[str, list[Image.Image]] = {}
+    for storage_key, raw in sorted(value.items()):
+        values = raw if isinstance(raw, list) else [raw]
+        for item in values[:10]:
+            try:
+                if isinstance(item, str) and item.lower().startswith("https://"):
+                    continue
+                if isinstance(item, str):
+                    encoded = item.split(",", 1)[1] if "," in item else item
+                    raw_bytes = base64.b64decode(encoded, validate=True)
+                elif isinstance(item, (bytes, bytearray, memoryview)):
+                    raw_bytes = bytes(item)
+                else:
+                    raw_bytes = bytes(item)
+                if len(raw_bytes) > 2 * 1024 * 1024:
+                    continue
+                with Image.open(io.BytesIO(raw_bytes)) as image:
+                    image.load()
+                    if image.width > 2048 or image.height > 2048:
+                        continue
+                    glyph = image.convert("RGBA")
+                match = re.match(r"^(.*)_(\d+)$", str(storage_key))
+                base_key = match.group(1) if match else str(storage_key)
+                grouped.setdefault(base_key, []).append(glyph)
+            except Exception:
+                continue
+    return grouped
+
+
 def normalize_page_settings(raw: Any) -> dict[str, Any]:
     settings = raw if isinstance(raw, dict) else {}
 
@@ -137,10 +175,18 @@ def normalize_page_settings(raw: Any) -> dict[str, Any]:
     color = str(settings.get("ink_color", "#1b1b1d"))
     if not HEX_COLOR_RE.fullmatch(color):
         color = "#1b1b1d"
+    horizontal_align = str(settings.get("horizontal_align", "left")).lower()
+    if horizontal_align not in {"left", "center"}:
+        horizontal_align = "left"
+    vertical_align = str(settings.get("vertical_align", "top")).lower()
+    if vertical_align not in {"top", "center"}:
+        vertical_align = "top"
 
     return {
         "paper_type": paper_type,
         "ink_color": color.lower(),
+        "horizontal_align": horizontal_align,
+        "vertical_align": vertical_align,
         "margin_left": int(round(margin_left_mm * PX_PER_MM)),
         "margin_right": int(round(margin_right_mm * PX_PER_MM)),
         "margin_top": int(round(margin_top_mm * PX_PER_MM)),
@@ -329,7 +375,7 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
                     warnings.append(f"'{text[:30]}' satırı güvenli genişliğe sığdırıldı.")
                     width = content_width
                 start_x = settings["margin_left"]
-                if style["align"] == "center":
+                if settings["horizontal_align"] == "center" or style["align"] == "center":
                     start_x += max(0, (content_width - width) // 2)
                 line_counter += 1
                 if line_counter > MAX_LINES:
@@ -354,6 +400,21 @@ def build_layout(blocks: list[dict[str, Any]], harfler: dict[str, list[Image.Ima
                 baseline += line_spacing
             if paragraph_index < len(paragraphs) - 1:
                 baseline += int(settings["line_spacing"] * 0.35)
+
+    if settings["vertical_align"] == "center":
+        for centered_page in pages:
+            if not centered_page["lines"]:
+                continue
+            content_top = min(line["baseline_y"] - line["letter_scale"] for line in centered_page["lines"])
+            content_bottom = max(line["baseline_y"] + int(line["letter_scale"] * 0.28) for line in centered_page["lines"])
+            safe_top = settings["margin_top"]
+            safe_bottom = PAGE_HEIGHT_PX - settings["margin_bottom"]
+            desired_center = (safe_top + safe_bottom) / 2
+            current_center = (content_top + content_bottom) / 2
+            delta = int(round(desired_center - current_center))
+            delta = max(safe_top - content_top, min(delta, safe_bottom - content_bottom))
+            for line in centered_page["lines"]:
+                line["baseline_y"] += delta
 
     return {
         "version": 1,
@@ -479,28 +540,24 @@ def sample_image_parts(harfler: dict[str, list[Image.Image]]) -> list[dict[str, 
 
 def _response_schema() -> dict[str, Any]:
     return {
-        "type": "object",
+        "type": "OBJECT",
         "properties": {
-            "document_title": {"type": "string"},
+            "document_title": {"type": "STRING"},
             "blocks": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 80,
+                "type": "ARRAY",
                 "items": {
-                    "type": "object",
+                    "type": "OBJECT",
                     "properties": {
-                        "type": {"type": "string", "enum": sorted(ALLOWED_BLOCK_TYPES)},
-                        "text": {"type": "string"},
-                        "page_break_before": {"type": "boolean"},
+                        "type": {"type": "STRING"},
+                        "text": {"type": "STRING"},
+                        "page_break_before": {"type": "BOOLEAN"},
                     },
                     "required": ["type", "text", "page_break_before"],
-                    "additionalProperties": False,
                 },
             },
-            "summary": {"type": "string"},
+            "summary": {"type": "STRING"},
         },
         "required": ["document_title", "blocks", "summary"],
-        "additionalProperties": False,
     }
 
 

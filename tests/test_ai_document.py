@@ -1,3 +1,5 @@
+import base64
+import io
 import unittest
 
 from PIL import Image, ImageDraw
@@ -72,7 +74,45 @@ class AiDocumentTests(unittest.TestCase):
         with self.assertRaises(ai_document.AiDocumentError):
             ai_document.normalize_text("x" * (ai_document.MAX_DOCUMENT_CHARS + 1))
 
+    def test_content_can_be_centered_on_a4(self):
+        layout = ai_document.build_layout([{
+            "type": "paragraph",
+            "text": "abc",
+            "page_break_before": False,
+        }], fake_font(), {
+            "horizontal_align": "center",
+            "vertical_align": "center",
+            "margin_left_mm": 15,
+            "margin_right_mm": 15,
+            "margin_top_mm": 18,
+            "margin_bottom_mm": 18,
+        })
+        page = layout["pages"][0]
+        line = page["lines"][0]
+        line_center_x = line["start_x"] + line["estimated_width"] / 2
+        content_center_y = (line["baseline_y"] - line["letter_scale"] + line["baseline_y"] + int(line["letter_scale"] * 0.28)) / 2
+        self.assertAlmostEqual(ai_document.PAGE_WIDTH_PX / 2, line_center_x, delta=2)
+        expected_y = (page["margin_top"] + ai_document.PAGE_HEIGHT_PX - page["margin_bottom"]) / 2
+        self.assertAlmostEqual(expected_y, content_center_y, delta=2)
+
+    def test_legacy_parent_document_font_map_is_decoded(self):
+        image = Image.new("RGBA", (28, 50), (0, 0, 0, 0))
+        ImageDraw.Draw(image).line((14, 4, 14, 46), fill=(0, 0, 0, 255), width=4)
+        output = io.BytesIO()
+        image.save(output, "PNG")
+        encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        loaded = ai_document.decode_embedded_font_map({
+            "kucuk_a_1": encoded,
+            "kucuk_a_2": encoded,
+            "buyuk_a_1": encoded,
+        })
+        self.assertEqual(2, len(loaded["kucuk_a"]))
+        self.assertEqual(1, len(loaded["buyuk_a"]))
+
+    def test_byok_key_precedes_server_fallback(self):
+        self.assertEqual("user-key", ai_document.choose_api_key(" user-key ", "server-key"))
+        self.assertEqual("server-key", ai_document.choose_api_key("", " server-key "))
+
 
 if __name__ == "__main__":
     unittest.main()
-

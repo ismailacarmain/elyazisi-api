@@ -1629,7 +1629,51 @@ def _raw_character_bytes(raw):
         raise ValueError('Karakter verisi okunamadı.') from exc
 
 
+def _gemini_api_key():
+    """Prefer a per-request BYOK key, then the Render-only server secret."""
+    return ai_document.choose_api_key(
+        request.headers.get('X-Gemini-Api-Key'),
+        os.environ.get('GEMINI_API_KEY'),
+    )
+
+
+def _load_glyph_value(raw):
+    if isinstance(raw, str) and raw.lower().startswith('https://'):
+        if not is_safe_url(raw):
+            raise ValueError('Güvenli olmayan karakter URL adresi.')
+        response = requests.get(raw, timeout=8, stream=True)
+        response.raise_for_status()
+        content_length = int(response.headers.get('Content-Length', '0') or 0)
+        if content_length > 2 * 1024 * 1024:
+            raise ValueError('Karakter görseli çok büyük.')
+        chunks = []
+        downloaded = 0
+        for chunk in response.iter_content(64 * 1024):
+            downloaded += len(chunk)
+            if downloaded > 2 * 1024 * 1024:
+                raise ValueError('Karakter görseli çok büyük.')
+            chunks.append(chunk)
+        raw_bytes = b''.join(chunks)
+    else:
+        raw_bytes = _raw_character_bytes(raw)
+    if len(raw_bytes) > 2 * 1024 * 1024:
+        raise ValueError('Karakter görseli çok büyük.')
+    with PILImage.open(io.BytesIO(raw_bytes)) as image:
+        image.load()
+        if image.width > 2048 or image.height > 2048:
+            raise ValueError('Karakter görseli boyut sınırını aşıyor.')
+        return image.convert('RGBA')
+
+
+def _append_font_glyph(grouped, storage_key, raw):
+    glyph = _load_glyph_value(raw)
+    match = re.match(r'^(.*)_(\d+)$', storage_key)
+    base_key = match.group(1) if match else storage_key
+    grouped.setdefault(base_key, []).append(glyph)
+
+
 def _load_font_images(font_ref):
+    """Load both current subcollection fonts and legacy main-document fonts."""
     grouped = {}
     documents = list(font_ref.collection('chars').stream())
     if len(documents) > 2000:
@@ -1640,19 +1684,26 @@ def _load_font_images(font_ref):
         if raw is None:
             continue
         try:
-            raw_bytes = _raw_character_bytes(raw)
-            if len(raw_bytes) > 2 * 1024 * 1024:
-                continue
-            with PILImage.open(io.BytesIO(raw_bytes)) as image:
-                image.load()
-                if image.width > 2048 or image.height > 2048:
-                    continue
-                glyph = image.convert('RGBA')
-            match = re.match(r'^(.*)_(\d+)$', char_doc.id)
-            base_key = match.group(1) if match else char_doc.id
-            grouped.setdefault(base_key, []).append(glyph)
+            _append_font_glyph(grouped, char_doc.id, raw)
         except Exception as exc:
             logger.warning('Font karakteri atlandı (%s): %s', char_doc.id, type(exc).__name__)
+
+    # Paper-scanned legacy fonts (including the existing 3x font) may keep all
+    # glyphs in the parent document's `harfler` map instead of /chars.
+    if not grouped:
+        snapshot = font_ref.get()
+        legacy_map = (snapshot.to_dict() or {}).get('harfler', {}) if snapshot.exists else {}
+        if isinstance(legacy_map, dict) and len(legacy_map) <= 2000:
+            grouped.update(ai_document.decode_embedded_font_map(legacy_map))
+            for storage_key, raw in sorted(legacy_map.items()):
+                values = raw if isinstance(raw, list) else [raw]
+                for value in values[:10]:
+                    if not (isinstance(value, str) and value.lower().startswith('https://')):
+                        continue
+                    try:
+                        _append_font_glyph(grouped, str(storage_key), value)
+                    except Exception as exc:
+                        logger.warning('Eski font karakteri atlandı (%s): %s', storage_key, type(exc).__name__)
     if not grouped:
         raise ai_document.AiDocumentError('Font karakterleri yüklenemedi.', 422)
     return grouped
@@ -1665,13 +1716,23 @@ def _ai_error_response(exc):
     return jsonify({'success': False, 'message': 'Belge işlemi şu anda tamamlanamadı.'}), 500
 
 
+@app.route('/api/ai/status', methods=['GET'])
+@verified_login_required
+def ai_status():
+    return jsonify({
+        'success': True,
+        'server_key_configured': bool(os.environ.get('GEMINI_API_KEY', '').strip()),
+        'default_model': 'gemini-3.1-pro-preview',
+    })
+
+
 @app.route('/api/ai/test', methods=['POST'])
 @verified_login_required
 def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
         model = data.get('model', 'gemini-3.1-pro-preview')
-        ai_document.test_gemini_connection(request.headers.get('X-Gemini-Api-Key'), model)
+        ai_document.test_gemini_connection(_gemini_api_key(), model)
         return jsonify({'success': True, 'model': ai_document.validate_model(model)})
     except Exception as exc:
         return _ai_error_response(exc)
@@ -1707,7 +1768,7 @@ def ai_document_plan():
             }
         elif source == 'ai':
             result = ai_document.create_ai_layout(
-                api_key=request.headers.get('X-Gemini-Api-Key'),
+                api_key=_gemini_api_key(),
                 model=data.get('model', 'gemini-3.1-pro-preview'),
                 template=str(data.get('template', 'odev')),
                 topic=data.get('topic', ''),

@@ -12,9 +12,10 @@ Render servisinde aşağıdaki değerleri tanımlayın. Gizli değerleri repoya 
 | `DEFAULT_USER_CREDITS` | Yeni kullanıcı için başlangıç kredisi, örneğin `10`. |
 | `ALLOW_LEGACY_MOBILE_UPLOADS` | Üretimde `false`. |
 | `ALLOW_INSECURE_RECAPTCHA` | Üretimde `false`. |
+| `GEMINI_API_KEY` | İsteğe bağlı sistem anahtarı; yalnızca Render secret olarak saklanır. |
 | `GEMINI_ALLOWED_MODELS` | İsteğe bağlı model allowlist'i; boşsa uygulamanın güvenli varsayılanı kullanılır. |
 
-Gemini anahtarı BYOK modelindedir: kullanıcı anahtarı yalnızca HTTPS isteğinde backend proxy'ye gelir; Firestore'a veya backend loglarına kaydedilmez.
+Sistem hem BYOK hem sunucu anahtarıyla çalışır. Kullanıcı anahtarı gönderilmişse önce o kullanılır; yoksa `GEMINI_API_KEY` Render secret'ına güvenli biçimde düşülür. Anahtarlar Firestore'a veya backend loglarına kaydedilmez.
 
 ## Dağıtım sırası
 
