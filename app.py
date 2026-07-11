@@ -1751,7 +1751,7 @@ def ai_connection_test():
         return _ai_error_response(exc)
 
 
-@app.route('/api/ai/plan', methods=['POST'])
+@app.route('/api/ai/plan', methods=['POST', 'OPTIONS'])
 @verified_login_required
 def ai_document_plan():
     try:
@@ -1868,7 +1868,7 @@ def _send_layout_pdf(layout, harfler, filename='fontify_belge.pdf', secondary_ha
     return response
 
 
-@app.route('/api/ai_layout_pdf', methods=['POST'])
+@app.route('/api/ai_layout_pdf', methods=['POST', 'OPTIONS'])
 @verified_login_required
 def ai_layout_pdf():
     try:
@@ -1889,7 +1889,7 @@ def ai_layout_pdf():
         return _ai_error_response(exc)
 
 
-@app.route('/api/ai_generate_pdf', methods=['POST'])
+@app.route('/api/ai_generate_pdf', methods=['POST', 'OPTIONS'])
 @verified_login_required
 def ai_generate_pdf():
     """Backward-compatible manual text renderer using the safe layout engine."""
