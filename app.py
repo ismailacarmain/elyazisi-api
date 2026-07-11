@@ -2039,10 +2039,11 @@ def copilot_edit_document(document_id: str):
 
         secondary_available = bool(doc["layout"].get("settings", {}).get("multi_author"))
         model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
+        req_api_key = _gemini_api_key()
 
         def _run_edit():
             return _cop.process_copilot_edit(
-                api_key=_gemini_api_key(),
+                api_key=req_api_key,
                 model=model,
                 instruction=instruction,
                 layout=doc["layout"],
