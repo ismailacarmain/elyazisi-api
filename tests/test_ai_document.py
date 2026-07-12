@@ -207,6 +207,46 @@ class AiDocumentTests(unittest.TestCase):
             result["report"]["settings_before"]["letter_height_mm"],
         )
 
+    def test_compact_solver_reaches_every_documented_readability_boundary(self):
+        compact = ai_document._compact_page_settings({
+            "letter_height_mm": 20,
+            "line_spacing_mm": 32,
+            "letter_spacing_mm": 3,
+            "word_spacing_mm": 12,
+            "margin_left_mm": 40,
+            "margin_right_mm": 40,
+            "margin_top_mm": 45,
+            "margin_bottom_mm": 45,
+        }, 0)
+        units = ai_document.normalize_page_settings(compact)["units"]
+        self.assertEqual(5.5, units["letter_height_mm"])
+        self.assertEqual(7.0, units["line_spacing_mm"])
+        self.assertEqual(-0.7, units["letter_spacing_mm"])
+        self.assertEqual(1.5, units["word_spacing_mm"])
+        self.assertEqual(8.0, units["margin_left_mm"])
+        self.assertEqual(8.0, units["margin_top_mm"])
+
+    def test_page_fit_solver_expands_short_content_to_an_exact_target(self):
+        blocks = [{"type": "paragraph", "text": "abc " * 20, "page_break_before": False}]
+        result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {
+            "letter_height_mm": 11,
+            "line_spacing_mm": 14,
+        }, 2)
+        self.assertTrue(result["success"])
+        self.assertEqual(2, len(result["layout"]["pages"]))
+        self.assertEqual("exact", result["report"]["constraint"])
+        self.assertGreater(
+            result["report"]["settings_after"]["letter_height_mm"],
+            result["report"]["settings_before"]["letter_height_mm"],
+        )
+
+    def test_page_fit_solver_asks_when_content_cannot_naturally_fill_target(self):
+        blocks = [{"type": "paragraph", "text": "abc", "page_break_before": False}]
+        result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {}, 2)
+        self.assertFalse(result["success"])
+        self.assertEqual("underflow", result["report"]["constraint"])
+        self.assertEqual(1, result["report"]["actual_pages"])
+
     def test_page_fit_solver_refuses_unreadable_one_page_result(self):
         blocks = [{"type": "paragraph", "text": "abc " * 1500, "page_break_before": False}]
         result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {

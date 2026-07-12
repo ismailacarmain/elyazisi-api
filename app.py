@@ -2111,20 +2111,34 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
         )
         if fit_result and not fit_result.get("success"):
             report = fit_result["report"]
-            minimum_pages = report.get("actual_pages")
-            minimum_text = str(minimum_pages) if minimum_pages else f"{ai_document.MAX_PAGES}'den fazla"
-            result.update({
-                "needs_clarification": True,
-                "clarification_question": (
+            actual_pages = report.get("actual_pages")
+            if report.get("constraint") == "underflow":
+                question = (
+                    f"Bu metin en ferah okunabilir düzende bile {actual_pages or 1} sayfa oluyor. "
+                    f"{target_pages} sayfaya doğal biçimde yaymak için nasıl ilerleyeyim?"
+                )
+                options = [
+                    "Metni örnekler ve ayrıntılarla genişlet (önerilen)",
+                    "Harfleri büyüt ve daha ferah bir düzen kullan",
+                    f"{actual_pages or 1} sayfada bırak",
+                    "Ölçüleri kendim ayarlayacağım",
+                ]
+            else:
+                minimum_text = str(actual_pages) if actual_pages else f"{ai_document.MAX_PAGES}'den fazla"
+                question = (
                     f"Bu metin okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
                     f"{target_pages} sayfa hedefi için nasıl ilerleyeyim?"
-                ),
-                "clarification_options": [
+                )
+                options = [
                     "Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)",
                     "Başlığı ve tekrarları kaldır",
-                    f"{minimum_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} sayfaya çıkar",
+                    f"{actual_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} sayfaya çıkar",
                     "Ölçüleri kendim ayarlayacağım",
-                ],
+                ]
+            result.update({
+                "needs_clarification": True,
+                "clarification_question": question,
+                "clarification_options": options,
                 "assistant_message": "Hedefi ölçtüm; okunabilirliği bozmadan kararını bekliyorum.",
                 "fit_report": report,
                 "operations": [],

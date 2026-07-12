@@ -599,18 +599,44 @@ def _compact_page_settings(raw_settings: Any, factor: float) -> dict[str, Any]:
     """Scale typography and usable paper area as one physically coherent unit."""
     source = dict(raw_settings) if isinstance(raw_settings, dict) else {}
     units = _fit_units(source)
-    compactness = 1.0 - _clamp(factor, 0.35, 1.0, 1.0)
-    letter_height = max(5.5, units["letter_height_mm"] * factor)
+    factor = _clamp(factor, 0.0, 1.0, 1.0)
+
+    def toward_minimum(value: float, minimum: float) -> float:
+        return minimum + (value - minimum) * factor
+
     candidate = dict(source)
     candidate.update({
-        "letter_height_mm": round(letter_height, 3),
-        "line_spacing_mm": round(max(7.0, min(units["line_spacing_mm"] * factor, letter_height * 1.58)), 3),
-        "letter_spacing_mm": round(max(-0.7, units["letter_spacing_mm"] * factor - compactness * 0.7), 3),
-        "word_spacing_mm": round(max(1.5, units["word_spacing_mm"] * factor), 3),
-        "margin_left_mm": round(max(8.0, units["margin_left_mm"] - compactness * 10.0), 3),
-        "margin_right_mm": round(max(8.0, units["margin_right_mm"] - compactness * 10.0), 3),
-        "margin_top_mm": round(max(8.0, units["margin_top_mm"] - compactness * 12.0), 3),
-        "margin_bottom_mm": round(max(8.0, units["margin_bottom_mm"] - compactness * 12.0), 3),
+        "letter_height_mm": round(toward_minimum(units["letter_height_mm"], 5.5), 3),
+        "line_spacing_mm": round(toward_minimum(units["line_spacing_mm"], 7.0), 3),
+        "letter_spacing_mm": round(toward_minimum(units["letter_spacing_mm"], -0.7), 3),
+        "word_spacing_mm": round(toward_minimum(units["word_spacing_mm"], 1.5), 3),
+        "margin_left_mm": round(toward_minimum(units["margin_left_mm"], 8.0), 3),
+        "margin_right_mm": round(toward_minimum(units["margin_right_mm"], 8.0), 3),
+        "margin_top_mm": round(toward_minimum(units["margin_top_mm"], 8.0), 3),
+        "margin_bottom_mm": round(toward_minimum(units["margin_bottom_mm"], 8.0), 3),
+    })
+    return candidate
+
+
+def _expand_page_settings(raw_settings: Any, factor: float) -> dict[str, Any]:
+    """Increase visual density only when a user explicitly requests more pages."""
+    source = dict(raw_settings) if isinstance(raw_settings, dict) else {}
+    units = _fit_units(source)
+    progress = _clamp((float(factor) - 1.0) / 3.0, 0.0, 1.0, 0.0)
+
+    def toward_maximum(value: float, maximum: float) -> float:
+        return value + (maximum - value) * progress
+
+    candidate = dict(source)
+    candidate.update({
+        "letter_height_mm": round(toward_maximum(units["letter_height_mm"], 20.0), 3),
+        "line_spacing_mm": round(toward_maximum(units["line_spacing_mm"], 32.0), 3),
+        "letter_spacing_mm": round(toward_maximum(units["letter_spacing_mm"], 3.0), 3),
+        "word_spacing_mm": round(toward_maximum(units["word_spacing_mm"], 12.0), 3),
+        "margin_left_mm": round(toward_maximum(units["margin_left_mm"], 40.0), 3),
+        "margin_right_mm": round(toward_maximum(units["margin_right_mm"], 40.0), 3),
+        "margin_top_mm": round(toward_maximum(units["margin_top_mm"], 45.0), 3),
+        "margin_bottom_mm": round(toward_maximum(units["margin_bottom_mm"], 45.0), 3),
     })
     return candidate
 
@@ -624,6 +650,9 @@ def _fit_report(
     after_units = _fit_units(after)
     return {
         "fits": fits,
+        "constraint": "exact" if fits else (
+            "overflow" if actual_pages is None or actual_pages > target else "underflow"
+        ),
         "requested_pages": target,
         "original_pages": original_pages,
         "actual_pages": actual_pages,
@@ -641,7 +670,7 @@ def fit_layout_to_page_target(
     target_pages: int,
     secondary_harfler: dict[str, list[Image.Image]] | None = None,
 ) -> dict[str, Any]:
-    """Deterministically fit a document to an exact maximum page count.
+    """Deterministically solve a document for an exact requested page count.
 
     The language model chooses content and intent; this function owns physical
     layout. It searches for the largest readable typography that fits, using the
@@ -658,7 +687,7 @@ def fit_layout_to_page_target(
         # Compact candidates below are still bounded by the same safety limits.
         pass
     original_pages = len(original_layout["pages"]) if original_layout else None
-    if original_layout and original_pages <= target:
+    if original_layout and original_pages == target:
         return {
             "success": True,
             "layout": original_layout,
@@ -668,6 +697,63 @@ def fit_layout_to_page_target(
                 target=target, original_pages=original_pages, actual_pages=original_pages,
                 before=base_settings, after=base_settings, adjusted=False,
                 removed_breaks=False, fits=True,
+            ),
+        }
+
+    if original_layout and original_pages < target:
+        def expand_attempt(factor: float) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+            candidate = _expand_page_settings(base_settings, factor)
+            try:
+                return build_layout(working_blocks, harfler, candidate, secondary_harfler), candidate
+            except AiDocumentError:
+                return None, candidate
+
+        # The maximum candidate reaches every user-facing upper bound. If that
+        # still leaves too little content, the AI must ask before inventing text.
+        max_layout, max_settings = expand_attempt(4.0)
+        if max_layout and len(max_layout["pages"]) < target:
+            actual_pages = len(max_layout["pages"])
+            return {
+                "success": False,
+                "layout": max_layout,
+                "blocks": working_blocks,
+                "settings": max_settings,
+                "report": _fit_report(
+                    target=target, original_pages=original_pages, actual_pages=actual_pages,
+                    before=base_settings, after=max_settings, adjusted=True,
+                    removed_breaks=False, fits=False,
+                ),
+            }
+
+        # Find the first expansion point that reaches the requested page count.
+        # At that point the document is as compact as possible for the request.
+        low, high = 1.0, 4.0
+        below_layout, below_settings = original_layout, base_settings
+        at_or_above_layout, at_or_above_settings = max_layout, max_settings
+        for _ in range(16):
+            midpoint = (low + high) / 2.0
+            layout, candidate = expand_attempt(midpoint)
+            if layout and len(layout["pages"]) >= target:
+                high = midpoint
+                at_or_above_layout, at_or_above_settings = layout, candidate
+            else:
+                low = midpoint
+                if layout:
+                    below_layout, below_settings = layout, candidate
+
+        candidate_layout = at_or_above_layout or below_layout
+        candidate_settings = at_or_above_settings if at_or_above_layout else below_settings
+        actual_pages = len(candidate_layout["pages"]) if candidate_layout else None
+        success = actual_pages == target
+        return {
+            "success": success,
+            "layout": candidate_layout,
+            "blocks": working_blocks,
+            "settings": candidate_settings,
+            "report": _fit_report(
+                target=target, original_pages=original_pages, actual_pages=actual_pages,
+                before=base_settings, after=candidate_settings, adjusted=True,
+                removed_breaks=False, fits=success,
             ),
         }
 
@@ -684,7 +770,7 @@ def fit_layout_to_page_target(
         except AiDocumentError:
             return None, candidate
 
-    minimum_layout, minimum_settings = attempt(0.35)
+    minimum_layout, minimum_settings = attempt(0.0)
     minimum_pages = len(minimum_layout["pages"]) if minimum_layout else None
     if not minimum_layout or minimum_pages > target:
         return {
@@ -699,9 +785,10 @@ def fit_layout_to_page_target(
             ),
         }
 
-    # Find the largest readable candidate that fits. Page count is monotonic for
-    # this coordinated scale model; 15 rounds provide sub-pixel precision on A4.
-    low, high = 0.35, 1.0
+    # Find the largest readable candidate that reaches the exact target. Page
+    # count is monotonic for this coordinated scale model; 16 rounds provide
+    # sub-pixel precision on A4 while keeping the response immediate.
+    low, high = 0.0, 1.0
     best_layout, best_settings = minimum_layout, minimum_settings
     for _ in range(15):
         midpoint = (low + high) / 2.0
@@ -713,15 +800,16 @@ def fit_layout_to_page_target(
             high = midpoint
 
     actual_pages = len(best_layout["pages"])
+    success = actual_pages == target
     return {
-        "success": True,
+        "success": success,
         "layout": best_layout,
         "blocks": working_blocks,
         "settings": best_settings,
         "report": _fit_report(
             target=target, original_pages=original_pages, actual_pages=actual_pages,
             before=base_settings, after=best_settings, adjusted=True,
-            removed_breaks=removed_breaks, fits=actual_pages <= target,
+            removed_breaks=removed_breaks, fits=success,
         ),
     }
 
@@ -1143,20 +1231,34 @@ def create_ai_layout(
         )
         fit_report = fit_result["report"]
         if not fit_result["success"]:
-            minimum_pages = fit_report.get("actual_pages")
-            minimum_text = str(minimum_pages) if minimum_pages else f"{MAX_PAGES}'den fazla"
-            return {
-                "needs_clarification": True,
-                "clarification_question": (
+            actual_pages = fit_report.get("actual_pages")
+            if fit_report.get("constraint") == "underflow":
+                question = (
+                    f"Bu metin en ferah okunabilir düzende bile {actual_pages or 1} sayfa oluyor. "
+                    f"{target_page_count} sayfaya doğal biçimde yaymak için nasıl ilerleyelim?"
+                )
+                options = [
+                    "Metni örnekler ve ayrıntılarla genişlet (önerilen)",
+                    "Harfleri büyüt ve daha ferah bir düzen kullan",
+                    f"{actual_pages or 1} sayfada bırak",
+                    "Ölçüleri kendim ayarlayacağım",
+                ]
+            else:
+                minimum_text = str(actual_pages) if actual_pages else f"{MAX_PAGES}'den fazla"
+                question = (
                     f"Bu metin seçili el yazısıyla okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
                     f"{target_page_count} sayfa hedefi için nasıl ilerleyelim?"
-                ),
-                "clarification_options": [
+                )
+                options = [
                     "Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)",
                     "Başlığı ve tekrarları kaldır",
-                    f"{minimum_pages or min(MAX_PAGES, target_page_count + 1)} sayfaya çıkar",
+                    f"{actual_pages or min(MAX_PAGES, target_page_count + 1)} sayfaya çıkar",
                     "Ölçüleri kendim ayarlayacağım",
-                ],
+                ]
+            return {
+                "needs_clarification": True,
+                "clarification_question": question,
+                "clarification_options": options,
                 "fit_report": fit_report,
                 "provider": provider,
                 "model": actual_model,
