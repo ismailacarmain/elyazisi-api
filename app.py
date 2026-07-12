@@ -7,6 +7,7 @@ import base64
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import json
+import copy
 import traceback
 import io
 import core_generator as core_generator
@@ -1732,10 +1733,17 @@ def _ai_error_response(exc):
 @app.route('/api/ai/status', methods=['GET'])
 @verified_login_required
 def ai_status():
+    copilot_model = os.environ.get('COPILOT_GEMINI_MODEL', ai_document.DEFAULT_GEMINI_MODEL)
+    try:
+        copilot_model = ai_document.validate_model(copilot_model)
+    except ValueError:
+        copilot_model = ai_document.DEFAULT_GEMINI_MODEL
     return jsonify({
         'success': True,
         'server_key_configured': bool(os.environ.get('GEMINI_API_KEY', '').strip()),
-        'default_model': 'gemini-1.5-flash',
+        'default_model': ai_document.DEFAULT_GEMINI_MODEL,
+        'allowed_models': list(ai_document.allowed_models()),
+        'copilot_model': copilot_model,
     })
 
 
@@ -1744,7 +1752,7 @@ def ai_status():
 def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
-        model = data.get('model', 'gemini-1.5-flash')
+        model = data.get('model', ai_document.DEFAULT_GEMINI_MODEL)
         ai_document.test_gemini_connection(_gemini_api_key(), model)
         return jsonify({'success': True, 'model': ai_document.validate_model(model)})
     except Exception as exc:
@@ -1785,7 +1793,7 @@ def ai_document_plan():
         elif source == 'ai':
             result = ai_document.create_ai_layout(
                 api_key=_gemini_api_key(),
-                model=data.get('model', 'gemini-1.5-flash'),
+                model=data.get('model', ai_document.DEFAULT_GEMINI_MODEL),
                 template=str(data.get('template', 'odev')),
                 topic=data.get('topic', ''),
                 instructions=data.get('instructions', ''),
@@ -1921,22 +1929,20 @@ def ai_generate_pdf():
 # ─── Fontify Copilot Engine endpoints ────────────────────────────────────────
 
 import ai_copilot as _cop
+import copilot_store as _store
 from flask import Response, stream_with_context
-
-_doc_store = {}
-_doc_store_lock = threading.Lock()
 
 MAX_COPILOT_HISTORY = 30
 MAX_COPILOT_DOCS = 500
 
 def _get_copilot_doc(document_id: str, user_id: str) -> dict:
-    with _doc_store_lock:
-        doc = _doc_store.get(document_id)
-    if doc is None:
-        raise _cop.CopilotError("Belge bulunamadı. Önce kaydedin.", 404)
-    if doc.get("user_id") != user_id:
-        raise _cop.CopilotError("Bu belgeye erişim yetkiniz yok.", 403)
-    return doc
+    try:
+        return _store.get_document(document_id, user_id)
+    except _store.CopilotStoreError as e:
+        raise _cop.CopilotError(str(e), e.status_code)
+    except Exception as e:
+        logger.error(f"Firestore error: {e}", exc_info=True)
+        raise _cop.CopilotError("Belge yüklenirken bir hata oluştu.", 500)
 
 def _copilot_error_response(exc: Exception):
     if isinstance(exc, _cop.CopilotError):
@@ -1946,6 +1952,84 @@ def _copilot_error_response(exc: Exception):
 
 def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _copilot_reflow_state(doc: dict, layout: dict, blocks: list, version: int) -> tuple[dict, list]:
+    """Rebuild wrapped lines from edited blocks using the document's real fonts."""
+    font_id = str(doc.get("font_id") or "").strip()
+    if not font_id:
+        raise _cop.CopilotError(
+            "Bu eski Copilot oturumunda font bilgisi eksik. Belgeyi bir kez yeniden oluşturun.",
+            409,
+        )
+
+    font_ref, _ = _font_access_for_user(font_id, doc["user_id"])
+    harfler = _load_font_images(font_ref)
+    secondary_harfler = None
+    secondary_id = str(doc.get("secondary_font_id") or "").strip()
+    if secondary_id:
+        secondary_ref, _ = _font_access_for_user(secondary_id, doc["user_id"])
+        secondary_harfler = _load_font_images(secondary_ref)
+
+    raw_settings = dict(doc.get("page_settings") or {})
+    patched_settings = layout.get("settings") if isinstance(layout.get("settings"), dict) else {}
+    for key in _cop.ALLOWED_DOC_SETTINGS_FIELDS:
+        if key in patched_settings:
+            raw_settings[key] = patched_settings[key]
+
+    patched_pages = layout.get("pages") if isinstance(layout.get("pages"), list) else []
+    if patched_pages:
+        first_page = patched_pages[0]
+        for px_key, mm_key in (
+            ("margin_top", "margin_top_mm"),
+            ("margin_bottom", "margin_bottom_mm"),
+            ("margin_left", "margin_left_mm"),
+            ("margin_right", "margin_right_mm"),
+            ("line_spacing", "line_spacing_mm"),
+        ):
+            if px_key in first_page:
+                raw_settings[mm_key] = ai_document.px_to_mm(first_page[px_key])
+        for key in (
+            "paper_type", "paper_age", "coffee_stains", "crease_effect",
+            "pen_dying_effect", "opacity", "kalinlik", "scale_jitter", "multi_author",
+        ):
+            if key in first_page:
+                raw_settings[key] = first_page[key]
+
+    rebuilt = ai_document.build_layout(blocks, harfler, raw_settings, secondary_harfler)
+    rebuilt["version"] = version
+
+    # Preserve page-specific visual overrides that do not alter text wrapping.
+    visual_fields = (
+        "paper_type", "paper_age", "coffee_stains", "crease_effect",
+        "pen_dying_effect", "opacity", "kalinlik", "scale_jitter", "multi_author",
+    )
+    for index, page in enumerate(rebuilt.get("pages", [])):
+        if index >= len(patched_pages):
+            break
+        for key in visual_fields:
+            if key in patched_pages[index]:
+                page[key] = patched_pages[index][key]
+
+    return _cop.ensure_document_ids(rebuilt, blocks)
+
+
+def _finalize_copilot_result(doc: dict, result: dict) -> dict:
+    """Ensure edited block text is actually rewrapped before state is committed."""
+    if result.get("reflow_needed"):
+        layout, blocks = _copilot_reflow_state(
+            doc,
+            result["new_layout"],
+            result["new_blocks"],
+            int(result["new_layout"].get("version", doc["version"] + 1)),
+        )
+        result["new_layout"] = layout
+        result["new_blocks"] = blocks
+    else:
+        layout, blocks = _cop.ensure_document_ids(result["new_layout"], result["new_blocks"])
+        result["new_layout"] = layout
+        result["new_blocks"] = blocks
+    return result
 
 @app.route("/api/ai/documents", methods=["POST", "OPTIONS"])
 @verified_login_required
@@ -1963,23 +2047,64 @@ def copilot_save_document():
         if len(blocks) > ai_document.MAX_BLOCKS:
             raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
 
-        document_id = str(uuid.uuid4())
+        layout, blocks = _cop.ensure_document_ids(layout, blocks)
+        font_id = str(data.get("font_id") or "").strip()
+        secondary_font_id = str(data.get("secondary_font_id") or "").strip()
+        if font_id:
+            _font_access_for_user(font_id, request.uid)
+        if secondary_font_id:
+            _font_access_for_user(secondary_font_id, request.uid)
+            if secondary_font_id == font_id:
+                raise _cop.CopilotError("İkinci font birinci fonttan farklı olmalı.")
+        raw_page_settings = data.get("page_settings") if isinstance(data.get("page_settings"), dict) else {}
+
         version = int(layout.get("version", 1))
-        with _doc_store_lock:
-            if len(_doc_store) >= MAX_COPILOT_DOCS:
-                oldest = min(_doc_store.keys(), key=lambda k: _doc_store[k].get("created_at", 0))
-                del _doc_store[oldest]
-            _doc_store[document_id] = {
-                "user_id": request.uid,
-                "layout": layout,
-                "blocks": blocks,
-                "version": version,
-                "history": [],
-                "redo_stack": [],
-                "created_at": time.time(),
-                "updated_at": time.time(),
-            }
-        return jsonify({"success": True, "document_id": document_id, "version": version})
+        document_id = _store.create_document(
+            user_id=request.uid,
+            font_id=font_id,
+            secondary_font_id=secondary_font_id,
+            page_settings=raw_page_settings,
+            version=version,
+            layout=layout,
+            blocks=blocks
+        )
+        return jsonify({
+            "success": True,
+            "document_id": document_id,
+            "version": version,
+            "layout": layout,
+            "blocks": blocks,
+        })
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/latest", methods=["GET", "OPTIONS"])
+@verified_login_required
+def copilot_get_latest_document():
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        doc = _store.get_latest_document(request.uid)
+        if not doc:
+            raise _cop.CopilotError("Belge bulunamadı.", 404)
+        page_hashes = {
+            page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+            for i, page in enumerate(doc["layout"].get("pages", []))
+        }
+        return jsonify({
+            "success": True,
+            "document_id": doc.get("id") or [k for k in doc if "id" in k], # Need to get document_id from store doc
+            "version": doc["version"],
+            "layout": doc["layout"],
+            "blocks": doc["blocks"],
+            "page_hashes": page_hashes,
+            "can_undo": len(doc.get("history", [])) > 0,
+            "can_redo": len(doc.get("redo_stack", [])) > 0,
+        })
+    except _store.CopilotStoreError as e:
+        return jsonify({"success": False, "message": str(e)}), e.status_code
+    except _cop.CopilotError as e:
+        return jsonify({"success": False, "message": str(e)}), e.status_code
     except Exception as exc:
         return _copilot_error_response(exc)
 
@@ -2030,29 +2155,70 @@ def copilot_edit_document(document_id: str):
         if client_version is not None and int(client_version) != doc["version"]:
             raise _cop.VersionConflictError()
 
+        # The user may have adjusted a line or page manually since the last AI
+        # operation. Accept that state as the next canonical base only when it
+        # belongs to the current document version; otherwise a stale tab could
+        # overwrite a newer Copilot edit.
+        client_layout = data.get("client_layout")
+        client_blocks = data.get("client_blocks")
+        page_settings_update = None
+        if client_layout is not None or client_blocks is not None:
+            if not isinstance(client_layout, dict) or not isinstance(client_blocks, list):
+                raise _cop.CopilotError("Güncel belge verisi geçersiz.")
+            if len(json.dumps(client_layout, ensure_ascii=False)) > 2_000_000:
+                raise _cop.CopilotError("Güncel layout çok büyük.", 413)
+            if len(client_blocks) > ai_document.MAX_BLOCKS:
+                raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
+            ai_document.validate_layout(client_layout)
+            base_layout, base_blocks = _cop.ensure_document_ids(client_layout, client_blocks)
+            base_version = int(client_version) if client_version is not None else int(doc["version"])
+            if isinstance(data.get("page_settings"), dict):
+                page_settings_update = data["page_settings"]
+        else:
+            base_version = int(doc["version"])
+            base_layout = copy.deepcopy(doc["layout"])
+            base_blocks = copy.deepcopy(doc["blocks"])
+
         if idempotency_key:
             for h in doc["history"]:
                 if h.get("idempotency_key") == idempotency_key:
-                    return jsonify({"success": True, "cached": True,
-                                    "version": doc["version"],
-                                    "assistant_message": h.get("instruction", "")})
+                    page_hashes = {
+                        page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+                        for i, page in enumerate(doc["layout"].get("pages", []))
+                    }
+                    return jsonify({
+                        "success": True,
+                        "cached": True,
+                        "version": doc["version"],
+                        "assistant_message": h.get("assistant_message") or "Önceki istek zaten uygulandı.",
+                        "operations": h.get("operations", []),
+                        "new_layout": doc["layout"],
+                        "new_blocks": doc["blocks"],
+                        "page_hashes": page_hashes,
+                        "affected_pages": list(page_hashes.keys()),
+                        "reflow_needed": True,
+                        "can_undo": bool(doc["history"]),
+                        "can_redo": bool(doc["redo_stack"]),
+                    })
 
         secondary_available = bool(doc["layout"].get("settings", {}).get("multi_author"))
-        model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
+        configured_model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
+        model = ai_document.validate_model(data.get("model") or configured_model)
         req_api_key = _gemini_api_key()
 
         def _run_edit():
-            return _cop.process_copilot_edit(
+            result = _cop.process_copilot_edit(
                 api_key=req_api_key,
                 model=model,
                 instruction=instruction,
-                layout=doc["layout"],
-                blocks=doc["blocks"],
+                layout=base_layout,
+                blocks=base_blocks,
                 selection=selection,
                 chat_history=chat_history[-10:],
                 secondary_font_available=secondary_available,
-                current_version=doc["version"],
+                current_version=base_version,
             )
+            return _finalize_copilot_result(doc, result)
 
         if use_streaming:
             def generate():
@@ -2072,22 +2238,24 @@ def copilot_edit_document(document_id: str):
                     yield _sse_event("patch", {"operations": result["operations"]})
 
                     new_version = result["new_layout"]["version"]
-                    with _doc_store_lock:
-                        doc["layout"] = result["new_layout"]
-                        doc["blocks"] = result["new_blocks"]
-                        doc["version"] = new_version
-                        doc["updated_at"] = time.time()
-                        record = _cop.make_operation_record(
-                            base_version=doc["version"] - 1,
-                            new_version=new_version,
-                            instruction=instruction,
-                            operations=result["operations"],
-                            inverse_operations=result["inverse_operations"],
-                            user_id=request.uid,
-                            idempotency_key=idempotency_key,
+                    record = _cop.make_operation_record(
+                        base_version=new_version - 1,
+                        new_version=new_version,
+                        instruction=instruction,
+                        operations=result["operations"],
+                        inverse_operations=result["inverse_operations"],
+                        user_id=request.uid,
+                        idempotency_key=idempotency_key,
+                        assistant_message=result["assistant_message"],
+                    )
+                    try:
+                        _store.update_document(
+                            document_id, request.uid, base_version, 
+                            result["new_layout"], result["new_blocks"], 
+                            record, page_settings_update
                         )
-                        doc["history"] = (doc["history"] + [record])[-MAX_COPILOT_HISTORY:]
-                        doc["redo_stack"] = []
+                    except _store.CopilotStoreError as e:
+                        raise _cop.CopilotError(str(e), e.status_code)
 
                     page_hashes = {
                         page.get("id", f"p{i}"): _cop.layout_page_hash(page)
@@ -2134,22 +2302,24 @@ def copilot_edit_document(document_id: str):
                 })
 
             new_version = result["new_layout"]["version"]
-            with _doc_store_lock:
-                doc["layout"] = result["new_layout"]
-                doc["blocks"] = result["new_blocks"]
-                doc["version"] = new_version
-                doc["updated_at"] = time.time()
-                record = _cop.make_operation_record(
-                    base_version=new_version - 1,
-                    new_version=new_version,
-                    instruction=instruction,
-                    operations=result["operations"],
-                    inverse_operations=result["inverse_operations"],
-                    user_id=request.uid,
-                    idempotency_key=idempotency_key,
+            record = _cop.make_operation_record(
+                base_version=new_version - 1,
+                new_version=new_version,
+                instruction=instruction,
+                operations=result["operations"],
+                inverse_operations=result["inverse_operations"],
+                user_id=request.uid,
+                idempotency_key=idempotency_key,
+                assistant_message=result["assistant_message"],
+            )
+            try:
+                _store.update_document(
+                    document_id, request.uid, base_version, 
+                    result["new_layout"], result["new_blocks"], 
+                    record, page_settings_update
                 )
-                doc["history"] = (doc["history"] + [record])[-MAX_COPILOT_HISTORY:]
-                doc["redo_stack"] = []
+            except _store.CopilotStoreError as e:
+                raise _cop.CopilotError(str(e), e.status_code)
 
             page_hashes = {
                 page.get("id", f"p{i}"): _cop.layout_page_hash(page)
@@ -2191,23 +2361,32 @@ def copilot_undo(document_id: str):
         clean_inv = _cop.validate_and_sanitize_operations(
             inverse_ops, doc["layout"], doc["blocks"],
             secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+            trusted_internal=True,
         )
         new_layout, new_blocks, redo_inv = _cop.apply_operations(
             clean_inv, doc["layout"], doc["blocks"]
         )
         new_version = doc["version"] + 1
-        new_layout["version"] = new_version
+        if _cop.operations_require_reflow(clean_inv):
+            new_layout, new_blocks = _copilot_reflow_state(
+                doc, new_layout, new_blocks, new_version
+            )
+        else:
+            new_layout["version"] = new_version
+            new_layout, new_blocks = _cop.ensure_document_ids(new_layout, new_blocks)
 
-        with _doc_store_lock:
-            doc["redo_stack"] = (doc["redo_stack"] + [{
-                **record,
-                "inverse_operations": redo_inv,
-            }])[-MAX_COPILOT_HISTORY:]
+        redo_record = {
+            **record,
+            "inverse_operations": redo_inv,
+        }
+        try:
+            _store.undo_document(
+                document_id, request.uid, doc["version"], 
+                new_layout, new_blocks, redo_record
+            )
             doc["history"] = doc["history"][:-1]
-            doc["layout"] = new_layout
-            doc["blocks"] = new_blocks
-            doc["version"] = new_version
-            doc["updated_at"] = time.time()
+        except _store.CopilotStoreError as e:
+            raise _cop.CopilotError(str(e), e.status_code)
 
         page_hashes = {
             page.get("id", f"p{i}"): _cop.layout_page_hash(page)
@@ -2249,15 +2428,23 @@ def copilot_redo(document_id: str):
             clean_ops, doc["layout"], doc["blocks"]
         )
         new_version = doc["version"] + 1
-        new_layout["version"] = new_version
+        if _cop.operations_require_reflow(clean_ops):
+            new_layout, new_blocks = _copilot_reflow_state(
+                doc, new_layout, new_blocks, new_version
+            )
+        else:
+            new_layout["version"] = new_version
+            new_layout, new_blocks = _cop.ensure_document_ids(new_layout, new_blocks)
 
-        with _doc_store_lock:
-            doc["history"] = (doc["history"] + [{**record, "inverse_operations": inv}])[-MAX_COPILOT_HISTORY:]
+        hist_record = {**record, "inverse_operations": inv}
+        try:
+            _store.redo_document(
+                document_id, request.uid, doc["version"], 
+                new_layout, new_blocks, hist_record
+            )
             doc["redo_stack"] = doc["redo_stack"][:-1]
-            doc["layout"] = new_layout
-            doc["blocks"] = new_blocks
-            doc["version"] = new_version
-            doc["updated_at"] = time.time()
+        except _store.CopilotStoreError as e:
+            raise _cop.CopilotError(str(e), e.status_code)
 
         page_hashes = {
             page.get("id", f"p{i}"): _cop.layout_page_hash(page)
