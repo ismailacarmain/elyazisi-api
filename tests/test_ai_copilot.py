@@ -271,6 +271,13 @@ class TestCopilotOperations(unittest.TestCase):
         ops = [{"operation": "reflow_scope"}] * (cop.MAX_OPERATIONS_PER_REQUEST + 1)
         with self.assertRaises(cop.CopilotError):
             cop.validate_and_sanitize_operations(ops, layout, blocks)
+        internal_ops = [{"operation": "reflow_scope"}] * (cop.MAX_OPERATIONS_PER_REQUEST + 2)
+        self.assertEqual(
+            len(internal_ops),
+            len(cop.validate_and_sanitize_operations(
+                internal_ops, layout, blocks, trusted_internal=True
+            )),
+        )
 
     # 14. Çok uzun talimat reddedilir (process_copilot_edit seviyesinde)
     def test_too_long_instruction_rejected(self):

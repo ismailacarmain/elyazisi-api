@@ -176,6 +176,70 @@ class AiDocumentTests(unittest.TestCase):
         self.assertIn("is_margin_note", schema["properties"]["blocks"]["items"]["properties"])
         self.assertIn("author_slot", schema["properties"]["blocks"]["items"]["properties"])
         self.assertIn("coffee_stains", schema["properties"]["page_settings_override"]["properties"])
+        self.assertIn("target_page_count", schema["properties"]["page_settings_override"]["properties"])
+
+    def test_last_explicit_page_count_wins_after_clarification(self):
+        self.assertEqual(1, ai_document.requested_page_count("Tek A4 sayfa olsun"))
+        self.assertEqual(
+            2,
+            ai_document.requested_page_count(
+                "1 sayfa olsun\n[Soru: Nasıl ilerleyelim? Cevabım: 2 sayfaya çıkar]"
+            ),
+        )
+        self.assertIsNone(ai_document.requested_page_count("Kısa ve düzenli bir ödev hazırla"))
+
+    def test_page_fit_solver_uses_largest_readable_real_metric_layout(self):
+        blocks = [{"type": "paragraph", "text": "abc " * 400, "page_break_before": False}]
+        result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {
+            "letter_height_mm": 14,
+            "line_spacing_mm": 20,
+            "margin_left_mm": 18,
+            "margin_right_mm": 18,
+            "margin_top_mm": 18,
+            "margin_bottom_mm": 18,
+        }, 1)
+        self.assertTrue(result["success"])
+        self.assertEqual(1, len(result["layout"]["pages"]))
+        self.assertGreater(result["report"]["original_pages"], 1)
+        self.assertEqual(1, result["report"]["actual_pages"])
+        self.assertLess(
+            result["report"]["settings_after"]["letter_height_mm"],
+            result["report"]["settings_before"]["letter_height_mm"],
+        )
+
+    def test_page_fit_solver_refuses_unreadable_one_page_result(self):
+        blocks = [{"type": "paragraph", "text": "abc " * 1500, "page_break_before": False}]
+        result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {
+            "letter_height_mm": 14,
+            "line_spacing_mm": 20,
+        }, 1)
+        self.assertFalse(result["success"])
+        self.assertFalse(result["report"]["fits"])
+        self.assertGreater(result["report"]["actual_pages"], 1)
+        self.assertEqual(5.5, result["report"]["settings_after"]["letter_height_mm"])
+
+    @patch("ai_document.call_gemini")
+    def test_impossible_page_target_returns_clarification_instead_of_wrong_pdf(self, mock_call):
+        mock_call.return_value = {
+            "needs_clarification": False,
+            "document_title": "Uzun Ödev",
+            "blocks": [{"type": "paragraph", "text": "abc " * 1500}],
+            "page_settings_override": {"target_page_count": 1},
+            "summary": "Hazır",
+        }
+        result = ai_document.create_ai_layout(
+            api_key="x" * 24,
+            model="gemini-3.5-flash",
+            template="odev",
+            topic="Uzun bir ödev",
+            instructions="Tam olarak 1 sayfa olsun",
+            harfler=fake_font(),
+            repetition=1,
+            page_settings={"letter_height_mm": 14, "line_spacing_mm": 20},
+        )
+        self.assertTrue(result["needs_clarification"])
+        self.assertFalse(result["fit_report"]["fits"])
+        self.assertIn("akıllıca kısalt", result["clarification_options"][0])
 
     def test_multi_author_switches_fonts_by_block(self):
         blocks = [

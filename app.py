@@ -265,9 +265,9 @@ def init_firebase():
             if not firebase_admin._apps:
                 firebase_admin.initialize_app(cred)
             db = firestore.client()
-            logger.info(f"âœ… FIREBASE BAÅARIYLA BAÄLANDI | Proje: {connected_project_id}")
+            logger.info(f"FIREBASE BAGLANTISI BASARILI | Proje: {connected_project_id}")
         else:
-            logger.error("âŒ Firebase baÅŸlatÄ±lamadÄ±: GeÃ§erli bir anahtar yok.")
+            logger.error("Firebase baslatilamadi: Gecerli bir anahtar yok.")
             
     except Exception as e:
         init_error = str(e)
@@ -2014,7 +2014,10 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _copilot_reflow_state(doc: dict, layout: dict, blocks: list, version: int) -> tuple[dict, list]:
+def _copilot_reflow_state(
+    doc: dict, layout: dict, blocks: list, version: int,
+    target_pages: int | None = None,
+) -> tuple[dict, list, dict | None]:
     """Rebuild wrapped lines from edited blocks using the document's real fonts."""
     font_id = str(doc.get("font_id") or "").strip()
     if not font_id:
@@ -2056,8 +2059,25 @@ def _copilot_reflow_state(doc: dict, layout: dict, blocks: list, version: int) -
             if key in first_page:
                 raw_settings[key] = first_page[key]
 
-    rebuilt = ai_document.build_layout(blocks, harfler, raw_settings, secondary_harfler)
+    fit_result = None
+    if target_pages:
+        fit_result = ai_document.fit_layout_to_page_target(
+            blocks, harfler, raw_settings, target_pages, secondary_harfler
+        )
+        rebuilt = fit_result.get("layout")
+        if rebuilt is None:
+            rebuilt = layout
+        blocks = fit_result.get("blocks") or blocks
+        if fit_result.get("success"):
+            raw_settings = fit_result["settings"]
+    else:
+        rebuilt = ai_document.build_layout(blocks, harfler, raw_settings, secondary_harfler)
     rebuilt["version"] = version
+
+    # Keep millimetric typography values at the canonical layout root. This is
+    # what makes target-page fitting survive later edits, undo/redo and restores.
+    if fit_result and fit_result.get("success"):
+        rebuilt.setdefault("settings", {}).update(fit_result["report"]["settings_after"])
 
     # Preserve page-specific visual overrides that do not alter text wrapping.
     visual_fields = (
@@ -2071,18 +2091,90 @@ def _copilot_reflow_state(doc: dict, layout: dict, blocks: list, version: int) -
             if key in patched_pages[index]:
                 page[key] = patched_pages[index][key]
 
-    return _cop.ensure_document_ids(rebuilt, blocks)
+    rebuilt, blocks = _cop.ensure_document_ids(rebuilt, blocks)
+    return rebuilt, blocks, fit_result
 
 
 def _finalize_copilot_result(doc: dict, result: dict) -> dict:
     """Ensure edited block text is actually rewrapped before state is committed."""
-    if result.get("reflow_needed"):
-        layout, blocks = _copilot_reflow_state(
+    if result.get("needs_clarification"):
+        return result
+
+    target_pages = result.get("target_page_count")
+    if result.get("reflow_needed") or target_pages:
+        layout, blocks, fit_result = _copilot_reflow_state(
             doc,
             result["new_layout"],
             result["new_blocks"],
             int(result["new_layout"].get("version", doc["version"] + 1)),
+            target_pages,
         )
+        if fit_result and not fit_result.get("success"):
+            report = fit_result["report"]
+            minimum_pages = report.get("actual_pages")
+            minimum_text = str(minimum_pages) if minimum_pages else f"{ai_document.MAX_PAGES}'den fazla"
+            result.update({
+                "needs_clarification": True,
+                "clarification_question": (
+                    f"Bu metin okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
+                    f"{target_pages} sayfa hedefi için nasıl ilerleyeyim?"
+                ),
+                "clarification_options": [
+                    "Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)",
+                    "Başlığı ve tekrarları kaldır",
+                    f"{minimum_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} sayfaya çıkar",
+                    "Ölçüleri kendim ayarlayacağım",
+                ],
+                "assistant_message": "Hedefi ölçtüm; okunabilirliği bozmadan kararını bekliyorum.",
+                "fit_report": report,
+                "operations": [],
+                "inverse_operations": [],
+                "reflow_needed": False,
+            })
+            return result
+
+        if fit_result:
+            report = fit_result["report"]
+            after = report["settings_after"]
+            before = report["settings_before"]
+            doc_fields = ("letter_height_mm", "line_spacing_mm", "letter_spacing_mm", "word_spacing_mm")
+            page_field_map = {
+                "margin_top": "margin_top_mm", "margin_bottom": "margin_bottom_mm",
+                "margin_left": "margin_left_mm", "margin_right": "margin_right_mm",
+                "line_spacing": "line_spacing_mm",
+            }
+            fit_operations = [{
+                "operation": "update_document_settings",
+                "patch": {key: after[key] for key in doc_fields},
+            }, {
+                "operation": "update_page_settings",
+                "target_id": "",
+                "patch": {
+                    px_key: int(round(after[mm_key] * ai_document.PX_PER_MM))
+                    for px_key, mm_key in page_field_map.items()
+                },
+            }]
+            fit_inverse = [{
+                "operation": "update_page_settings",
+                "target_id": "",
+                "patch": {
+                    px_key: int(round(before[mm_key] * ai_document.PX_PER_MM))
+                    for px_key, mm_key in page_field_map.items()
+                },
+            }, {
+                "operation": "update_document_settings",
+                "patch": {key: before[key] for key in doc_fields},
+            }]
+            result["operations"] = list(result.get("operations") or []) + fit_operations
+            result["inverse_operations"] = fit_inverse + list(result.get("inverse_operations") or [])
+            result["fit_report"] = report
+            result["page_settings_update"] = fit_result["settings"]
+            result["reflow_needed"] = True
+            result["assistant_message"] = (
+                f"Belgeyi {report['actual_pages']} sayfaya gerçek font ölçüleriyle sığdırdım: "
+                f"harf {after['letter_height_mm']:.2f} mm, satır {after['line_spacing_mm']:.2f} mm, "
+                f"kelime aralığı {after['word_spacing_mm']:.2f} mm."
+            )
         result["new_layout"] = layout
         result["new_blocks"] = blocks
     else:
@@ -2289,6 +2381,7 @@ def copilot_edit_document(document_id: str):
                 current_version=base_version,
                 provider_config=provider_config,
             )
+            result["target_page_count"] = ai_document.requested_page_count(instruction)
             return _finalize_copilot_result(doc, result)
 
         if use_streaming:
@@ -2303,6 +2396,7 @@ def copilot_edit_document(document_id: str):
                             "message": result["assistant_message"],
                             "provider": result.get("provider"),
                             "model": result.get("model"),
+                            "fit_report": result.get("fit_report"),
                         })
                         yield _sse_event("complete", {"message": result["assistant_message"]})
                         return
@@ -2311,6 +2405,7 @@ def copilot_edit_document(document_id: str):
                         "message": result["assistant_message"],
                         "provider": result.get("provider"),
                         "model": result.get("model"),
+                        "fit_report": result.get("fit_report"),
                     })
                     yield _sse_event("patch", {"operations": result["operations"]})
 
@@ -2329,7 +2424,7 @@ def copilot_edit_document(document_id: str):
                         _store.update_document(
                             document_id, request.uid, base_version, 
                             result["new_layout"], result["new_blocks"], 
-                            record, page_settings_update
+                            record, result.get("page_settings_update") or page_settings_update
                         )
                     except _store.CopilotStoreError as e:
                         raise _cop.CopilotError(str(e), e.status_code)
@@ -2350,6 +2445,7 @@ def copilot_edit_document(document_id: str):
                         "can_redo": False,
                         "provider": result.get("provider"),
                         "model": result.get("model"),
+                        "fit_report": result.get("fit_report"),
                     })
                     yield _sse_event("complete", {"message": result["assistant_message"]})
 
@@ -2379,6 +2475,7 @@ def copilot_edit_document(document_id: str):
                     "assistant_message": result["assistant_message"],
                     "provider": result.get("provider"),
                     "model": result.get("model"),
+                    "fit_report": result.get("fit_report"),
                     "version": doc["version"],
                 })
 
@@ -2397,7 +2494,7 @@ def copilot_edit_document(document_id: str):
                 _store.update_document(
                     document_id, request.uid, base_version, 
                     result["new_layout"], result["new_blocks"], 
-                    record, page_settings_update
+                    record, result.get("page_settings_update") or page_settings_update
                 )
             except _store.CopilotStoreError as e:
                 raise _cop.CopilotError(str(e), e.status_code)
@@ -2421,6 +2518,7 @@ def copilot_edit_document(document_id: str):
                 "can_redo": False,
                 "provider": result.get("provider"),
                 "model": result.get("model"),
+                "fit_report": result.get("fit_report"),
             })
 
     except Exception as exc:
@@ -2451,7 +2549,7 @@ def copilot_undo(document_id: str):
         )
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_inv):
-            new_layout, new_blocks = _copilot_reflow_state(
+            new_layout, new_blocks, _ = _copilot_reflow_state(
                 doc, new_layout, new_blocks, new_version
             )
         else:
@@ -2506,13 +2604,14 @@ def copilot_redo(document_id: str):
         clean_ops = _cop.validate_and_sanitize_operations(
             redo_ops, doc["layout"], doc["blocks"],
             secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+            trusted_internal=True,
         )
         new_layout, new_blocks, inv = _cop.apply_operations(
             clean_ops, doc["layout"], doc["blocks"]
         )
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_ops):
-            new_layout, new_blocks = _copilot_reflow_state(
+            new_layout, new_blocks, _ = _copilot_reflow_state(
                 doc, new_layout, new_blocks, new_version
             )
         else:

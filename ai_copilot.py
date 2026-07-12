@@ -316,8 +316,9 @@ def validate_and_sanitize_operations(
     """Her operasyonu whitelist + alan + hedef doğrulamasından geçir."""
     if not isinstance(operations, list):
         raise CopilotError("'operations' bir liste olmalı.")
-    if len(operations) > MAX_OPERATIONS_PER_REQUEST:
-        raise CopilotError(f"Tek istekte en fazla {MAX_OPERATIONS_PER_REQUEST} operasyon uygulanabilir.")
+    operation_limit = MAX_OPERATIONS_PER_REQUEST + 2 if trusted_internal else MAX_OPERATIONS_PER_REQUEST
+    if len(operations) > operation_limit:
+        raise CopilotError(f"Tek istekte en fazla {operation_limit} operasyon uygulanabilir.")
 
     clean_ops: list[dict] = []
     for i, op in enumerate(operations):
@@ -847,6 +848,9 @@ TEMEL KURALLAR:
 - Kullanıcı istemediği sürece belgenin diğer bölümlerini değiştirme.
 - Büyük silme/değiştirme işlemlerinde clarification iste.
 - Koordinatları A4 sınırları içinde tut (210x297mm).
+- Kullanıcı kesin sayfa sayısı isterse ölçüleri tahmin etme. Gerekli içerik değişikliğini operasyonlarla yap,
+  reflow_needed: true döndür; gerçek font metrikleriyle kesin sığdırmayı sunucu yapar. Önceki soruya eklenmiş
+  [Soru: ... Cevap: ...] bölümündeki en son cevabı bağlayıcı kabul et.
 - Kısa ve anlaşılır Türkçe mesaj ver. İç düşünce/chain-of-thought döndürme.
 - Sadece gerçekten belirsizlik varsa soru sor.
 
