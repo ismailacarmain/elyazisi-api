@@ -157,6 +157,32 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertTrue(bounded.startswith("opening"))
         self.assertTrue(bounded.endswith("FINAL CONSTRAINT"))
 
+    def test_malformed_json_plan_is_rejected_then_falls_back(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"needs_clarification":false,"blocks":[{"text":"ok"}]}'}}]
+        })
+
+        def require_document_blocks(value):
+            if not isinstance(value.get("blocks"), list):
+                raise ValueError("blocks missing")
+
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            parsed, provider, _ = ai_provider.call_structured_with_fallback(
+                config={
+                    "gemini_key": "AIza" + "x" * 32,
+                    "groq_key": "gsk_" + "y" * 32,
+                },
+                gemini_call=lambda _key: {"needs_clarification": False},
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+                result_validator=require_document_blocks,
+            )
+        self.assertEqual("groq", provider)
+        self.assertEqual("ok", parsed["blocks"][0]["text"])
+        self.assertEqual(1, post.call_count)
+
     def test_missing_provider_configuration_is_actionable(self):
         with self.assertRaises(ai_provider.AiProviderError) as ctx:
             ai_provider.call_structured_with_fallback(

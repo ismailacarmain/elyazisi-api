@@ -173,10 +173,22 @@ class AiDocumentTests(unittest.TestCase):
         schema = ai_document._response_schema()
         self.assertEqual("OBJECT", schema["type"])
         self.assertNotIn("additionalProperties", schema)
+        self.assertIn("blocks", schema["required"])
         self.assertIn("is_margin_note", schema["properties"]["blocks"]["items"]["properties"])
         self.assertIn("author_slot", schema["properties"]["blocks"]["items"]["properties"])
         self.assertIn("coffee_stains", schema["properties"]["page_settings_override"]["properties"])
         self.assertIn("target_page_count", schema["properties"]["page_settings_override"]["properties"])
+
+    def test_document_plan_contract_rejects_missing_blocks_for_generation(self):
+        with self.assertRaises(ai_document.GeminiServiceError):
+            ai_document.validate_document_plan({"needs_clarification": False})
+
+    def test_document_plan_contract_allows_clarification_with_empty_blocks(self):
+        ai_document.validate_document_plan({
+            "needs_clarification": True,
+            "blocks": [],
+            "clarification_question": "Hangi kağıt türü?",
+        })
 
     def test_last_explicit_page_count_wins_after_clarification(self):
         self.assertEqual(1, ai_document.requested_page_count("Tek A4 sayfa olsun"))

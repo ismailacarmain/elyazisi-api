@@ -8,11 +8,13 @@ document limit. All state transitions go through one optimistic transaction.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Any, Optional
 
 from firebase_admin import firestore
+from google.api_core.exceptions import FailedPrecondition
 from google.cloud.firestore_v1 import Query
 from google.cloud.firestore_v1.transaction import Transaction
 
@@ -22,6 +24,9 @@ MAX_PAGES = 20
 MAX_HISTORY = 30
 MAX_SUBDOCUMENT_BYTES = 850_000
 MAX_SETTINGS_BYTES = 96_000
+MAX_LATEST_DOCUMENT_SCAN = 100
+
+logger = logging.getLogger(__name__)
 
 
 class CopilotStoreError(Exception):
@@ -91,27 +96,41 @@ def _document_ref(document_id: str):
     return _db().collection("ai_copilot_documents").document(document_id)
 
 
+def _mapping(value: Any) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _child_data(doc_ref, name: str, order_field: str) -> list[dict]:
+    values: list[dict] = []
+    for snapshot in doc_ref.collection(name).order_by(order_field).stream():
+        wrapper = snapshot.to_dict()
+        item = wrapper.get("data") if isinstance(wrapper, dict) else None
+        if isinstance(item, dict):
+            values.append(item)
+    return values
+
+
+def _child_records(doc_ref, name: str) -> list[dict]:
+    records: list[dict] = []
+    for snapshot in doc_ref.collection(name).order_by("sequence").stream():
+        value = snapshot.to_dict()
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
 def _load_document_state(doc_ref, doc_data: dict) -> dict:
-    blocks = [
-        snapshot.to_dict().get("data")
-        for snapshot in doc_ref.collection("blocks").order_by("index").stream()
-    ]
-    pages = [
-        snapshot.to_dict().get("data")
-        for snapshot in doc_ref.collection("pages").order_by("index").stream()
-    ]
-    history = [
-        snapshot.to_dict()
-        for snapshot in doc_ref.collection("history").order_by("sequence").stream()
-    ]
-    redo_stack = [
-        snapshot.to_dict()
-        for snapshot in doc_ref.collection("redo").order_by("sequence").stream()
-    ]
-    metadata = dict(doc_data.get("layout_meta") or {})
+    blocks = _child_data(doc_ref, "blocks", "index")
+    pages = _child_data(doc_ref, "pages", "index")
+    history = _child_records(doc_ref, "history")
+    redo_stack = _child_records(doc_ref, "redo")
+    layout_settings = doc_data.get("layout_settings")
+    if not isinstance(layout_settings, dict):
+        layout_settings = doc_data.get("page_settings")
+    metadata = _mapping(doc_data.get("layout_meta"))
     metadata.update({
         "version": doc_data.get("version", 1),
-        "settings": dict(doc_data.get("layout_settings") or doc_data.get("page_settings") or {}),
+        "settings": _mapping(layout_settings),
         "pages": pages,
     })
     doc_data["layout"] = metadata
@@ -165,6 +184,8 @@ def _owned_document(document_id: str, user_id: str) -> tuple[Any, dict]:
     if not snapshot.exists:
         raise CopilotStoreError("Belge bulunamadı.", 404)
     data = snapshot.to_dict()
+    if not isinstance(data, dict):
+        raise CopilotStoreError("Copilot belge verisi okunamıyor.", 503)
     if data.get("user_id") != user_id:
         raise CopilotStoreError("Bu belgeye erişim yetkiniz yok.", 403)
     data["id"] = document_id
@@ -173,25 +194,78 @@ def _owned_document(document_id: str, user_id: str) -> tuple[Any, dict]:
 
 def get_document(document_id: str, user_id: str) -> dict:
     doc_ref, data = _owned_document(document_id, user_id)
-    doc_ref.update({"last_accessed_at": time.time()})
+    _touch_document(doc_ref)
     return _load_document_state(doc_ref, data)
 
 
+def _touch_document(doc_ref) -> None:
+    """Access telemetry is noncritical and must not break a document restore."""
+    try:
+        doc_ref.update({"last_accessed_at": time.time()})
+    except Exception:
+        logger.warning("Copilot access timestamp could not be updated.")
+
+
+def _is_missing_index_error(exc: FailedPrecondition) -> bool:
+    message = str(exc).casefold()
+    return "index" in message and ("require" in message or "build" in message)
+
+
+def _timestamp_value(value: Any) -> float:
+    if hasattr(value, "timestamp"):
+        try:
+            return float(value.timestamp())
+        except (TypeError, ValueError, OverflowError):
+            pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _latest_active_snapshot_without_composite_index(collection, user_id: str):
+    """Small, owner-scoped fallback while Firestore builds the compound index."""
+    candidates: list[tuple[float, str, Any, dict]] = []
+    for snapshot in collection.where("user_id", "==", user_id).limit(MAX_LATEST_DOCUMENT_SCAN).stream():
+        data = snapshot.to_dict()
+        if not isinstance(data, dict) or data.get("status", "active") != "active":
+            continue
+        timestamp = _timestamp_value(data.get("updated_at", data.get("created_at", 0)))
+        candidates.append((timestamp, str(snapshot.id), snapshot, data))
+    if not candidates:
+        return None, None
+    _, _, snapshot, data = max(candidates, key=lambda item: (item[0], item[1]))
+    return snapshot, data
+
+
 def get_latest_document(user_id: str) -> Optional[dict]:
-    query = (
-        _db().collection("ai_copilot_documents")
-        .where("user_id", "==", user_id)
-        .where("status", "==", "active")
-        .order_by("updated_at", direction=Query.DESCENDING)
-        .limit(1)
-    )
-    snapshot = next(iter(query.stream()), None)
+    collection = _db().collection("ai_copilot_documents")
+    try:
+        query = (
+            collection.where("user_id", "==", user_id)
+            .where("status", "==", "active")
+            .order_by("updated_at", direction=Query.DESCENDING)
+            .limit(1)
+        )
+        snapshot = next(iter(query.stream()), None)
+        data = snapshot.to_dict() if snapshot is not None else None
+    except FailedPrecondition as exc:
+        if not _is_missing_index_error(exc):
+            raise CopilotStoreError("Copilot belge listesi şu anda okunamıyor.", 503) from exc
+        logger.warning("Copilot latest-document index is not ready; using bounded fallback scan.")
+        try:
+            snapshot, data = _latest_active_snapshot_without_composite_index(collection, user_id)
+        except Exception as scan_exc:
+            raise CopilotStoreError("Copilot belge listesi şu anda okunamıyor.", 503) from scan_exc
+    except Exception as exc:
+        raise CopilotStoreError("Copilot belge listesi şu anda okunamıyor.", 503) from exc
     if snapshot is None:
         return None
     doc_ref = snapshot.reference
-    data = snapshot.to_dict()
+    if not isinstance(data, dict):
+        return None
     data["id"] = snapshot.id
-    doc_ref.update({"last_accessed_at": time.time()})
+    _touch_document(doc_ref)
     return _load_document_state(doc_ref, data)
 
 

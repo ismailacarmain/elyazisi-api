@@ -355,6 +355,24 @@ def sanitize_blocks(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def validate_document_plan(value: Any) -> None:
+    """Validate the application contract before accepting a provider response.
+
+    A JSON-mode response can be syntactically valid while still omitting the
+    actual document blocks. This validator runs inside the provider failover
+    chain so such a response is retried instead of becoming a late renderer
+    error for the user.
+    """
+    if not isinstance(value, dict):
+        raise GeminiServiceError("AI belge planı nesne biçiminde değil.", 502)
+    needs_clarification = value.get("needs_clarification")
+    if not isinstance(needs_clarification, bool):
+        raise GeminiServiceError("AI belge planında needs_clarification alanı eksik.", 502)
+    if needs_clarification:
+        return
+    sanitize_blocks(value.get("blocks"))
+
+
 def _metrics_for_scale(
     harfler: dict[str, list[Image.Image]],
     scale: int,
@@ -1042,7 +1060,7 @@ def _response_schema() -> dict[str, Any]:
                 }
             }
         },
-        "required": ["needs_clarification"],
+        "required": ["needs_clarification", "blocks"],
     }
 
 
@@ -1092,6 +1110,7 @@ Kurallar:
   noktasından itibaren author_slot: secondary olarak işaretle. İlk yazar primary, ikinci yazar secondary kullanır.
 - Kağıt tipi veya renk belirtilmediyse güvenli varsayılanları kullan. Yalnızca belgeyi doğru üretmek için zorunlu bir bilgi gerçekten eksikse
   needs_clarification: true yap, tek soru sor ve en fazla dört seçenek sun.
+- needs_clarification true olsa bile blocks alanını boş dizi olarak (blocks: []) döndür. false ise blocks alanında en az bir metin bloğu zorunludur.
 - Çıktı yalnızca tanımlı JSON şemasına uysun.
 """
 
@@ -1203,15 +1222,17 @@ def create_ai_layout(
                 schema=_response_schema(),
                 schema_name="fontify_document_plan",
                 max_tokens=16_000,
+                result_validator=validate_document_plan,
             )
         except ai_provider.AiProviderError as exc:
             raise GeminiServiceError(str(exc), exc.status_code) from exc
     else:
         parsed = call_gemini(api_key or "", model, prompt, sample_parts[:6])
+        validate_document_plan(parsed)
         provider, actual_model = "gemini", validate_model(model)
     
     # Check if AI needs clarification from the user
-    if parsed.get("needs_clarification"):
+    if parsed.get("needs_clarification") is True:
         question = normalize_text(parsed.get("clarification_question", "Lütfen detayı belirtin:"), maximum=300)
         options = [
             normalize_text(option, maximum=120)

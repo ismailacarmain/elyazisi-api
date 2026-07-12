@@ -1,5 +1,6 @@
 ﻿import unittest
 from unittest.mock import patch, MagicMock
+from google.api_core.exceptions import FailedPrecondition
 
 # Patch the decorator before importing copilot_store
 import firebase_admin.firestore
@@ -190,6 +191,61 @@ class TestCopilotStore(unittest.TestCase):
         self.assertEqual([], loaded["history"])
         self.assertEqual([], loaded["redo_stack"])
         self.assertEqual(12, loaded["page_settings"]["letter_height_mm"])
+
+    def test_latest_document_uses_owner_scoped_scan_while_index_builds(self):
+        def snapshot(doc_id, data):
+            value = MagicMock()
+            value.id = doc_id
+            value.reference = MagicMock()
+            value.to_dict.return_value = data
+            return value
+
+        class IndexPendingCollection:
+            def __init__(self, snapshots):
+                self.snapshots = snapshots
+                self.requires_index = False
+
+            def where(self, *_args):
+                self.requires_index = False
+                return self
+
+            def order_by(self, field, direction=None):
+                self.requires_index = field == "updated_at"
+                return self
+
+            def limit(self, _value):
+                return self
+
+            def stream(self):
+                if self.requires_index:
+                    raise FailedPrecondition("The query requires an index")
+                return iter(self.snapshots)
+
+        collection = IndexPendingCollection([
+            snapshot("old-active", {"user_id": "user1", "status": "active", "updated_at": 1}),
+            snapshot("new-active", {"user_id": "user1", "status": "active", "updated_at": 3}),
+            snapshot("new-inactive", {"user_id": "user1", "status": "archived", "updated_at": 9}),
+        ])
+        fake_db = MagicMock()
+        fake_db.collection.return_value = collection
+        with patch("copilot_store._db", return_value=fake_db), patch(
+            "copilot_store._load_document_state", side_effect=lambda _ref, data: data
+        ):
+            latest = copilot_store.get_latest_document("user1")
+        self.assertEqual("new-active", latest["id"])
+
+    def test_legacy_children_without_data_are_ignored_safely(self):
+        ref = FakeDocRef("legacy")
+        ref.collection("blocks").document("0").data = {"index": 0}
+        ref.collection("pages").document("0").data = {"index": 0}
+        loaded = copilot_store._load_document_state(ref, {
+            "layout_meta": None,
+            "layout_settings": None,
+            "page_settings": None,
+        })
+        self.assertEqual([], loaded["blocks"])
+        self.assertEqual([], loaded["layout"]["pages"])
+        self.assertEqual({}, loaded["layout"]["settings"])
 
     def test_oversized_child_document_is_rejected(self):
         with self.assertRaises(CopilotStoreError) as ctx:

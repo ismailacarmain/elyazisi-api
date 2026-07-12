@@ -103,6 +103,30 @@ def _bounded_content(content: str, limit: int = 60_000) -> str:
     return content[:head] + marker + content[-tail:]
 
 
+def _validate_provider_result(
+    parsed: Any,
+    provider: str,
+    result_validator: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    """Reject structurally valid JSON that is not valid for this product flow.
+
+    JSON-mode providers can still return an object that omits application-level
+    fields. Treat that as a retryable provider-quality failure so a fallback
+    never gets accepted only to fail later in the document renderer.
+    """
+    if not isinstance(parsed, dict):
+        raise AiProviderError(f"{provider} JSON nesnesi döndürmedi.", 502, provider)
+    if result_validator is None:
+        return parsed
+    try:
+        result_validator(parsed)
+    except Exception as exc:
+        raise AiProviderError(
+            f"{provider} geçerli bir belge planı döndürmedi.", 502, provider
+        ) from exc
+    return parsed
+
+
 def _parse_openai_response(response: requests.Response, provider: str) -> dict[str, Any]:
     try:
         data = response.json()
@@ -213,6 +237,7 @@ def call_structured_with_fallback(
     schema: dict[str, Any],
     schema_name: str,
     max_tokens: int,
+    result_validator: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     """Try configured providers in a deterministic, cost-conscious order."""
     attempts: list[tuple[str, int]] = []
@@ -234,7 +259,10 @@ def call_structured_with_fallback(
             continue
         if provider == "gemini":
             try:
-                return gemini_call(key), "gemini", str(config.get("gemini_model") or "")
+                parsed = _validate_provider_result(
+                    gemini_call(key), "gemini", result_validator
+                )
+                return parsed, "gemini", str(config.get("gemini_model") or "")
             except Exception as exc:  # The caller owns the Gemini-specific error type.
                 normalized = _normalized_error("gemini", exc)
                 if not _is_transient_error(normalized):
@@ -253,6 +281,7 @@ def call_structured_with_fallback(
                 schema_name=schema_name,
                 max_tokens=max_tokens,
             )
+            parsed = _validate_provider_result(parsed, provider, result_validator)
             return parsed, provider, model
         except AiProviderError as exc:
             if not _is_transient_error(exc):
@@ -265,8 +294,15 @@ def call_structured_with_fallback(
             503,
         )
     providers = ", ".join(name for name, _ in attempts)
-    status = 429 if attempts and all(code == 429 for _, code in attempts) else 503
-    raise AiProviderError(f"AI sağlayıcıları şu anda yanıt veremiyor: {providers}.", status)
+    if attempts and all(code == 429 for _, code in attempts):
+        status = 429
+    elif attempts and all(code == 502 for _, code in attempts):
+        status = 502
+    else:
+        status = 503
+    raise AiProviderError(
+        f"AI sağlayıcıları geçerli bir belge planı üretemedi: {providers}.", status
+    )
 
 
 def test_provider_chain(
