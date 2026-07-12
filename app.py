@@ -58,7 +58,7 @@ ALLOWED_IMAGE_DOMAINS = [
 ]
 
 def is_safe_url(url):
-    """URL gÃ¼venlik kontrolÃ¼"""
+    """URL güvenlik kontrolü"""
     try:
         parsed = urlparse(url)
         
@@ -80,7 +80,7 @@ def is_safe_url(url):
         return False
 
 def validate_font_name(name):
-    """Font adÄ±nÄ± doÄŸrula"""
+    """Font adını doğrula"""
     if not name or not isinstance(name, str):
         raise ValueError("Font name required")
     
@@ -89,7 +89,7 @@ def validate_font_name(name):
     if len(name) < 3 or len(name) > 50:
         raise ValueError("Font name must be 3-50 characters")
     
-    # XSS ve path traversal korumasÄ±
+    # XSS ve path traversal koruması
     if re.search(r'[<>]', name):
         raise ValueError("Font name contains invalid characters")
     
@@ -99,29 +99,29 @@ def validate_font_name(name):
     return name
 
 def validate_base64_image(b64_string, max_size_mb=5):
-    """Base64 image doÄŸrula"""
+    """Base64 image doğrula"""
     try:
         if not b64_string or not isinstance(b64_string, str):
             raise ValueError("Invalid image data")
         
-        # Data URL prefix'ini kaldÄ±r
+        # Data URL prefix'ini kaldır
         if ',' in b64_string:
             b64_string = b64_string.split(',')[1]
         
         # Decode
         img_data = base64.b64decode(b64_string, validate=True)
         
-        # Boyut kontrolÃ¼
+        # Boyut kontrolü
         size_mb = len(img_data) / (1024 * 1024)
         if size_mb > max_size_mb:
             raise ValueError(f"Image too large: {size_mb:.1f}MB (max {max_size_mb}MB)")
         
-        # Format kontrolÃ¼
+        # Format kontrolü
         img = PILImage.open(io.BytesIO(img_data))
         if img.format not in ['JPEG', 'PNG', 'JPG']:
             raise ValueError(f"Invalid format: {img.format}")
         
-        # Dimension kontrolÃ¼
+        # Dimension kontrolü
         if img.width > 4000 or img.height > 4000:
             raise ValueError("Image dimensions too large")
         
@@ -183,9 +183,9 @@ def readiness():
 @app.route('/forms/<path:filename>')
 @app.route('/pdfler/<path:filename>')
 def serve_forms(filename):
-    # _ORNEK veya ORNEK taleplerini _DOLU olarak yÃ¶nlendir (frontend uyumu iÃ§in)
+    # _ORNEK veya ORNEK taleplerini _DOLU olarak yönlendir (frontend uyumu için)
     if "ORNEK" in filename:
-        # EÄŸer dosya adÄ±nda 1x, 3x gibi ibareler varsa onlarÄ± koru
+        # Eğer dosya adında 1x, 3x gibi ibareler varsa onları koru
         for v in ["1", "2", "3", "5", "10"]:
             if f"{v}x" in filename:
                 return send_file(os.path.join('static/forms', f"form_{v}x_DOLU.pdf"))
@@ -194,15 +194,15 @@ def serve_forms(filename):
     try:
         return send_file(os.path.join('static/forms', filename))
     except:
-        # Fallback: EÄŸer dosya bulunamazsa ama bir varyasyon isteniyorsa varsayÄ±lanÄ± ver
+        # Fallback: Eğer dosya bulunamazsa ama bir varyasyon isteniyorsa varsayılanı ver
         return send_file(os.path.join('static/forms', 'form_3x_BOS.pdf'))
 
-# --- FIREBASE BAÄLANTISI ---
+# --- FIREBASE BAĞLANTISI ---
 db = None
 connected_project_id = "BILINMIYOR"
 init_error = None
 
-# 2. GÃœVENLÄ°K: Secret Key Env Var (Koddan Silindi)
+# 2. GÜVENLİK: Secret Key Env Var (Koddan Silindi)
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 def verify_recaptcha(token):
@@ -239,31 +239,31 @@ def init_firebase():
             env_creds = env_creds.strip()
             logger.info(f"FIREBASE_CREDENTIALS bulundu. Uzunluk: {len(env_creds)} karakter.")
             
-            # JSON formatÄ±nÄ± zorla dÃ¼zeltmeye Ã§alÄ±ÅŸ (Render kopyalama hatalarÄ± iÃ§in)
+            # JSON formatını zorla düzeltmeye çalış (Render kopyalama hataları için)
             try:
                 cred_dict = json.loads(env_creds)
                 cred = credentials.Certificate(cred_dict)
                 connected_project_id = cred_dict.get('project_id', 'EnvJson')
             except json.JSONDecodeError as je:
-                logger.error(f"!!! KRÄ°TÄ°K: JSON FormatÄ± HatalÄ± !!! Hata: {je}")
-                # EÄŸer JSON tÄ±rnak hatasÄ± varsa basit bir tamir dene
+                logger.error(f"!!! KRİTİK: JSON Formatı Hatalı !!! Hata: {je}")
+                # Eğer JSON tırnak hatası varsa basit bir tamir dene
                 try:
                     import ast
                     cred_dict = ast.literal_eval(env_creds)
                     cred = credentials.Certificate(cred_dict)
                     connected_project_id = cred_dict.get('project_id', 'AstFixed')
-                    logger.info("JSON hatasÄ± ast.literal_eval ile tamir edildi.")
+                    logger.info("JSON hatası ast.literal_eval ile tamir edildi.")
                 except:
-                    logger.error("JSON tamir edilemedi. LÃ¼tfen Render'daki iÃ§eriÄŸi kontrol edin.")
+                    logger.error("JSON tamir edilemedi. Lütfen Render'daki içeriği kontrol edin.")
         else:
-            logger.error("!!! HATA: FIREBASE_CREDENTIALS bulunamadÄ±. Render panelini kontrol edin !!!")
+            logger.error("!!! HATA: FIREBASE_CREDENTIALS bulunamadı. Render panelini kontrol edin !!!")
         
         if not cred:
-            # Yedek plan: Gizli dosya olarak eklenmiÅŸ olabilir mi?
+            # Yedek plan: Gizli dosya olarak eklenmiş olabilir mi?
             paths = ['serviceAccountKey.json', '/etc/secrets/serviceAccountKey.json', 'firebase_key.json']
             for p in paths:
                 if os.path.exists(p):
-                    logger.info(f"Firebase anahtarÄ± dosyada bulundu: {p}")
+                    logger.info(f"Firebase anahtarı dosyada bulundu: {p}")
                     cred = credentials.Certificate(p)
                     with open(p, 'r') as f:
                         data = json.load(f)
@@ -271,7 +271,7 @@ def init_firebase():
                     break
                     
         if not cred and os.environ.get('FIREBASE_PROJECT_ID') and os.environ.get('FIREBASE_PRIVATE_KEY'):
-            logger.info("AyrÄ± ayrÄ± FIREBASE_* environment deÄŸiÅŸkenleri bulundu. Credential oluÅŸturuluyor...")
+            logger.info("Ayrı ayrı FIREBASE_* environment değişkenleri bulundu. Credential oluşturuluyor...")
             cred_dict = {
                 "type": "service_account",
                 "project_id": os.environ.get('FIREBASE_PROJECT_ID'),
@@ -298,7 +298,7 @@ def init_firebase():
     except Exception as e:
         init_error = str(e)
         db = None
-        logger.error(f"ğŸ”¥ Firebase HatasÄ±: {str(e)}", exc_info=True)
+        logger.error(f"🔥 Firebase Hatası: {str(e)}", exc_info=True)
     return db
 
 init_firebase()
@@ -311,13 +311,13 @@ def handle_exception(e):
     logger.error(f"Unhandled Exception: {str(e)}", exc_info=True)
     return jsonify({
         "success": False,
-        "message": "Sunucu tarafÄ±nda bir hata oluÅŸtu.",
+        "message": "Sunucu tarafında bir hata oluştu.",
         "error": str(e) if app.debug else None
     }), 500
 
 @app.before_request
 def before_request():
-    """HTTPS zorunluluÄŸu (production)"""
+    """HTTPS zorunluluğu (production)"""
     if not request.is_secure and not request.headers.get('X-Forwarded-Proto') == 'https':
         if not app.debug and not request.host.startswith('localhost'):
             from flask import redirect
@@ -325,7 +325,7 @@ def before_request():
 
 @app.after_request
 def set_secure_headers(response):
-    """GÃ¼venlik header'larÄ± ekle"""
+    """Güvenlik header'ları ekle"""
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     if not app.debug:
@@ -358,8 +358,8 @@ def verified_login_required(f):
             request.uid = decoded['uid']
             request.auth_verified = True
         except Exception as exc:
-            logger.warning('Firebase token doÄŸrulanamadÄ±: %s', type(exc).__name__)
-            return jsonify({'success': False, 'message': 'Oturum doÄŸrulanamadÄ±. LÃ¼tfen yeniden giriÅŸ yapÄ±n.'}), 401
+            logger.warning('Firebase token doğrulanamadı: %s', type(exc).__name__)
+            return jsonify({'success': False, 'message': 'Oturum doğrulanamadı. Lütfen yeniden giriş yapın.'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -371,14 +371,14 @@ def optional_verified_uid():
         return None
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != 'bearer' or not parts[1]:
-        raise ValueError('GeÃ§ersiz Authorization baÅŸlÄ±ÄŸÄ±.')
+        raise ValueError('Geçersiz Authorization başlığı.')
     try:
         return auth.verify_id_token(parts[1])['uid']
     except Exception as exc:
-        logger.warning('Opsiyonel Firebase token doÄŸrulanamadÄ±: %s', type(exc).__name__)
-        raise ValueError('Oturum doÄŸrulanamadÄ±.') from exc
+        logger.warning('Opsiyonel Firebase token doğrulanamadı: %s', type(exc).__name__)
+        raise ValueError('Oturum doğrulanamadı.') from exc
 
-# --- KREDÄ° SÄ°STEMÄ° ---
+# --- KREDİ SİSTEMİ ---
 def check_and_deduct_credit(user_id):
     """Atomically deduct one credit; billing failures never grant free work."""
     try:
@@ -447,7 +447,7 @@ def charge_mobile_session_once(session_ref, user_id):
 def get_user_credits():
     user_id = request.uid
     
-    # VeritabanÄ± henÃ¼z baÄŸlanmamÄ±ÅŸsa veya user_id yoksa bile 10 gÃ¶ster (UI kÄ±rÄ±lmasÄ±n)
+    # Veritabanı henüz bağlanmamışsa veya user_id yoksa bile 10 göster (UI kırılmasın)
     if not db:
         logger.warning("Firestore DB not initialized yet, returning default 10.")
         return jsonify({'credits': 10})
@@ -458,18 +458,18 @@ def get_user_credits():
     try:
         doc = db.collection('users').document(user_id).get()
         if doc.exists:
-            # KullanÄ±cÄ± varsa kredisini getir, yoksa 10 say.
+            # Kullanıcı varsa kredisini getir, yoksa 10 say.
             user_data = doc.to_dict()
             credits = user_data.get('credits', 10)
             return jsonify({'credits': credits})
         else:
-            # KullanÄ±cÄ± veritabanÄ±nda hiÃ§ yoksa (ilk defa giriyorsa) 10 kredisi vardÄ±r.
+            # Kullanıcı veritabanında hiç yoksa (ilk defa giriyorsa) 10 kredisi vardır.
             return jsonify({'credits': 10})
     except Exception as e:
-        logger.error(f"Kredi okuma hatasÄ±: {e}")
+        logger.error(f"Kredi okuma hatası: {e}")
         return jsonify({'credits': 10})
 
-# --- HARF TARAMA MOTORU (AynÄ± KalÄ±yor) ---
+# --- HARF TARAMA MOTORU (Aynı Kalıyor) ---
 class HarfSistemi:
     def __init__(self, repetition=3):
         self.repetition = validate_variation_count(repetition)
@@ -558,7 +558,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         
         images = []
         try:
-            # DPI'yi 200'e Ã§ekerek Render'Ä±n 512MB RAM limitine takÄ±lmayÄ± Ã¶nlÃ¼yoruz
+            # DPI'yi 200'e çekerek Render'ın 512MB RAM limitine takılmayı önlüyoruz
             images = convert_from_bytes(file_bytes, dpi=200)
             logger.info(f"PDF converted to {len(images)} images")
         except Exception as pdf_err:
@@ -567,22 +567,22 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
                 img = PILImage.open(io.BytesIO(file_bytes)).convert('RGB')
                 images = [img]
             except Exception as img_err:
-                raise ValueError(f"Dosya okunamadÄ±: {str(img_err)}")
+                raise ValueError(f"Dosya okunamadı: {str(img_err)}")
 
         if not images:
-            raise ValueError("Ä°ÅŸlenecek sayfa bulunamadÄ±.")
+            raise ValueError("İşlenecek sayfa bulunamadı.")
 
         harf_sistemi = HarfSistemi(repetition=variation_count)
         total_sections = len(images) * 2
         total_processed_chars = 0
         all_completed_sections = []
 
-        op_ref.update({'message': f'Toplam {total_sections} bÃ¶lÃ¼m iÅŸlenecek...', 'progress': 20})
+        op_ref.update({'message': f'Toplam {total_sections} bölüm işlenecek...', 'progress': 20})
 
         d_ref = database.collection('fonts').document(font_id)
         u_ref = database.collection('users').document(user_id).collection('fonts').document(font_id)
         
-        # Font dokÃ¼manÄ±nÄ± hazÄ±rla
+        # Font dokümanını hazırla
         if not d_ref.get().exists:
             init_payload = {
                 'font_name': font_name, 'font_id': font_id, 'owner_id': user_id, 'user_id': user_id,
@@ -592,15 +592,15 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             d_ref.set(init_payload)
             u_ref.set(init_payload)
 
-        # BelleÄŸi ÅŸiÅŸirmemek iÃ§in her sayfayÄ± tek tek iÅŸle
+        # Belleği şişirmemek için her sayfayı tek tek işle
         section_idx = 0
         for i, pil_img in enumerate(images):
             cv_img = np.array(pil_img)[:, :, ::-1]
             h, w, _ = cv_img.shape
             half_h = h // 2
             
-            # --- ÃœST BÃ–LÃœM (Section 1) ---
-            msg = f'BÃ¶lÃ¼m {section_idx+1}/{total_sections} taranÄ±yor...'
+            # --- ÜST BÖLÜM (Section 1) ---
+            msg = f'Bölüm {section_idx+1}/{total_sections} taranıyor...'
             progress = 20 + int((section_idx / total_sections) * 75)
             op_ref.update({'message': msg, 'progress': progress})
             
@@ -618,8 +618,8 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
             
             section_idx += 1
             
-            # --- ALT BÃ–LÃœM (Section 2) ---
-            msg = f'BÃ¶lÃ¼m {section_idx+1}/{total_sections} taranÄ±yor...'
+            # --- ALT BÖLÜM (Section 2) ---
+            msg = f'Bölüm {section_idx+1}/{total_sections} taranıyor...'
             progress = 20 + int((section_idx / total_sections) * 75)
             op_ref.update({'message': msg, 'progress': progress})
             
@@ -637,10 +637,10 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
                 
             section_idx += 1
             
-            # Ä°ÅŸlenmiÅŸ sayfayÄ± bellekten at
+            # İşlenmiş sayfayı bellekten at
             images[i] = None
 
-        # Final gÃ¼ncelleme
+        # Final güncelleme
         current_doc = d_ref.get().to_dict()
         old_sections = current_doc.get('sections_completed', [])
         for s in all_completed_sections:
@@ -657,7 +657,7 @@ def process_pdf_job(job_id, user_id, font_name, variation_count, file_bytes):
         op_ref.update({
             'status': 'completed', 
             'progress': 100, 
-            'message': f'TamamlandÄ±! {total_processed_chars} karakter eklendi.', 
+            'message': f'Tamamlandı! {total_processed_chars} karakter eklendi.',
             'processed_chars': total_processed_chars, 
             'font_id': font_id
         })
@@ -680,7 +680,7 @@ def index(): return render_template('index.html')
 @app.route('/mobil_yukle.html')
 def mobil_page(): return send_file('static/mobil_yukle.html')
 
-# Dosya GÃ¼venlik AyarlarÄ±
+# Dosya Güvenlik Ayarları
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
 MAX_FILE_SIZE = 10 * 1024 * 1024 # 10 MB
 
@@ -695,21 +695,21 @@ def upload_form():
         if request.content_length and request.content_length > MAX_FILE_SIZE + (512 * 1024):
             return jsonify({'success': False, 'message': 'Dosya en fazla 10 MB olabilir.'}), 413
         
-        # 1. Bot korumasÄ±
+        # 1. Bot koruması
         if not verify_recaptcha(request.form.get('recaptcha_token')):
             logger.warning(f"reCAPTCHA validation failed - User: {user_id}")
-            return jsonify({'success': False, 'message': 'GÃ¼venlik doÄŸrulamasÄ± baÅŸarÄ±sÄ±z.'}), 403
+            return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
-        # 2. Dosya KontrolÃ¼
+        # 2. Dosya Kontrolü
         uploaded_files = request.files.getlist('file') or request.files.getlist('files')
         
         if not uploaded_files or not uploaded_files[0].filename:
-            return jsonify({'success': False, 'message': 'Dosya yÃ¼klenmedi.'}), 400
+            return jsonify({'success': False, 'message': 'Dosya yüklenmedi.'}), 400
             
         file = uploaded_files[0]
         
         if not allowed_file(file.filename):
-            return jsonify({'success': False, 'message': 'GeÃ§ersiz dosya tÃ¼rÃ¼.'}), 400
+            return jsonify({'success': False, 'message': 'Geçersiz dosya türü.'}), 400
 
         try:
             font_name = validate_font_name(request.form.get('font_name'))
@@ -723,7 +723,7 @@ def upload_form():
         extension = file.filename.rsplit('.', 1)[1].lower()
         if extension == 'pdf':
             if not file_bytes.startswith(b'%PDF-'):
-                return jsonify({'success': False, 'message': 'Dosya geÃ§erli bir PDF deÄŸil.'}), 400
+                return jsonify({'success': False, 'message': 'Dosya geçerli bir PDF değil.'}), 400
         else:
             try:
                 with PILImage.open(io.BytesIO(file_bytes)) as probe:
@@ -731,13 +731,13 @@ def upload_form():
                     if (probe.format or '').upper() not in {'PNG', 'JPEG', 'JPG'}:
                         raise ValueError('unsupported image')
             except Exception:
-                return jsonify({'success': False, 'message': 'Dosya geÃ§erli bir PNG/JPEG deÄŸil.'}), 400
+                return jsonify({'success': False, 'message': 'Dosya geçerli bir PNG/JPEG değil.'}), 400
 
         database = init_firebase()
         if database is None:
-            return jsonify({'success': False, 'message': 'VeritabanÄ± ÅŸu anda kullanÄ±lamÄ±yor.'}), 503
+            return jsonify({'success': False, 'message': 'Veritabanı şu anda kullanılamıyor.'}), 503
 
-        # Kredi ancak tÃ¼m doÄŸrulamalar baÅŸarÄ±yla geÃ§tikten sonra dÃ¼ÅŸÃ¼lÃ¼r.
+        # Kredi ancak tüm doğrulamalar başarıyla geçtikten sonra düşülür.
         allowed, msg = check_and_deduct_credit(user_id)
         if not allowed:
             return jsonify({'success': False, 'message': msg}), 402
@@ -760,7 +760,7 @@ def upload_form():
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logger.error(f"System error in upload_form: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Ä°ÅŸlem baÅŸarÄ±sÄ±z. LÃ¼tfen tekrar deneyin.'}), 500
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 @app.route('/api/mobile_upload_session', methods=['POST'])
 @verified_login_required
@@ -771,7 +771,7 @@ def create_mobile_upload_session():
         repetition = validate_variation_count(data.get('variation_count', 3))
         database = init_firebase()
         if database is None:
-            return jsonify({'success': False, 'message': 'VeritabanÄ± kullanÄ±lamÄ±yor.'}), 503
+            return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
         session_id = uuid.uuid4().hex
         expires_at = int(time.time()) + 3600
         database.collection('mobile_upload_sessions').document(session_id).set({
@@ -787,19 +787,19 @@ def create_mobile_upload_session():
         return jsonify({'success': False, 'message': str(exc)}), 400
     except Exception as exc:
         logger.error('Mobile session error: %s', type(exc).__name__, exc_info=True)
-        return jsonify({'success': False, 'message': 'Mobil yÃ¼kleme oturumu oluÅŸturulamadÄ±.'}), 500
+        return jsonify({'success': False, 'message': 'Mobil yükleme oturumu oluşturulamadı.'}), 500
 
 
 @app.route('/process_single', methods=['POST'])
 def process_single():
     try:
         data = request.get_json(silent=True) or {}
-        if not verify_recaptcha(data.get('recaptcha_token')): return jsonify({'success': False, 'message': 'GÃ¼venlik doÄŸrulamasÄ± baÅŸarÄ±sÄ±z.'}), 403
+        if not verify_recaptcha(data.get('recaptcha_token')): return jsonify({'success': False, 'message': 'Güvenlik doğrulaması başarısız.'}), 403
 
         try:
             database = init_firebase()
             if database is None:
-                return jsonify({'success': False, 'message': 'VeritabanÄ± kullanÄ±lamÄ±yor.'}), 503
+                return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
             session_id = str(data.get('session_id', '')).strip()
             session_ref = None
             session_data = None
@@ -807,10 +807,10 @@ def process_single():
                 session_ref = database.collection('mobile_upload_sessions').document(session_id)
                 session_snapshot = session_ref.get()
                 if not session_snapshot.exists:
-                    return jsonify({'success': False, 'message': 'Mobil yÃ¼kleme oturumu bulunamadÄ±.'}), 401
+                    return jsonify({'success': False, 'message': 'Mobil yükleme oturumu bulunamadı.'}), 401
                 session_data = session_snapshot.to_dict() or {}
                 if int(session_data.get('expires_at', 0)) < int(time.time()):
-                    return jsonify({'success': False, 'message': 'Mobil yÃ¼kleme oturumunun sÃ¼resi doldu.'}), 401
+                    return jsonify({'success': False, 'message': 'Mobil yükleme oturumunun süresi doldu.'}), 401
                 u_id = session_data.get('owner_id')
                 f_name = validate_font_name(session_data.get('font_name'))
                 repetition = validate_variation_count(session_data.get('variation_count'))
@@ -819,7 +819,7 @@ def process_single():
                 f_name = validate_font_name(data.get('font_name'))
                 repetition = validate_variation_count(data.get('variation_count', 3))
             else:
-                return jsonify({'success': False, 'message': 'GÃ¼venli mobil yÃ¼kleme oturumu gerekli.'}), 401
+                return jsonify({'success': False, 'message': 'Güvenli mobil yükleme oturumu gerekli.'}), 401
             b64 = validate_base64_image(data.get('image_base64'))
         except ValueError as e:
             return jsonify({'success': False, 'message': str(e)}), 400
@@ -827,7 +827,7 @@ def process_single():
         if session_ref is not None:
             allowed, msg = charge_mobile_session_once(session_ref, u_id)
             if not allowed:
-                return jsonify({'success': False, 'message': 'Yetersiz kredi veya geÃ§ersiz mobil oturum.'}), 402
+                return jsonify({'success': False, 'message': 'Yetersiz kredi veya geçersiz mobil oturum.'}), 402
         elif session_ref is None:
             allowed, msg = check_and_deduct_credit(u_id)
             if not allowed:
@@ -836,7 +836,7 @@ def process_single():
         h_sistemi = HarfSistemi(repetition=repetition)
         nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None: return jsonify({'success': False, 'message': 'Resim hatasÄ±'}), 400
+        if img is None: return jsonify({'success': False, 'message': 'Resim hatası'}), 400
 
         res, err = h_sistemi.process_single_page(img)
         if err: return jsonify({'success': False, 'message': err}), 400
@@ -868,7 +868,7 @@ def process_single():
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logger.error(f"System error in process_single: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Ä°ÅŸlem baÅŸarÄ±sÄ±z. LÃ¼tfen tekrar deneyin.'}), 500
+        return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
 
 @app.route('/api/toggle_visibility', methods=['POST'])
 @verified_login_required
@@ -876,14 +876,14 @@ def toggle_visibility():
     try:
         data = request.get_json()
         font_id = data.get('font_id')
-        user_id = request.uid # Token'dan gelen gÃ¼venli ID
+        user_id = request.uid # Token'dan gelen güvenli ID
         
         database = init_firebase()
         font_ref = database.collection('fonts').document(font_id)
         doc = font_ref.get()
         
-        if not doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadÄ±'}), 404
-        if doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz iÅŸlem'}), 403
+        if not doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+        if doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz işlem'}), 403
             
         new_status = not doc.to_dict().get('is_public', False)
         font_ref.update({'is_public': new_status})
@@ -893,7 +893,7 @@ def toggle_visibility():
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logger.error(f"System error in toggle_visibility: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Ä°ÅŸlem baÅŸarÄ±sÄ±z.'}), 500
+        return jsonify({'success': False, 'message': 'İşlem başarısız.'}), 500
 
 
 @app.route('/api/delete_font', methods=['POST'])
@@ -904,10 +904,10 @@ def delete_font():
         data = request.get_json(silent=True) or {}
         font_id = str(data.get('font_id', '')).strip()
         if len(font_id) < 3 or len(font_id) > 180 or '/' in font_id or '..' in font_id or re.search(r'[\x00-\x1f]', font_id):
-            return jsonify({'success': False, 'message': 'GeÃ§ersiz font kimliÄŸi.'}), 400
+            return jsonify({'success': False, 'message': 'Geçersiz font kimliği.'}), 400
         database = init_firebase()
         if database is None:
-            return jsonify({'success': False, 'message': 'VeritabanÄ± kullanÄ±lamÄ±yor.'}), 503
+            return jsonify({'success': False, 'message': 'Veritabanı kullanılamıyor.'}), 503
         user_font_ref = database.collection('users').document(request.uid).collection('fonts').document(font_id)
         font_ref = database.collection('fonts').document(font_id)
         snapshot = font_ref.get()
@@ -955,13 +955,13 @@ def _validate_client_upload_id(value):
         raise DigitalUploadAPIError('client_upload_id zorunludur.', 400)
     value = value.strip()
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', value):
-        raise DigitalUploadAPIError('client_upload_id biÃ§imi geÃ§ersiz.', 400)
+        raise DigitalUploadAPIError('client_upload_id biçimi geçersiz.', 400)
     return value
 
 
 def _validate_server_font_id(value):
     if not isinstance(value, str) or not re.fullmatch(r'digital_[0-9a-f]{32}', value):
-        raise DigitalUploadAPIError('font_id geÃ§ersiz.', 400)
+        raise DigitalUploadAPIError('font_id geçersiz.', 400)
     return value
 
 
@@ -970,12 +970,12 @@ def _load_digital_font(database, font_id, owner_id):
     font_ref = database.collection('fonts').document(font_id)
     snapshot = font_ref.get()
     if not snapshot.exists:
-        raise DigitalUploadAPIError('Dijital font yÃ¼klemesi bulunamadÄ±.', 404)
+        raise DigitalUploadAPIError('Dijital font yüklemesi bulunamadı.', 404)
     font_data = snapshot.to_dict() or {}
     if font_data.get('owner_id') != owner_id:
-        raise DigitalUploadAPIError('Bu font Ã¼zerinde iÅŸlem yetkiniz yok.', 403)
+        raise DigitalUploadAPIError('Bu font üzerinde işlem yetkiniz yok.', 403)
     if font_data.get('source') != 'digital':
-        raise DigitalUploadAPIError('Bu font dijital yÃ¼kleme protokolÃ¼ne ait deÄŸil.', 409)
+        raise DigitalUploadAPIError('Bu font dijital yükleme protokolüne ait değil.', 409)
     return font_ref, font_data
 
 
@@ -1000,7 +1000,7 @@ def _start_digital_upload(database, owner_id, font_name, repetition, client_uplo
                 or session_data.get('repetition') != repetition
             ):
                 raise DigitalUploadAPIError(
-                    'Bu client_upload_id farklÄ± bir yÃ¼kleme iÃ§in daha Ã¶nce kullanÄ±lmÄ±ÅŸ.',
+                    'Bu client_upload_id farklı bir yükleme için daha önce kullanılmış.',
                     409,
                 )
             existing_font_id = session_data.get('font_id')
@@ -1008,7 +1008,7 @@ def _start_digital_upload(database, owner_id, font_name, repetition, client_uplo
             existing_snapshot = existing_ref.get(transaction=txn)
             if not existing_snapshot.exists:
                 raise DigitalUploadAPIError(
-                    'YÃ¼kleme oturumu mevcut ancak font kaydÄ± bulunamÄ±yor.', 409
+                    'Yükleme oturumu mevcut ancak font kaydı bulunamıyor.', 409
                 )
             existing_data = existing_snapshot.to_dict() or {}
             return {
@@ -1070,16 +1070,16 @@ def _start_digital_upload(database, owner_id, font_name, repetition, client_uplo
 
 def _append_digital_glyphs(database, owner_id, font_id, chars):
     if not isinstance(chars, dict) or not chars:
-        raise DigitalUploadAPIError('chars, en az bir harf iÃ§eren nesne olmalÄ±dÄ±r.', 400)
+        raise DigitalUploadAPIError('chars, en az bir harf içeren nesne olmalıdır.', 400)
     if len(chars) > MAX_DRAWN_FONT_CHARS_PER_APPEND:
         raise DigitalUploadAPIError(
-            f'Bir append isteÄŸinde en fazla {MAX_DRAWN_FONT_CHARS_PER_APPEND} harf gÃ¶nderilebilir.',
+            f'Bir append isteğinde en fazla {MAX_DRAWN_FONT_CHARS_PER_APPEND} harf gönderilebilir.',
             413,
         )
 
     font_ref, font_data = _load_digital_font(database, font_id, owner_id)
     if font_data.get('status') != 'draft':
-        raise DigitalUploadAPIError('YalnÄ±zca draft durumundaki fontlara harf eklenebilir.', 409)
+        raise DigitalUploadAPIError('Yalnızca draft durumundaki fontlara harf eklenebilir.', 409)
 
     repetition = validate_variation_count(font_data.get('repetition'))
     expected_keys = variation_key_set(repetition)
@@ -1087,7 +1087,7 @@ def _append_digital_glyphs(database, owner_id, font_id, chars):
     invalid_keys = sorted(supplied_keys - expected_keys)
     if invalid_keys:
         raise DigitalUploadAPIError(
-            'Ä°zin verilmeyen harf anahtarÄ± gÃ¶nderildi.',
+            'İzin verilmeyen harf anahtarı gönderildi.',
             400,
             invalid_key_sample=invalid_keys[:10],
         )
@@ -1135,7 +1135,7 @@ def _finalize_digital_upload(database, owner_id, font_id):
             'idempotent': True,
         }
     if font_data.get('status') != 'draft':
-        raise DigitalUploadAPIError('Font finalize edilebilir durumda deÄŸil.', 409)
+        raise DigitalUploadAPIError('Font finalize edilebilir durumda değil.', 409)
 
     received_keys = {
         char_snapshot.id for char_snapshot in font_ref.collection('chars').stream()
@@ -1153,7 +1153,7 @@ def _finalize_digital_upload(database, owner_id, font_id):
                 'unexpected_sample': unexpected_keys[:10],
             })
         raise DigitalUploadAPIError(
-            'Font henÃ¼z tamamlanmadÄ±; beklenen harf seti eksik veya geÃ§ersiz.',
+            'Font henüz tamamlanmadı; beklenen harf seti eksik veya geçersiz.',
             409,
             **details,
         )
@@ -1164,14 +1164,14 @@ def _finalize_digital_upload(database, owner_id, font_id):
     def finish(txn):
         latest_snapshot = font_ref.get(transaction=txn)
         if not latest_snapshot.exists:
-            raise DigitalUploadAPIError('Dijital font yÃ¼klemesi bulunamadÄ±.', 404)
+            raise DigitalUploadAPIError('Dijital font yüklemesi bulunamadı.', 404)
         latest = latest_snapshot.to_dict() or {}
         if latest.get('owner_id') != owner_id:
-            raise DigitalUploadAPIError('Bu font Ã¼zerinde iÅŸlem yetkiniz yok.', 403)
+            raise DigitalUploadAPIError('Bu font üzerinde işlem yetkiniz yok.', 403)
         if latest.get('status') == 'ready':
             return True, None
         if latest.get('status') != 'draft':
-            raise DigitalUploadAPIError('Font finalize edilebilir durumda deÄŸil.', 409)
+            raise DigitalUploadAPIError('Font finalize edilebilir durumda değil.', 409)
 
         user_ref = database.collection('users').document(owner_id)
         user_snapshot = user_ref.get(transaction=txn)
@@ -1242,9 +1242,9 @@ def _legacy_digital_upload(database, owner_id, data):
     repetition = validate_variation_count(data.get('variation_count', 3))
     chars = data.get('chars')
     if not isinstance(chars, dict) or not chars:
-        raise DigitalUploadAPIError('chars, en az bir harf iÃ§eren nesne olmalÄ±dÄ±r.', 400)
+        raise DigitalUploadAPIError('chars, en az bir harf içeren nesne olmalıdır.', 400)
     if len(chars) > len(variation_key_set(repetition)):
-        raise DigitalUploadAPIError('Beklenenden fazla harf gÃ¶nderildi.', 400)
+        raise DigitalUploadAPIError('Beklenenden fazla harf gönderildi.', 400)
 
     client_upload_id = data.get('client_upload_id') or f'legacy-{uuid.uuid4().hex}'
     started = _start_digital_upload(
@@ -1273,7 +1273,7 @@ def upload_drawn_font():
         if not getattr(request, 'auth_verified', False):
             return jsonify({
                 'success': False,
-                'message': 'Dijital font yÃ¼klemek iÃ§in doÄŸrulanmÄ±ÅŸ oturum gereklidir.',
+                'message': 'Dijital font yüklemek için doğrulanmış oturum gereklidir.',
             }), 401
 
         if (
@@ -1282,24 +1282,24 @@ def upload_drawn_font():
         ):
             return jsonify({
                 'success': False,
-                'message': 'Ä°stek gÃ¶vdesi Ã§ok bÃ¼yÃ¼k (en fazla 20 MB).',
+                'message': 'İstek gövdesi çok büyük (en fazla 20 MB).',
             }), 413
         raw_body = request.get_data(cache=True)
         if len(raw_body) > MAX_DRAWN_FONT_REQUEST_BYTES:
             return jsonify({
                 'success': False,
-                'message': 'Ä°stek gÃ¶vdesi Ã§ok bÃ¼yÃ¼k (en fazla 20 MB).',
+                'message': 'İstek gövdesi çok büyük (en fazla 20 MB).',
             }), 413
 
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            raise DigitalUploadAPIError('GeÃ§erli bir JSON nesnesi gÃ¶nderilmelidir.', 400)
+            raise DigitalUploadAPIError('Geçerli bir JSON nesnesi gönderilmelidir.', 400)
 
         database = init_firebase()
         if database is None:
             return jsonify({
                 'success': False,
-                'message': 'VeritabanÄ± ÅŸu anda kullanÄ±lamÄ±yor. LÃ¼tfen tekrar deneyin.',
+                'message': 'Veritabanı şu anda kullanılamıyor. Lütfen tekrar deneyin.',
             }), 503
 
         mode = data.get('mode')
@@ -1329,7 +1329,7 @@ def upload_drawn_font():
             status_code = 200
         else:
             raise DigitalUploadAPIError(
-                'mode; start, append veya finalize olmalÄ±dÄ±r.', 400
+                'mode; start, append veya finalize olmalıdır.', 400
             )
 
         return jsonify({'success': True, **result}), status_code
@@ -1347,7 +1347,7 @@ def upload_drawn_font():
         logger.error(f"System error in upload_drawn_font: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': 'Dijital font yÃ¼kleme servisi ÅŸu anda kullanÄ±lamÄ±yor.',
+            'message': 'Dijital font yükleme servisi şu anda kullanılamıyor.',
         }), 503
 
 
@@ -1357,14 +1357,14 @@ def update_char():
     try:
         data = request.get_json()
         font_id, char_key, image_base64 = data.get('font_id'), data.get('char_key'), data.get('image_base64')
-        user_id = request.uid # Token'dan gelen gÃ¼venli ID
+        user_id = request.uid # Token'dan gelen güvenli ID
         
         database = init_firebase()
         font_ref = database.collection('fonts').document(font_id)
         font_doc = font_ref.get()
         
-        if not font_doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadÄ±'}), 404
-        if font_doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz iÅŸlem!'}), 403
+        if not font_doc.exists: return jsonify({'success': False, 'message': 'Font bulunamadı'}), 404
+        if font_doc.to_dict().get('owner_id') != user_id: return jsonify({'success': False, 'message': 'Yetkisiz işlem!'}), 403
             
         try:
             image_base64 = validate_base64_image(image_base64)
@@ -1372,19 +1372,19 @@ def update_char():
             return jsonify({'success': False, 'message': str(e)}), 400
 
         font_ref.collection('chars').document(char_key).set({'data': image_base64})
-        return jsonify({'success': True, 'message': 'Harf gÃ¼ncellendi'})
+        return jsonify({'success': True, 'message': 'Harf güncellendi'})
     except ValueError as e:
         logger.warning(f"Validation error in update_char: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logger.error(f"System error in update_char: {str(e)}", exc_info=True)
-        return jsonify({'success': False, 'message': 'GÃ¼ncelleme baÅŸarÄ±sÄ±z.'}), 500
+        return jsonify({'success': False, 'message': 'Güncelleme başarısız.'}), 500
 
 @app.route('/api/list_fonts')
 def list_fonts():
     database = init_firebase()
     if not database:
-        return jsonify({"success": False, "message": "VeritabanÄ± kullanÄ±lamÄ±yor."}), 503
+        return jsonify({"success": False, "message": "Veritabanı kullanılamıyor."}), 503
     fonts = []
     try:
         user_id = optional_verified_uid()
@@ -1411,7 +1411,7 @@ def list_fonts():
         return jsonify({"success": False, "message": str(e)}), 401
     except Exception as e:
         logger.error(f"System error in list_fonts: {str(e)}", exc_info=True)
-        return jsonify({"success": False, "message": "Liste yÃ¼klenemedi."}), 500
+        return jsonify({"success": False, "message": "Liste yüklenemedi."}), 500
 
 @app.route('/api/add_to_library', methods=['POST'])
 @verified_login_required
@@ -1423,13 +1423,13 @@ def add_to_library():
         if not font_id: return jsonify({'success':False}), 400
         
         orig_ref = db.collection('fonts').document(font_id).get()
-        if not orig_ref.exists: return jsonify({'success':False, 'message': 'Font bulunamadÄ±'}), 404
+        if not orig_ref.exists: return jsonify({'success':False, 'message': 'Font bulunamadı'}), 404
         
         orig_data = orig_ref.to_dict()
         if orig_data.get('status') not in (None, 'ready'):
-            return jsonify({'success': False, 'message': 'Taslak font kÃ¼tÃ¼phaneye eklenemez.'}), 409
+            return jsonify({'success': False, 'message': 'Taslak font kütüphaneye eklenemez.'}), 409
         if not orig_data.get('is_public', False) and orig_data.get('owner_id') != user_id:
-            return jsonify({'success': False, 'message': 'Bu Ã¶zel fontu kopyalama yetkiniz yok.'}), 403
+            return jsonify({'success': False, 'message': 'Bu özel fontu kopyalama yetkiniz yok.'}), 403
         new_font_id = f"{user_id}_{orig_data['font_name'].replace(' ', '_')}_{str(uuid.uuid4())[:8]}"
         
         new_font_data = orig_data.copy()
@@ -1474,15 +1474,15 @@ def get_assets():
             font_data = font_snapshot.to_dict() if font_snapshot.exists else {}
             if font_snapshot.exists:
                 if font_data.get('source') == 'digital' and font_data.get('status') != 'ready':
-                    return jsonify({'success': False, 'message': 'Font henÃ¼z tamamlanmadÄ±.'}), 409
+                    return jsonify({'success': False, 'message': 'Font henüz tamamlanmadı.'}), 409
                 if not font_data.get('is_public', False):
                     try:
                         requester = optional_verified_uid()
                     except ValueError as exc:
                         return jsonify({'success': False, 'message': str(exc)}), 401
                     if requester != font_data.get('owner_id'):
-                        return jsonify({'success': False, 'message': 'Bu Ã¶zel fonta eriÅŸim yetkiniz yok.'}), 403
-            # Hibrit okuma (Ã¶nce alt koleksiyon, yoksa ana dokÃ¼man)
+                        return jsonify({'success': False, 'message': 'Bu özel fonta erişim yetkiniz yok.'}), 403
+            # Hibrit okuma (önce alt koleksiyon, yoksa ana doküman)
             char_docs = list(font_ref.collection('chars').stream())
             char_docs.sort(key=lambda item: (
                 re.sub(r'_\d+$', '', item.id),
@@ -1521,7 +1521,7 @@ def get_assets():
         return jsonify({"success": True, "assets": {}}), 200
     except Exception as e:
         logger.error(f"System error in get_assets: {str(e)}", exc_info=True)
-        return jsonify({"success": False, "message": "Assets yÃ¼klenemedi."}), 500
+        return jsonify({"success": False, "message": "Assets yüklenemedi."}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
@@ -1532,17 +1532,17 @@ def download():
         if database and font_id:
             font_snapshot = database.collection('fonts').document(font_id).get()
             if not font_snapshot.exists:
-                return jsonify({'success': False, 'message': 'Font bulunamadÄ±.'}), 404
+                return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
             font_data = font_snapshot.to_dict() or {}
             if not font_data.get('is_public', False):
                 id_token = request.form.get('id_token', '')
                 try:
                     requester = auth.verify_id_token(id_token).get('uid')
                 except Exception:
-                    return jsonify({'success': False, 'message': 'Ã–zel font iÃ§in gÃ¼venli oturum gerekli.'}), 401
+                    return jsonify({'success': False, 'message': 'Özel font için güvenli oturum gerekli.'}), 401
                 if requester != font_data.get('owner_id'):
-                    return jsonify({'success': False, 'message': 'Bu Ã¶zel fonta eriÅŸim yetkiniz yok.'}), 403
-            # get_assets mantÄ±ÄŸÄ±yla aynÄ±sÄ±nÄ± yap (Hibrit)
+                    return jsonify({'success': False, 'message': 'Bu özel fonta erişim yetkiniz yok.'}), 403
+            # get_assets mantığıyla aynısını yap (Hibrit)
             char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
             has_sub = False
             for doc in char_docs:
@@ -1603,13 +1603,13 @@ def download():
         config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': ink_rgb, 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
         sayfalar = list(core_generator.metni_sayfaya_yaz(metin, active_harfler, config))
         
-        # Overlay Ekle (Serbest Ã‡izim)
+        # Overlay Ekle (Serbest Çizim)
         overlay_b64 = request.form.get('overlay_b64')
         if overlay_b64 and sayfalar:
             try:
                 overlay_data = overlay_b64.split(",")[1] if "," in overlay_b64 else overlay_b64
                 overlay_img = core_generator.Image.open(io.BytesIO(base64.b64decode(overlay_data))).convert("RGBA")
-                # overlay_img boyutunu sayfa boyutuyla aynÄ± yap
+                # overlay_img boyutunu sayfa boyutuyla aynı yap
                 if overlay_img.size != sayfalar[0].size:
                     overlay_img = overlay_img.resize(sayfalar[0].size, core_generator.Image.Resampling.LANCZOS)
                 # Sadece ilk sayfaya (veya o anki ekrana) yapıştırıyoruz
@@ -2169,6 +2169,220 @@ def _copilot_full_text(blocks: Any) -> str:
     )[:ai_document.MAX_DOCUMENT_CHARS]
 
 
+_COPILOT_LINE_OVERRIDE_BASE = "_copilot_override_base"
+_COPILOT_LINE_LOCATOR = "_line_locator"
+_PERSISTED_LINE_OVERRIDE_FIELDS = frozenset(
+    set(_cop.ALLOWED_LINE_STYLE_FIELDS) | {"start_x", "baseline_y"}
+)
+
+
+def _lines_for_copilot_block(layout: dict, block_id: str) -> list[dict]:
+    return [
+        line
+        for page in layout.get("pages", [])
+        if isinstance(page, dict)
+        for line in page.get("lines", [])
+        if isinstance(line, dict) and str(line.get("block_id") or "") == block_id
+    ]
+
+
+def _copilot_line_locator(layout: dict, target_id: Any) -> dict | None:
+    line = _cop._get_line_by_id(layout, target_id)
+    if line is None:
+        return None
+    block_id = str(line.get("block_id") or "")
+    if not block_id:
+        return None
+    block_lines = _lines_for_copilot_block(layout, block_id)
+    try:
+        ordinal = next(
+            index for index, candidate in enumerate(block_lines)
+            if candidate is line or candidate.get("id") == line.get("id")
+        )
+    except StopIteration:
+        return None
+    return {"block_id": block_id, "ordinal": ordinal}
+
+
+def _copilot_line_by_locator(layout: dict, locator: Any) -> dict | None:
+    if not isinstance(locator, dict):
+        return None
+    block_id = str(locator.get("block_id") or "")
+    try:
+        ordinal = int(locator.get("ordinal"))
+    except (TypeError, ValueError):
+        return None
+    if not block_id or ordinal < 0:
+        return None
+    block_lines = _lines_for_copilot_block(layout, block_id)
+    return block_lines[ordinal] if ordinal < len(block_lines) else None
+
+
+def _line_operation_fields(operation: dict) -> set[str]:
+    name = operation.get("operation")
+    if name == "move_line":
+        return {"start_x", "baseline_y"}
+    if name == "switch_line_author":
+        return {"font_slot"}
+    if name == "update_line_style":
+        patch = operation.get("patch")
+        if isinstance(patch, dict):
+            return set(patch).intersection(_PERSISTED_LINE_OVERRIDE_FIELDS)
+    return set()
+
+
+def _sync_line_override_metadata(
+    before_layout: dict,
+    patched_layout: dict,
+    operations: Any,
+) -> None:
+    """Persist semantic line overrides without tying them to volatile line IDs.
+
+    Reflow regenerates line IDs and coordinates. The override base is carried on
+    the line itself, while block id + ordinal is used to move it to the matching
+    regenerated line. Keeping the original base also lets undo remove an
+    override instead of accidentally pinning a former default forever.
+    """
+    if not isinstance(operations, list):
+        return
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        fields = _line_operation_fields(operation)
+        if not fields:
+            continue
+        locator = operation.get(_COPILOT_LINE_LOCATOR)
+        if not isinstance(locator, dict):
+            locator = _copilot_line_locator(before_layout, operation.get("target_id"))
+        if not locator:
+            continue
+        before_line = _copilot_line_by_locator(before_layout, locator)
+        patched_line = _copilot_line_by_locator(patched_layout, locator)
+        if before_line is None or patched_line is None:
+            continue
+        raw_base = patched_line.get(_COPILOT_LINE_OVERRIDE_BASE)
+        if not isinstance(raw_base, dict):
+            raw_base = before_line.get(_COPILOT_LINE_OVERRIDE_BASE)
+        base = {
+            key: value
+            for key, value in (raw_base.items() if isinstance(raw_base, dict) else [])
+            if key in _PERSISTED_LINE_OVERRIDE_FIELDS
+        }
+        for field in fields:
+            original = base[field] if field in base else before_line.get(field)
+            current = patched_line.get(field)
+            if current == original:
+                base.pop(field, None)
+            else:
+                base[field] = original
+        if base:
+            patched_line[_COPILOT_LINE_OVERRIDE_BASE] = base
+        else:
+            patched_line.pop(_COPILOT_LINE_OVERRIDE_BASE, None)
+
+
+def _capture_manual_line_override_metadata(
+    before_layout: dict,
+    client_layout: dict,
+) -> None:
+    """Retain inspector-authored line changes across future AI reflows.
+
+    The state endpoint receives a complete layout rather than semantic
+    operations. Compare each regenerated-safe line by block id + ordinal and
+    record only fields whose effective value changed. Existing bases are kept,
+    so manually restoring the original value also clears the override.
+    """
+    block_ordinals: dict[str, int] = {}
+    for page in client_layout.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        for client_line in page.get("lines", []):
+            if not isinstance(client_line, dict):
+                continue
+            block_id = str(client_line.get("block_id") or "")
+            ordinal = block_ordinals.get(block_id, 0)
+            block_ordinals[block_id] = ordinal + 1
+            locator = {"block_id": block_id, "ordinal": ordinal}
+            before_line = _copilot_line_by_locator(before_layout, locator)
+            if before_line is None:
+                continue
+            raw_base = before_line.get(_COPILOT_LINE_OVERRIDE_BASE)
+            base = {
+                key: value
+                for key, value in (raw_base.items() if isinstance(raw_base, dict) else [])
+                if key in _PERSISTED_LINE_OVERRIDE_FIELDS
+            }
+            for field in _PERSISTED_LINE_OVERRIDE_FIELDS:
+                previous = before_line.get(field)
+                current = client_line.get(field)
+                if current == previous:
+                    continue
+                original = base[field] if field in base else previous
+                if current == original:
+                    base.pop(field, None)
+                else:
+                    base[field] = original
+            if base:
+                client_line[_COPILOT_LINE_OVERRIDE_BASE] = base
+            else:
+                client_line.pop(_COPILOT_LINE_OVERRIDE_BASE, None)
+
+
+def _reapply_persisted_line_overrides(rebuilt: dict, patched_layout: dict) -> None:
+    """Map every previously saved line override onto regenerated lines."""
+    for page in patched_layout.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        for source in page.get("lines", []):
+            if not isinstance(source, dict):
+                continue
+            raw_base = source.get(_COPILOT_LINE_OVERRIDE_BASE)
+            if not isinstance(raw_base, dict) or not raw_base:
+                continue
+            locator = _copilot_line_locator(patched_layout, source.get("id"))
+            target = _copilot_line_by_locator(rebuilt, locator)
+            if target is None:
+                continue
+            clean_base = {
+                key: value
+                for key, value in raw_base.items()
+                if key in _PERSISTED_LINE_OVERRIDE_FIELDS
+            }
+            for field in clean_base:
+                if field in source:
+                    target[field] = source[field]
+                else:
+                    target.pop(field, None)
+            if clean_base:
+                target[_COPILOT_LINE_OVERRIDE_BASE] = clean_base
+
+
+def _annotate_line_operation_locators(layout: dict, operations: Any) -> None:
+    """Attach a stable locator to history operations for later undo/redo."""
+    if not isinstance(operations, list):
+        return
+    for operation in operations:
+        if not isinstance(operation, dict) or not _line_operation_fields(operation):
+            continue
+        locator = _copilot_line_locator(layout, operation.get("target_id"))
+        if locator:
+            operation[_COPILOT_LINE_LOCATOR] = locator
+
+
+def _remap_line_operation_targets(layout: dict, operations: Any) -> Any:
+    """Resolve history line targets after unrelated wrapping changed line IDs."""
+    if not isinstance(operations, list):
+        return operations
+    remapped = copy.deepcopy(operations)
+    for operation in remapped:
+        if not isinstance(operation, dict) or not _line_operation_fields(operation):
+            continue
+        target = _copilot_line_by_locator(layout, operation.get(_COPILOT_LINE_LOCATOR))
+        if target is not None and target.get("id"):
+            operation["target_id"] = target["id"]
+    return remapped
+
+
 def _reapply_targeted_line_operations(
     rebuilt: dict,
     patched_layout: dict,
@@ -2177,14 +2391,6 @@ def _reapply_targeted_line_operations(
     """Keep the current line edit visible when a document reflow is required."""
     if not isinstance(operations, list):
         return
-
-    def lines_for_block(layout: dict, block_id: str) -> list[dict]:
-        return [
-            line
-            for page in layout.get("pages", [])
-            for line in page.get("lines", [])
-            if str(line.get("block_id") or "") == block_id
-        ]
 
     for operation in operations:
         if not isinstance(operation, dict):
@@ -2198,8 +2404,8 @@ def _reapply_targeted_line_operations(
         block_id = str(source.get("block_id") or "")
         if not block_id:
             continue
-        source_lines = lines_for_block(patched_layout, block_id)
-        target_lines = lines_for_block(rebuilt, block_id)
+        source_lines = _lines_for_copilot_block(patched_layout, block_id)
+        target_lines = _lines_for_copilot_block(rebuilt, block_id)
         try:
             ordinal = next(i for i, line in enumerate(source_lines) if line.get("id") == source.get("id"))
         except StopIteration:
@@ -2306,16 +2512,32 @@ def _copilot_reflow_state(
             for line in page.get("lines", []):
                 line.update(line_visual_patch)
 
+    # Apply durable overrides first, then the current operation as a final
+    # compatibility pass. This keeps old stored documents working while new
+    # edits gain stable block+ordinal persistence.
+    _reapply_persisted_line_overrides(rebuilt, layout)
     _reapply_targeted_line_operations(rebuilt, layout, operations)
 
     rebuilt, blocks = _cop.ensure_document_ids(rebuilt, blocks)
     return rebuilt, blocks, fit_result
 
 
-def _finalize_copilot_result(doc: dict, result: dict) -> dict:
+def _finalize_copilot_result(
+    doc: dict,
+    result: dict,
+    source_layout: dict | None = None,
+) -> dict:
     """Ensure edited block text is actually rewrapped before state is committed."""
     if result.get("needs_clarification"):
         return result
+
+    operation_base = source_layout if isinstance(source_layout, dict) else doc.get("layout")
+    if isinstance(operation_base, dict):
+        _sync_line_override_metadata(
+            operation_base,
+            result.get("new_layout") or {},
+            result.get("operations"),
+        )
 
     page_target_intent = str(result.get("page_target_intent") or "")
     if page_target_intent == "manual":
@@ -2451,6 +2673,9 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
         layout, blocks = _cop.ensure_document_ids(result["new_layout"], result["new_blocks"])
         result["new_layout"] = layout
         result["new_blocks"] = blocks
+    if isinstance(operation_base, dict):
+        _annotate_line_operation_locators(operation_base, result.get("operations"))
+        _annotate_line_operation_locators(operation_base, result.get("inverse_operations"))
     return result
 
 @app.route("/api/ai/documents", methods=["POST", "OPTIONS"])
@@ -2596,6 +2821,7 @@ def copilot_save_manual_state(document_id: str):
         if len(json.dumps(client_layout, ensure_ascii=False)) > 2_000_000:
             raise _cop.CopilotError("Güncel layout çok büyük.", 413)
         layout = ai_document.validate_layout(client_layout)
+        _capture_manual_line_override_metadata(doc["layout"], layout)
         blocks = _sanitize_client_copilot_blocks(client_blocks)
         supplied_page_settings = data.get("page_settings")
         if not isinstance(supplied_page_settings, dict):
@@ -2656,8 +2882,13 @@ def copilot_edit_document(document_id: str):
 
         doc = _get_copilot_doc(document_id, request.uid)
 
-        if client_version is not None and int(client_version) != doc["version"]:
-            raise _cop.VersionConflictError()
+        if client_version is not None:
+            try:
+                parsed_client_version = int(client_version)
+            except (TypeError, ValueError) as exc:
+                raise _cop.CopilotError("Belge sürümü geçersiz.", 400) from exc
+            if parsed_client_version != doc["version"]:
+                raise _cop.VersionConflictError()
 
         # The user may have adjusted a line or page manually since the last AI
         # operation. Accept that state as the next canonical base only when it
@@ -2674,6 +2905,7 @@ def copilot_edit_document(document_id: str):
             if len(client_blocks) > ai_document.MAX_BLOCKS:
                 raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
             sanitized_layout = ai_document.validate_layout(client_layout)
+            _capture_manual_line_override_metadata(doc["layout"], sanitized_layout)
             sanitized_blocks = _sanitize_client_copilot_blocks(client_blocks)
             # validate_layout intentionally drops arbitrary settings. Restore
             # the server-owned document settings rather than trusting a client
@@ -2749,7 +2981,7 @@ def copilot_edit_document(document_id: str):
             result["page_target_intent"] = (
                 "manual" if manual_target else "exact" if requested_target else ""
             )
-            return _finalize_copilot_result(doc, result)
+            return _finalize_copilot_result(doc, result, source_layout=base_layout)
 
         if use_streaming:
             def generate():
@@ -2914,18 +3146,22 @@ def copilot_undo(document_id: str):
             raise _cop.CopilotError("Geri alınacak işlem yok.", 400)
 
         record = doc["history"][-1]
-        inverse_ops = record.get("inverse_operations", [])
+        inverse_ops = _remap_line_operation_targets(
+            doc["layout"], record.get("inverse_operations", [])
+        )
         if not inverse_ops:
             raise _cop.CopilotError("Bu işlem geri alınamıyor.", 400)
 
         clean_inv = _cop.validate_and_sanitize_operations(
             inverse_ops, doc["layout"], doc["blocks"],
-            secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+            secondary_font_available=bool(str(doc.get("secondary_font_id") or "").strip()),
             trusted_internal=True,
         )
         new_layout, new_blocks, redo_inv = _cop.apply_operations(
             clean_inv, doc["layout"], doc["blocks"]
         )
+        _sync_line_override_metadata(doc["layout"], new_layout, clean_inv)
+        _annotate_line_operation_locators(doc["layout"], redo_inv)
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_inv):
             new_layout, new_blocks, _ = _copilot_reflow_state(
@@ -2980,18 +3216,22 @@ def copilot_redo(document_id: str):
             raise _cop.CopilotError("İleri alınacak işlem yok.", 400)
 
         record = doc["redo_stack"][-1]
-        redo_ops = record.get("operations", [])
+        redo_ops = _remap_line_operation_targets(
+            doc["layout"], record.get("operations", [])
+        )
         if not redo_ops:
             raise _cop.CopilotError("Bu işlem ileri alınamıyor.", 400)
 
         clean_ops = _cop.validate_and_sanitize_operations(
             redo_ops, doc["layout"], doc["blocks"],
-            secondary_font_available=bool(doc["layout"].get("settings", {}).get("multi_author")),
+            secondary_font_available=bool(str(doc.get("secondary_font_id") or "").strip()),
             trusted_internal=True,
         )
         new_layout, new_blocks, inv = _cop.apply_operations(
             clean_ops, doc["layout"], doc["blocks"]
         )
+        _sync_line_override_metadata(doc["layout"], new_layout, clean_ops)
+        _annotate_line_operation_locators(doc["layout"], inv)
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_ops):
             new_layout, new_blocks, _ = _copilot_reflow_state(
@@ -3036,5 +3276,3 @@ def copilot_redo(document_id: str):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
-
-

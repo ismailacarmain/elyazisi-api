@@ -118,6 +118,11 @@ PAGE_PHYSICAL_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 DOCUMENT_SCOPE_RE = re.compile(r"\b(?:tüm|bütün)\s+(?:belge(?:ye|de)?|yazı(?:ya|da)?|sayfalar(?:a|da)?)\b", re.IGNORECASE)
+EXACT_PAGE_REFLOW_RE = re.compile(
+    r"\b(?:\d{1,2}|tek|bir|iki|uc|üç|dort|dört|bes|beş|alti|altı|yedi|sekiz|dokuz|on)"
+    r"\s*(?:adet\s*)?(?:a4|sayfa|pages?)",
+    re.IGNORECASE,
+)
 
 # A4 limitler (px @ 300dpi)
 PAGE_WIDTH_PX = 2480
@@ -301,7 +306,12 @@ def ensure_document_ids(
             raise CopilotError("Layout sayfası geçersiz.")
         page_id = str(page.get("id") or "").strip()
         if not DOCUMENT_ID_RE.fullmatch(page_id) or page_id in used_page_ids:
-            page_id = f"page-{page_index + 1}"
+            base_page_id = f"page-{page_index + 1}"
+            page_id = base_page_id
+            suffix = 2
+            while page_id in used_page_ids:
+                page_id = f"{base_page_id}-{suffix}"
+                suffix += 1
         page["id"] = page_id
         used_page_ids.add(page_id)
 
@@ -314,7 +324,12 @@ def ensure_document_ids(
             line_number += 1
             line_id = str(line.get("id") or "").strip()
             if not DOCUMENT_ID_RE.fullmatch(line_id) or line_id in used_line_ids:
-                line_id = f"line-{line_number}"
+                base_line_id = f"line-{line_number}"
+                line_id = base_line_id
+                suffix = 2
+                while line_id in used_line_ids:
+                    line_id = f"{base_line_id}-{suffix}"
+                    suffix += 1
             line["id"] = line_id
             used_line_ids.add(line_id)
 
@@ -445,7 +460,10 @@ def validate_and_sanitize_operations(
         # add_margin_note
         if name == "add_margin_note":
             clean_op["text"] = _sanitize_text(op.get("text", ""), 500)
-            clean_op["target_page_id"] = str(op.get("target_page_id", ""))
+            target_page_id = str(op.get("target_page_id", "")).strip()
+            if target_page_id and _find_page(layout, target_page_id) is None:
+                raise CopilotError(f"Sayfa bulunamadı: {target_page_id}")
+            clean_op["target_page_id"] = target_page_id
 
         # remove_block / insert_block
         if name == "restore_block_page_breaks":
@@ -566,10 +584,19 @@ def apply_operations(
             block = _get_block_by_id(new_blocks, target_id)
             if block is None:
                 raise CopilotError(f"Blok bulunamadı: {target_id}")
-            old_style = {k: block.get(k) for k in patch}
-            _apply_dict_patch(block, patch)
-            # layout'taki satırları da güncelle
-            _patch_layout_lines_for_block(new_layout, new_blocks, block, patch, old_style)
+            changed_patch = {
+                key: value for key, value in patch.items()
+                if block.get(key) != value
+            }
+            old_style = {k: block.get(k) for k in changed_patch}
+            _apply_dict_patch(block, changed_patch)
+            # Layout satırlarını yalnızca gerçek blok değişiklikleri için
+            # güncelle; aynı stili tekrar yazmak gizli bir satır mutasyonu
+            # veya sahte başarılı sürüm üretmemeli.
+            if changed_patch:
+                _patch_layout_lines_for_block(
+                    new_layout, new_blocks, block, changed_patch, old_style
+                )
             inverses.append({
                 "operation": "update_block_style",
                 "target_id": target_id,
@@ -859,9 +886,17 @@ def apply_operations(
 def _get_block_by_id(blocks: list[dict], target_id: str | None) -> dict | None:
     if target_id is None:
         return None
-    for i, b in enumerate(blocks):
-        if b.get("id") == target_id or str(i) == str(target_id):
+    # Stable IDs are authoritative. A numeric target remains a legacy index
+    # fallback, but it must not shadow a real block whose ID is numeric.
+    for b in blocks:
+        if b.get("id") == target_id:
             return b
+    try:
+        index = int(str(target_id))
+    except (TypeError, ValueError):
+        return None
+    if str(index) == str(target_id) and 0 <= index < len(blocks):
+        return blocks[index]
     return None
 
 
@@ -1294,6 +1329,7 @@ def _validate_copilot_provider_result(
     blocks: list[dict],
     *,
     secondary_font_available: bool,
+    exact_page_reflow_intent: bool = False,
 ) -> None:
     """Reject structurally valid provider output that cannot change the document."""
     if raw.get("needs_clarification") is True:
@@ -1310,7 +1346,11 @@ def _validate_copilot_provider_result(
         secondary_font_available=secondary_font_available,
     )
     trial_layout, trial_blocks, _ = apply_operations(clean, layout, blocks)
-    if trial_layout == layout and trial_blocks == blocks and not operations_require_reflow(clean):
+    has_delta = trial_layout != layout or trial_blocks != blocks
+    allows_exact_page_reflow = (
+        exact_page_reflow_intent and operations_require_reflow(clean)
+    )
+    if not has_delta and not allows_exact_page_reflow:
         raise CopilotError("Copilot belge üzerinde gerçek bir değişiklik üretmedi.", 502)
 
 
@@ -1346,6 +1386,10 @@ def process_copilot_edit(
         raise CopilotError("Talimat boş olamaz.")
     if len(instruction) > MAX_INSTRUCTION_CHARS:
         raise CopilotError(f"Talimat en fazla {MAX_INSTRUCTION_CHARS} karakter olabilir.")
+
+    exact_page_reflow_intent = bool(
+        EXACT_PAGE_REFLOW_RE.search(unicodedata.normalize("NFKC", instruction).casefold())
+    )
 
     if (
         str((selection or {}).get("type") or "") == "page"
@@ -1406,6 +1450,7 @@ def process_copilot_edit(
                     layout,
                     blocks,
                     secondary_font_available=secondary_font_available,
+                    exact_page_reflow_intent=exact_page_reflow_intent,
                 ),
             )
         except ai_provider.AiProviderError as exc:
@@ -1419,6 +1464,7 @@ def process_copilot_edit(
         layout,
         blocks,
         secondary_font_available=secondary_font_available,
+        exact_page_reflow_intent=exact_page_reflow_intent,
     )
 
     if raw.get("needs_clarification"):
@@ -1446,7 +1492,11 @@ def process_copilot_edit(
     )
 
     new_layout, new_blocks, inverse_ops = apply_operations(clean_ops, layout, blocks)
-    if new_layout == layout and new_blocks == blocks and not operations_require_reflow(clean_ops):
+    has_delta = new_layout != layout or new_blocks != blocks
+    allows_exact_page_reflow = (
+        exact_page_reflow_intent and operations_require_reflow(clean_ops)
+    )
+    if not has_delta and not allows_exact_page_reflow:
         raise CopilotError("Copilot belge üzerinde uygulanabilir bir değişiklik üretmedi.", 422)
     new_layout["version"] = current_version + 1
 

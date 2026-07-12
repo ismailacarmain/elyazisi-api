@@ -88,7 +88,7 @@ def _normalized_error(provider: str, exc: Exception) -> AiProviderError:
         status = 503
     message = _safe_upstream_message(
         {"error": {"message": str(exc)}},
-        f"{provider} isteÄŸi tamamlanamadÄ±.",
+        f"{provider} isteği tamamlanamadı.",
     )
     return AiProviderError(message, status, provider)
 

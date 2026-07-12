@@ -722,6 +722,17 @@ class TestCopilotOperations(unittest.TestCase):
         self.assertEqual(len(new_blocks), 4)
         self.assertEqual(inverses[0]["operation"], "remove_block")
 
+    def test_add_margin_note_rejects_unknown_target_page(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        operation = {
+            "operation": "add_margin_note",
+            "text": "Important note",
+            "target_page_id": "page-missing",
+        }
+        with self.assertRaises(cop.CopilotError):
+            cop.validate_and_sanitize_operations([operation], layout, blocks)
+
     # 27. insert_block sonrası block sayısı artar
     def test_insert_block_increases_count(self):
         blocks = _make_blocks()
@@ -767,6 +778,29 @@ class TestCopilotOperations(unittest.TestCase):
         self.assertEqual(["block-1", "block-2"], [block["id"] for block in clean_blocks])
         self.assertEqual("block-1", clean_layout["pages"][0]["lines"][0]["block_id"])
         self.assertEqual("block-2", clean_layout["pages"][0]["lines"][1]["block_id"])
+
+    def test_document_id_fallbacks_remain_unique_after_collisions(self):
+        blocks = [{"id": "block-1", "type": "paragraph", "text": "Text"}]
+        layout = {
+            "pages": [
+                {"id": "page-2", "lines": [{"id": "line-2", "block_index": 0}]},
+                {"id": "page-2", "lines": [{"id": "line-2", "block_index": 0}]},
+            ]
+        }
+        clean_layout, _ = cop.ensure_document_ids(layout, blocks)
+        page_ids = [page["id"] for page in clean_layout["pages"]]
+        line_ids = [line["id"] for page in clean_layout["pages"] for line in page["lines"]]
+        self.assertEqual(["page-2", "page-2-2"], page_ids)
+        self.assertEqual(["line-2", "line-2-2"], line_ids)
+        self.assertEqual(len(page_ids), len(set(page_ids)))
+        self.assertEqual(len(line_ids), len(set(line_ids)))
+
+    def test_numeric_block_id_wins_over_legacy_index_fallback(self):
+        blocks = [
+            {"id": "first", "text": "Index zero"},
+            {"id": "0", "text": "Exact numeric ID"},
+        ]
+        self.assertEqual("Exact numeric ID", cop._get_block_by_id(blocks, "0")["text"])
 
     def test_move_line_inverse_is_accepted_by_validator(self):
         blocks = _make_blocks()
@@ -824,6 +858,67 @@ class CopilotProviderTests(unittest.TestCase):
                 blocks=blocks,
                 provider_config={"groq_key": "gsk_" + "x" * 32},
             )
+
+    @patch("ai_copilot.ai_provider.call_structured_with_fallback")
+    def test_semantic_noop_provider_plans_are_rejected(self, mock_provider):
+        blocks = _make_blocks()
+        blocks[0]["color"] = "#123456"
+        layout = _make_layout(blocks)
+        layout["settings"]["letter_height_mm"] = 11.5
+        operations = [
+            {
+                "operation": "replace_block_text",
+                "target_id": "block-1",
+                "new_text": blocks[0]["text"],
+            },
+            {
+                "operation": "update_document_settings",
+                "patch": {"letter_height_mm": 11.5},
+            },
+            {
+                "operation": "update_block_style",
+                "target_id": "block-1",
+                "patch": {"color": "#123456"},
+            },
+        ]
+        for operation in operations:
+            with self.subTest(operation=operation["operation"]):
+                mock_provider.return_value = ({
+                    "needs_clarification": False,
+                    "assistant_message": "Done.",
+                    "operations": [operation],
+                }, "groq", "openai/gpt-oss-120b")
+                with self.assertRaises(cop.CopilotError):
+                    cop.process_copilot_edit(
+                        api_key="",
+                        model="gemini-3.5-flash",
+                        instruction="Apply this change",
+                        layout=copy.deepcopy(layout),
+                        blocks=copy.deepcopy(blocks),
+                        current_version=18,
+                        provider_config={"groq_key": "gsk_" + "x" * 32},
+                    )
+
+    @patch("ai_copilot.ai_provider.call_structured_with_fallback")
+    def test_exact_page_request_allows_real_reflow_without_data_patch(self, mock_provider):
+        mock_provider.return_value = ({
+            "needs_clarification": False,
+            "assistant_message": "Fitting to one page.",
+            "operations": [{"operation": "reflow_scope"}],
+            "reflow_scope": "document",
+        }, "groq", "openai/gpt-oss-120b")
+        blocks = _make_blocks()
+        result = cop.process_copilot_edit(
+            api_key="",
+            model="gemini-3.5-flash",
+            instruction="Bunu 1 sayfaya sigdir",
+            layout=_make_layout(blocks),
+            blocks=blocks,
+            current_version=18,
+            provider_config={"groq_key": "gsk_" + "x" * 32},
+        )
+        self.assertTrue(result["reflow_needed"])
+        self.assertEqual(19, result["new_layout"]["version"])
 
     @patch("ai_copilot.ai_provider.call_structured_with_fallback")
     def test_copilot_accepts_groq_fallback_result(self, mock_provider):

@@ -384,6 +384,9 @@ def validate_document_plan(value: Any) -> None:
     if not isinstance(needs_clarification, bool):
         raise GeminiServiceError("AI belge planında needs_clarification alanı eksik.", 502)
     if needs_clarification:
+        question = value.get("clarification_question")
+        if not isinstance(question, str) or not normalize_text(question, maximum=300):
+            raise GeminiServiceError("AI belge planında açıklama sorusu eksik.", 502)
         return
     sanitize_blocks(value.get("blocks"))
 
@@ -648,10 +651,18 @@ def build_layout(
                 )
             for note_line in note_lines:
                 cursor = max(cursor, settings["margin_top"] + int(note_line.get("letter_scale", 60)))
-                note_line["baseline_y"] = min(
-                    cursor,
-                    PAGE_HEIGHT_PX - settings["margin_bottom"],
+                safe_bottom = (
+                    PAGE_HEIGHT_PX
+                    - settings["margin_bottom"]
+                    - max(1, int(note_line.get("letter_scale", 60) * 0.28))
                 )
+                if cursor > safe_bottom:
+                    raise AiDocumentError(
+                        "Kenar notları hedef sayfanın sağ boşluğuna sığmıyor; "
+                        "notları azaltın veya farklı sayfalara dağıtın.",
+                        422,
+                    )
+                note_line["baseline_y"] = cursor
                 target_page["lines"].append(note_line)
                 cursor += max(int(note_line.get("letter_scale", 60) * 1.2), int(settings["line_spacing"] * 0.72))
 

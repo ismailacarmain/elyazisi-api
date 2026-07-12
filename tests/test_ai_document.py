@@ -185,6 +185,24 @@ class AiDocumentTests(unittest.TestCase):
         ]
         self.assertEqual(["page-1"], note_pages)
 
+    def test_targeted_margin_notes_fail_instead_of_overlapping(self):
+        blocks = [{
+            "id": "body",
+            "type": "paragraph",
+            "text": "abc",
+            "page_break_before": False,
+        }]
+        blocks.extend({
+            "id": f"note-{index}",
+            "type": "paragraph",
+            "text": "abc",
+            "is_margin_note": True,
+            "target_page_id": "page-1",
+            "page_break_before": False,
+        } for index in range(40))
+        with self.assertRaisesRegex(ai_document.AiDocumentError, "Kenar notları"):
+            ai_document.build_layout(blocks, fake_font(), {})
+
     def test_pen_dying_effect_reaches_last_line(self):
         layout = ai_document.build_layout([{
             "type": "paragraph",
@@ -216,6 +234,14 @@ class AiDocumentTests(unittest.TestCase):
             "blocks": [],
             "clarification_question": "Hangi kağıt türü?",
         })
+
+    def test_document_plan_contract_rejects_empty_clarification_question(self):
+        with self.assertRaises(ai_document.GeminiServiceError):
+            ai_document.validate_document_plan({
+                "needs_clarification": True,
+                "blocks": [],
+                "clarification_question": "   ",
+            })
 
     def test_last_explicit_page_count_wins_after_clarification(self):
         self.assertEqual(1, ai_document.requested_page_count("Tek A4 sayfa olsun"))

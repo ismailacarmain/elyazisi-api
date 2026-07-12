@@ -1,3 +1,4 @@
+import copy
 import unittest
 from unittest.mock import patch
 
@@ -121,6 +122,167 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertTrue(target_lines)
         self.assertEqual(17, target_lines[0]["line_slope"])
 
+    @patch("app._load_font_images", return_value=fake_font())
+    @patch("app._font_access_for_user", return_value=(object(), {}))
+    def test_previous_line_override_survives_later_unrelated_reflow(self, _access, _load):
+        blocks = [
+            {"type": "paragraph", "text": "first block text", "page_break_before": False},
+            {"type": "paragraph", "text": "second block text", "page_break_before": False},
+        ]
+        settings = {"letter_height_mm": 10, "line_spacing_mm": 14}
+        layout = ai_document.build_layout(blocks, fake_font(), settings, fake_font())
+        layout, blocks = ai_copilot.ensure_document_ids(layout, blocks)
+        source_line = next(
+            line for page in layout["pages"] for line in page["lines"]
+            if line["block_id"] == blocks[0]["id"]
+        )
+        original_x = source_line["start_x"]
+        original_y = source_line["baseline_y"]
+        operations = [
+            {
+                "operation": "update_line_style",
+                "target_id": source_line["id"],
+                "patch": {
+                    "ink_color": "#123456",
+                    "line_slope": 17,
+                    "letter_spacing": 8,
+                    "word_spacing": 70,
+                    "opacity": 0.72,
+                    "kalinlik": 2,
+                },
+            },
+            {
+                "operation": "move_line",
+                "target_id": source_line["id"],
+                "delta_x_px": 24,
+                "delta_y_px": 18,
+            },
+            {
+                "operation": "switch_line_author",
+                "target_id": source_line["id"],
+                "patch": {"font_slot": "secondary"},
+            },
+        ]
+        patched_layout, patched_blocks, inverse = ai_copilot.apply_operations(
+            operations, layout, blocks
+        )
+        doc = {
+            "user_id": "user-a",
+            "font_id": "font-a",
+            "secondary_font_id": "font-b",
+            "page_settings": settings,
+            "version": 1,
+            "layout": layout,
+            "blocks": blocks,
+        }
+        first_result = app._finalize_copilot_result(doc, {
+            "needs_clarification": False,
+            "new_layout": patched_layout,
+            "new_blocks": patched_blocks,
+            "operations": operations,
+            "inverse_operations": inverse,
+            "reflow_needed": False,
+            "page_target_intent": "",
+            "assistant_message": "",
+        }, source_layout=layout)
+
+        later_doc = {
+            **doc,
+            "version": 2,
+            "layout": first_result["new_layout"],
+            "blocks": first_result["new_blocks"],
+        }
+        unrelated = [{
+            "operation": "replace_block_text",
+            "target_id": blocks[1]["id"],
+            "new_text": "unrelated replacement text " * 20,
+        }]
+        later_layout, later_blocks, later_inverse = ai_copilot.apply_operations(
+            unrelated, later_doc["layout"], later_doc["blocks"]
+        )
+        finalized = app._finalize_copilot_result(later_doc, {
+            "needs_clarification": False,
+            "new_layout": later_layout,
+            "new_blocks": later_blocks,
+            "operations": unrelated,
+            "inverse_operations": later_inverse,
+            "reflow_needed": True,
+            "page_target_intent": "",
+            "assistant_message": "",
+        }, source_layout=later_doc["layout"])
+        target = next(
+            line for page in finalized["new_layout"]["pages"] for line in page["lines"]
+            if line["block_id"] == blocks[0]["id"]
+        )
+        self.assertEqual("#123456", target["ink_color"])
+        self.assertEqual(17, target["line_slope"])
+        self.assertEqual(8, target["letter_spacing"])
+        self.assertEqual(70, target["word_spacing"])
+        self.assertEqual(0.72, target["opacity"])
+        self.assertEqual(2, target["kalinlik"])
+        self.assertEqual("secondary", target["font_slot"])
+        self.assertEqual(original_x + 24, target["start_x"])
+        self.assertEqual(original_y + 18, target["baseline_y"])
+
+    @patch("app._load_font_images", return_value=fake_font())
+    @patch("app._font_access_for_user", return_value=(object(), {}))
+    def test_manual_client_line_override_survives_follow_up_reflow(self, _access, _load):
+        blocks = [
+            {"type": "paragraph", "text": "manual line", "page_break_before": False},
+            {"type": "paragraph", "text": "other block", "page_break_before": False},
+        ]
+        settings = {"letter_height_mm": 10, "line_spacing_mm": 14}
+        stored_layout = ai_document.build_layout(blocks, fake_font(), settings, fake_font())
+        stored_layout, blocks = ai_copilot.ensure_document_ids(stored_layout, blocks)
+        client_layout = copy.deepcopy(stored_layout)
+        client_line = client_layout["pages"][0]["lines"][0]
+        client_line.update({
+            "start_x": client_line["start_x"] + 16,
+            "baseline_y": client_line["baseline_y"] + 12,
+            "ink_color": "#654321",
+            "line_slope": 13,
+            "letter_spacing": 6,
+            "word_spacing": 66,
+            "opacity": 0.68,
+            "kalinlik": 3,
+            "font_slot": "secondary",
+        })
+        sanitized = ai_document.validate_layout(client_layout)
+        sanitized["settings"] = copy.deepcopy(stored_layout.get("settings", {}))
+        app._capture_manual_line_override_metadata(stored_layout, sanitized)
+        sanitized, blocks = ai_copilot.ensure_document_ids(sanitized, blocks)
+
+        doc = {
+            "user_id": "user-a",
+            "font_id": "font-a",
+            "secondary_font_id": "font-b",
+            "page_settings": settings,
+            "version": 2,
+            "layout": sanitized,
+            "blocks": blocks,
+        }
+        changed_blocks = copy.deepcopy(blocks)
+        changed_blocks[1]["text"] = "other block changed " * 20
+        rebuilt, _, _ = app._copilot_reflow_state(
+            doc, sanitized, changed_blocks, 3, operations=[]
+        )
+        target = next(
+            line for page in rebuilt["pages"] for line in page["lines"]
+            if line["block_id"] == blocks[0]["id"]
+        )
+        for field, expected in {
+            "start_x": client_line["start_x"],
+            "baseline_y": client_line["baseline_y"],
+            "ink_color": "#654321",
+            "line_slope": 13,
+            "letter_spacing": 6,
+            "word_spacing": 66,
+            "opacity": 0.68,
+            "kalinlik": 3,
+            "font_slot": "secondary",
+        }.items():
+            self.assertEqual(expected, target[field], field)
+
     def test_manual_target_intent_clears_a_saved_target(self):
         doc, result = self._state(20)
         doc["page_settings"]["target_page_count"] = 1
@@ -190,6 +352,68 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertTrue(payload["firebase_project_ready"])
         self.assertNotIn("credential", str(payload).lower())
         self.assertNotIn("key", str(payload).lower())
+
+    @patch("app.auth.verify_id_token", side_effect=ValueError("invalid token"))
+    def test_invalid_token_error_is_valid_turkish_utf8(self, _verify):
+        response = app.app.test_client().get(
+            "/api/ai/status",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+        self.assertEqual(401, response.status_code)
+        payload = response.get_json()
+        self.assertEqual(
+            "Oturum doğrulanamadı. Lütfen yeniden giriş yapın.",
+            payload["message"],
+        )
+        self.assertNotIn("Ã", payload["message"])
+        self.assertNotIn("Ä", payload["message"])
+        self.assertNotIn("Å", payload["message"])
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
+    def test_invalid_document_version_returns_controlled_400(self, _verify):
+        with patch("app._get_copilot_doc", return_value={"version": 3}):
+            response = app.app.test_client().post(
+                "/api/ai/documents/document-1/edits",
+                headers={"Authorization": "Bearer test-token"},
+                json={"instruction": "Başlığı düzelt", "document_version": "abc"},
+            )
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("Belge sürümü geçersiz.", response.get_json()["message"])
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
+    def test_redo_uses_stored_secondary_font_even_if_multi_author_started_off(self, _verify):
+        blocks = [{"type": "paragraph", "text": "abc", "page_break_before": False}]
+        layout = ai_document.build_layout(blocks, fake_font(), {"multi_author": False})
+        layout, blocks = ai_copilot.ensure_document_ids(layout, blocks)
+        block_id = blocks[0]["id"]
+        record = {
+            "instruction": "İkinci yazarla yaz",
+            "operations": [{
+                "operation": "switch_block_author",
+                "target_id": block_id,
+                "patch": {"author_slot": "secondary"},
+            }],
+            "page_settings_after": {},
+        }
+        doc = {
+            "version": 2,
+            "layout": layout,
+            "blocks": blocks,
+            "history": [],
+            "redo_stack": [record],
+            "secondary_font_id": "font-b",
+        }
+        with patch("app._get_copilot_doc", return_value=doc), \
+             patch("app._copilot_reflow_state", side_effect=lambda _doc, new_layout, new_blocks, *_args: (new_layout, new_blocks, {})), \
+             patch("app._store.redo_document") as redo_document:
+            response = app.app.test_client().post(
+                "/api/ai/documents/document-1/redo",
+                headers={"Authorization": "Bearer test-token"},
+            )
+        self.assertEqual(200, response.status_code)
+        payload = response.get_json()
+        self.assertEqual("secondary", payload["new_blocks"][0]["author_slot"])
+        redo_document.assert_called_once()
 
     @patch("app._store.create_document", return_value="document-1")
     @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
