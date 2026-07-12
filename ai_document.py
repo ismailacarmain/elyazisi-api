@@ -113,6 +113,10 @@ _PAGE_COUNT_WORDS = {
     "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
 _PAGE_TARGET_MANUAL_RE = re.compile(r"\[\s*page-target\s*:\s*manual\s*\]", re.IGNORECASE)
+_SINGLE_A4_RE = re.compile(
+    r"\b(?:tek|bir|1)\s*(?:adet\s*)?a4(?:['’]?(?:e|a|ye|ya))?\b",
+    re.IGNORECASE,
+)
 
 
 def page_target_intent(*values: Any) -> tuple[int | None, bool]:
@@ -133,10 +137,15 @@ def page_target_intent(*values: Any) -> tuple[int | None, bool]:
             for match in _PAGE_TARGET_MANUAL_RE.finditer(text)
         ]
         events.extend((match.start(), "count", match) for match in _PAGE_COUNT_RE.finditer(text))
+        events.extend((match.start(), "single_a4", None) for match in _SINGLE_A4_RE.finditer(text))
         for _, kind, match in sorted(events, key=lambda item: item[0]):
             if kind == "manual":
                 requested = None
                 manually_cleared = True
+                continue
+            if kind == "single_a4":
+                requested = 1
+                manually_cleared = False
                 continue
             token = match.group("count")
             count = int(token) if token.isdigit() else _PAGE_COUNT_WORDS.get(token)
@@ -539,7 +548,9 @@ def build_layout(
 
         for paragraph_index, paragraph in enumerate(paragraphs):
             margin_note_width = max(settings["margin_right"] - 36, int(round(25 * PX_PER_MM)))
-            wrap_width = margin_note_width if is_margin_note else content_width
+            base_wrap_width = margin_note_width if is_margin_note else content_width
+            scale_safety = 1.0 + max(0.0, float(style.get("scale_jitter", 0))) / 100.0
+            wrap_width = max(80, int(base_wrap_width / scale_safety))
             wrapped = wrap_text(prefix + paragraph, metrics, wrap_width, settings["letter_spacing"], settings["word_spacing"])
             if is_margin_note and len(wrapped) > 3:
                 warnings.append("Kenar notu en fazla 3 satıra kısaltıldı.")
@@ -564,9 +575,15 @@ def build_layout(
                 start_x = settings["margin_left"]
                 if is_margin_note:
                     start_x = PAGE_WIDTH_PX - 24 - margin_note_width
-                elif settings["horizontal_align"] == "center" or style["align"] == "center":
+                elif "align" in block:
+                    explicit_align = str(block.get("align") or "left")
+                    if explicit_align == "center":
+                        start_x += max(0, (content_width - width) // 2)
+                    elif explicit_align == "right":
+                        start_x += max(0, content_width - width)
+                elif style["align"] == "center" or settings["horizontal_align"] == "center":
                     start_x += max(0, (content_width - width) // 2)
-                elif settings["horizontal_align"] == "right" or style["align"] == "right":
+                elif style["align"] == "right" or settings["horizontal_align"] == "right":
                     start_x += max(0, content_width - width)
                 line_counter += 1
                 if line_counter > MAX_LINES:
@@ -599,6 +616,44 @@ def build_layout(
                     baseline += line_spacing
             if paragraph_index < len(paragraphs) - 1:
                 baseline += int(settings["line_spacing"] * 0.35)
+
+    # Copilot margin notes may explicitly target an existing page. They are
+    # rendered in the right margin and do not alter the main text flow.
+    targeted_notes = {
+        str(block.get("id")): str(block.get("target_page_id"))
+        for block in blocks
+        if block.get("is_margin_note") and block.get("id") and block.get("target_page_id")
+    }
+    if targeted_notes:
+        pages_by_id = {str(item.get("id")): item for item in pages}
+        for block_id, target_page_id in targeted_notes.items():
+            target_page = pages_by_id.get(target_page_id)
+            if target_page is None:
+                warnings.append(f"Kenar notu hedef sayfası bulunamadı: {target_page_id}")
+                continue
+            note_lines = []
+            for source_page in pages:
+                kept = []
+                for line in source_page.get("lines", []):
+                    if str(line.get("block_id")) == block_id and line.get("is_margin_note"):
+                        note_lines.append(line)
+                    else:
+                        kept.append(line)
+                source_page["lines"] = kept
+            existing_notes = [line for line in target_page.get("lines", []) if line.get("is_margin_note")]
+            cursor = settings["margin_top"]
+            if existing_notes:
+                cursor = max(line["baseline_y"] for line in existing_notes) + max(
+                    int(line.get("letter_scale", 60) * 1.2) for line in existing_notes
+                )
+            for note_line in note_lines:
+                cursor = max(cursor, settings["margin_top"] + int(note_line.get("letter_scale", 60)))
+                note_line["baseline_y"] = min(
+                    cursor,
+                    PAGE_HEIGHT_PX - settings["margin_bottom"],
+                )
+                target_page["lines"].append(note_line)
+                cursor += max(int(note_line.get("letter_scale", 60) * 1.2), int(settings["line_spacing"] * 0.72))
 
     if settings["vertical_align"] == "center":
         for centered_page in pages:
@@ -908,8 +963,13 @@ def validate_layout(layout: Any) -> dict[str, Any]:
             "margin_left": int(_clamp(raw_page.get("margin_left"), 60, 650, 180)),
             "margin_right": int(_clamp(raw_page.get("margin_right"), 60, 650, 180)),
             "margin_bottom": int(_clamp(raw_page.get("margin_bottom"), 60, 600, 220)),
-            "line_spacing": int(_clamp(raw_page.get("line_spacing"), 70, 450, 215)),
-            "opacity": _clamp(raw_page.get("opacity"), 0.5, 1.0, 0.95),
+            "line_spacing": int(_clamp(
+                raw_page.get("line_spacing"),
+                round(MIN_LINE_SPACING_MM * PX_PER_MM),
+                450,
+                215,
+            )),
+            "opacity": _clamp(raw_page.get("opacity"), 0.4, 1.0, 0.95),
             "kalinlik": int(_clamp(raw_page.get("kalinlik"), -2, 4, 0)),
             "pen_dying_effect": raw_page.get("pen_dying_effect") is True,
             "paper_age": int(_clamp(raw_page.get("paper_age"), 0, 100, 0)),
@@ -1233,7 +1293,7 @@ def create_ai_layout(
     if provider_config:
         config = dict(provider_config)
         config.setdefault("gemini_key", api_key)
-        config.setdefault("gemini_model", validate_model(model))
+        config["gemini_model"] = validate_model(model)
         try:
             parsed, provider, actual_model = ai_provider.call_structured_with_fallback(
                 config=config,

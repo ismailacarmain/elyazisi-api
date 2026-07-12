@@ -110,6 +110,16 @@ class AiDocumentTests(unittest.TestCase):
         expected_y = (page["margin_top"] + ai_document.PAGE_HEIGHT_PX - page["margin_bottom"]) / 2
         self.assertAlmostEqual(expected_y, content_center_y, delta=2)
 
+    def test_explicit_block_alignment_overrides_document_alignment(self):
+        layout = ai_document.build_layout([{
+            "id": "block-left",
+            "type": "paragraph",
+            "text": "abc",
+            "align": "left",
+        }], fake_font(), {"horizontal_align": "center"})
+        settings = ai_document.normalize_page_settings({"horizontal_align": "center"})
+        self.assertEqual(settings["margin_left"], layout["pages"][0]["lines"][0]["start_x"])
+
     def test_legacy_parent_document_font_map_is_decoded(self):
         image = Image.new("RGBA", (28, 50), (0, 0, 0, 0))
         ImageDraw.Draw(image).line((14, 4, 14, 46), fill=(0, 0, 0, 255), width=4)
@@ -158,6 +168,23 @@ class AiDocumentTests(unittest.TestCase):
         self.assertGreaterEqual(notes[0]["start_x"], ai_document.PAGE_WIDTH_PX - page["margin_right"] - 150)
         self.assertEqual(ai_document.PAGE_WIDTH_PX - 24, notes[0]["max_x"])
 
+    def test_margin_note_is_relocated_to_requested_page(self):
+        blocks = [
+            {"id": "b1", "type": "paragraph", "text": "abc", "page_break_before": False},
+            {"id": "b2", "type": "paragraph", "text": "abc", "page_break_before": True},
+            {
+                "id": "note-1", "type": "paragraph", "text": "abc",
+                "is_margin_note": True, "target_page_id": "page-1",
+                "page_break_before": False,
+            },
+        ]
+        layout = ai_document.build_layout(blocks, fake_font(), {})
+        note_pages = [
+            page["id"] for page in layout["pages"]
+            if any(line.get("block_id") == "note-1" for line in page["lines"])
+        ]
+        self.assertEqual(["page-1"], note_pages)
+
     def test_pen_dying_effect_reaches_last_line(self):
         layout = ai_document.build_layout([{
             "type": "paragraph",
@@ -200,6 +227,10 @@ class AiDocumentTests(unittest.TestCase):
             ),
         )
         self.assertIsNone(ai_document.requested_page_count("Kısa ve düzenli bir ödev hazırla"))
+
+    def test_single_a4_phrasing_is_understood_as_one_page(self):
+        self.assertEqual(1, ai_document.requested_page_count("Metni tek A4'e sığdır"))
+        self.assertEqual(1, ai_document.requested_page_count("Bunu bir A4'e yerleştir"))
 
     def test_manual_page_target_marker_overrides_an_older_request(self):
         instructions = "1 sayfa olsun\n[Soru: Ölçüler?\nCevabım: Ölçüleri kendim ayarlayacağım]\n[page-target:manual]"

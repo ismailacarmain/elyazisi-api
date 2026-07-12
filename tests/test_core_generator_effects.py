@@ -16,6 +16,16 @@ def effect_font():
 
 
 class CoreGeneratorEffectsTests(unittest.TestCase):
+    def test_page_dying_pen_fades_even_when_lines_have_opacity(self):
+        lines = [{"opacity": 0.95}, {"opacity": 0.95}, {"opacity": 0.95}]
+        values = [
+            core_generator._effective_line_opacity(line, 0.95, index, len(lines), True)
+            for index, line in enumerate(lines)
+        ]
+        self.assertAlmostEqual(0.95, values[0], places=2)
+        self.assertLess(values[1], values[0])
+        self.assertAlmostEqual(0.40, values[-1], places=2)
+
     def test_markdown_spans_are_parsed(self):
         styled = list(core_generator._styled_words("==a b== **c** ~~a~~"))
         self.assertEqual([

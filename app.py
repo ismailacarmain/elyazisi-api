@@ -155,6 +155,31 @@ CORS(app, resources={
 def health():
     return jsonify({"status": "healthy"}), 200
 
+
+@app.route('/health/ready')
+def readiness():
+    """Production readiness without exposing credentials or provider keys."""
+    expected_project = os.environ.get("FIREBASE_PROJECT_ID", "elyazisiapp").strip()
+    firebase_ready = db is not None
+    project_ready = bool(
+        firebase_ready
+        and connected_project_id
+        and connected_project_id == expected_project
+    )
+    providers = ai_provider.configured_providers({
+        "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
+        "groq_key": os.environ.get("GROQ_API_KEY", ""),
+        "openrouter_key": os.environ.get("OPENROUTER_API_KEY", ""),
+    })
+    ready = firebase_ready and project_ready
+    return jsonify({
+        "status": "ready" if ready else "not_ready",
+        "firebase_ready": firebase_ready,
+        "firebase_project_ready": project_ready,
+        "server_ai_provider_ready": bool(providers),
+        "byok_supported": True,
+    }), 200 if ready else 503
+
 @app.route('/forms/<path:filename>')
 @app.route('/pdfler/<path:filename>')
 def serve_forms(filename):
@@ -2144,9 +2169,60 @@ def _copilot_full_text(blocks: Any) -> str:
     )[:ai_document.MAX_DOCUMENT_CHARS]
 
 
+def _reapply_targeted_line_operations(
+    rebuilt: dict,
+    patched_layout: dict,
+    operations: Any,
+) -> None:
+    """Keep the current line edit visible when a document reflow is required."""
+    if not isinstance(operations, list):
+        return
+
+    def lines_for_block(layout: dict, block_id: str) -> list[dict]:
+        return [
+            line
+            for page in layout.get("pages", [])
+            for line in page.get("lines", [])
+            if str(line.get("block_id") or "") == block_id
+        ]
+
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        name = operation.get("operation")
+        if name not in {"update_line_style", "move_line", "switch_line_author"}:
+            continue
+        source = _cop._get_line_by_id(patched_layout, operation.get("target_id"))
+        if source is None:
+            continue
+        block_id = str(source.get("block_id") or "")
+        if not block_id:
+            continue
+        source_lines = lines_for_block(patched_layout, block_id)
+        target_lines = lines_for_block(rebuilt, block_id)
+        try:
+            ordinal = next(i for i, line in enumerate(source_lines) if line.get("id") == source.get("id"))
+        except StopIteration:
+            continue
+        if ordinal >= len(target_lines):
+            continue
+        target = target_lines[ordinal]
+        if name == "move_line":
+            target["start_x"] = source.get("start_x", target.get("start_x"))
+            target["baseline_y"] = source.get("baseline_y", target.get("baseline_y"))
+        else:
+            patch = operation.get("patch") or {}
+            for key in patch:
+                if key in _cop.ALLOWED_LINE_STYLE_FIELDS and key in source:
+                    target[key] = source[key]
+            if name == "switch_line_author":
+                target["font_slot"] = source.get("font_slot", target.get("font_slot", "primary"))
+
+
 def _copilot_reflow_state(
     doc: dict, layout: dict, blocks: list, version: int,
     target_pages: int | None = None,
+    operations: Any = None,
 ) -> tuple[dict, list, dict | None]:
     """Rebuild wrapped lines from edited blocks using the document's real fonts."""
     font_id = str(doc.get("font_id") or "").strip()
@@ -2230,6 +2306,8 @@ def _copilot_reflow_state(
             for line in page.get("lines", []):
                 line.update(line_visual_patch)
 
+    _reapply_targeted_line_operations(rebuilt, layout, operations)
+
     rebuilt, blocks = _cop.ensure_document_ids(rebuilt, blocks)
     return rebuilt, blocks, fit_result
 
@@ -2261,6 +2339,7 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
             result["new_blocks"],
             int(result["new_layout"].get("version", doc["version"] + 1)),
             target_pages,
+            result.get("operations"),
         )
         if fit_result and not fit_result.get("success"):
             report = fit_result["report"]
@@ -2641,7 +2720,10 @@ def copilot_edit_document(document_id: str):
                         "can_redo": bool(doc["redo_stack"]),
                     })
 
-        secondary_available = bool(doc["layout"].get("settings", {}).get("multi_author"))
+        # A stored secondary font is sufficient for Copilot to switch a block
+        # or line later; the initial document does not have to start in
+        # multi-author mode.
+        secondary_available = bool(str(doc.get("secondary_font_id") or "").strip())
         configured_model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
         model = ai_document.validate_model(data.get("model") or configured_model)
         provider_config = _ai_provider_config(os.environ.get(
@@ -2849,6 +2931,7 @@ def copilot_undo(document_id: str):
             new_layout, new_blocks, _ = _copilot_reflow_state(
                 doc, new_layout, new_blocks, new_version,
                 _stored_page_target(record.get("page_settings_before")),
+                clean_inv,
             )
         else:
             new_layout["version"] = new_version
@@ -2914,6 +2997,7 @@ def copilot_redo(document_id: str):
             new_layout, new_blocks, _ = _copilot_reflow_state(
                 doc, new_layout, new_blocks, new_version,
                 _stored_page_target(record.get("page_settings_after")),
+                clean_ops,
             )
         else:
             new_layout["version"] = new_version

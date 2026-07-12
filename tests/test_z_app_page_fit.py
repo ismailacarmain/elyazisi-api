@@ -89,6 +89,38 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertFalse(finalized["needs_clarification"])
         self.assertEqual(1, len(finalized["new_layout"]["pages"]))
 
+    @patch("app._load_font_images", return_value=fake_font())
+    @patch("app._font_access_for_user", return_value=(object(), {}))
+    def test_line_style_survives_reflow_for_active_page_target(self, _access, _load):
+        doc, result = self._state(400)
+        source_line = result["new_layout"]["pages"][0]["lines"][0]
+        operations = [{
+            "operation": "update_line_style",
+            "target_id": source_line["id"],
+            "patch": {"line_slope": 17},
+        }]
+        clean = ai_copilot.validate_and_sanitize_operations(
+            operations, result["new_layout"], result["new_blocks"]
+        )
+        patched_layout, patched_blocks, inverse = ai_copilot.apply_operations(
+            clean, result["new_layout"], result["new_blocks"]
+        )
+        result.update({
+            "new_layout": patched_layout,
+            "new_blocks": patched_blocks,
+            "operations": clean,
+            "inverse_operations": inverse,
+        })
+        finalized = app._finalize_copilot_result(doc, result)
+        self.assertFalse(finalized["needs_clarification"])
+        block_id = source_line["block_id"]
+        target_lines = [
+            line for page in finalized["new_layout"]["pages"] for line in page["lines"]
+            if line.get("block_id") == block_id
+        ]
+        self.assertTrue(target_lines)
+        self.assertEqual(17, target_lines[0]["line_slope"])
+
     def test_manual_target_intent_clears_a_saved_target(self):
         doc, result = self._state(20)
         doc["page_settings"]["target_page_count"] = 1
@@ -146,6 +178,18 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(204, response.status_code)
         self.assertIn("PATCH", response.headers.get("Access-Control-Allow-Methods", ""))
+
+    def test_readiness_reports_firebase_without_exposing_secrets(self):
+        with patch.object(app, "db", object()), \
+             patch.object(app, "connected_project_id", "elyazisiapp"), \
+             patch.dict("os.environ", {"FIREBASE_PROJECT_ID": "elyazisiapp"}, clear=False):
+            response = app.app.test_client().get("/health/ready")
+        self.assertEqual(200, response.status_code)
+        payload = response.get_json()
+        self.assertTrue(payload["firebase_ready"])
+        self.assertTrue(payload["firebase_project_ready"])
+        self.assertNotIn("credential", str(payload).lower())
+        self.assertNotIn("key", str(payload).lower())
 
     @patch("app._store.create_document", return_value="document-1")
     @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})

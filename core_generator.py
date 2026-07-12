@@ -166,6 +166,18 @@ def _styled_words(text):
             yield word, style
 
 
+def _effective_line_opacity(line_data, page_opacity, line_index, line_count, pen_dying_effect):
+    line_opacity = float(line_data.get('opacity', page_opacity))
+    if not pen_dying_effect:
+        return line_opacity
+    progress = line_index / max(1, line_count - 1)
+    dying_opacity = max(
+        0.40,
+        float(page_opacity) - progress * max(0.0, float(page_opacity) - 0.40),
+    )
+    return min(line_opacity, dying_opacity)
+
+
 def harfi_boyutlandir(harf_resmi, hedef_yukseklik):
     ow, oh = harf_resmi.size
     if oh == 0:
@@ -536,10 +548,9 @@ def metni_koordinatli_yaz(layout, harfler, font_sets=None):
         pen_dying_effect = page_data.get('pen_dying_effect') is True
 
         for line_index, line_data in enumerate(page_lines):
-            line_opacity = line_data.get('opacity', page_opacity)
-            if pen_dying_effect and 'opacity' not in line_data:
-                progress = line_index / max(1, len(page_lines) - 1)
-                line_opacity = max(0.40, float(page_opacity) - progress * max(0.0, float(page_opacity) - 0.40))
+            line_opacity = _effective_line_opacity(
+                line_data, page_opacity, line_index, len(page_lines), pen_dying_effect
+            )
             line_kalinlik = line_data.get('kalinlik', page_kalinlik)
             line_scale_jitter = max(0.0, min(35.0, float(line_data.get('scale_jitter', page_data.get('scale_jitter', 0)) or 0)))
             font_slot = 'secondary' if line_data.get('font_slot') == 'secondary' else 'primary'

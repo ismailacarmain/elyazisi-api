@@ -288,7 +288,7 @@ class TestCopilotOperations(unittest.TestCase):
         layout["pages"][0]["margin_left"] = 100
         layout["pages"][1]["margin_left"] = 200
         ops = [{"operation": "update_page_settings", "target_id": "", "patch": {"margin_left": 150}}]
-        clean = cop.validate_and_sanitize_operations(ops, layout, blocks)
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks, trusted_internal=True)
         changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
         restored_layout, _, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
         self.assertEqual([100, 200], [page["margin_left"] for page in restored_layout["pages"]])
@@ -347,6 +347,65 @@ class TestCopilotOperations(unittest.TestCase):
             [11, 11, 11],
             [line["line_slope"] for line in redone_layout["pages"][0]["lines"]],
         )
+
+    def test_multiple_operations_undo_in_reverse_to_original_state(self):
+        blocks = _make_blocks()
+        blocks[0]["color"] = "#111111"
+        layout = _make_layout(blocks)
+        operations = [
+            {"operation": "update_block_style", "target_id": "block-1", "patch": {"color": "#FF0000"}},
+            {"operation": "update_block_style", "target_id": "block-1", "patch": {"color": "#0000FF"}},
+        ]
+        clean = cop.validate_and_sanitize_operations(operations, layout, blocks)
+        changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
+        self.assertEqual("#0000FF", changed_blocks[0]["color"])
+        _, restored_blocks, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
+        self.assertEqual("#111111", restored_blocks[0]["color"])
+
+    def test_block_slope_reaches_every_rendered_line(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        clean = cop.validate_and_sanitize_operations([{
+            "operation": "update_block_style",
+            "target_id": "block-2",
+            "patch": {"line_slope": 10},
+        }], layout, blocks)
+        changed_layout, _, _ = cop.apply_operations(clean, layout, blocks)
+        block_lines = [
+            line for page in changed_layout["pages"] for line in page["lines"]
+            if line.get("block_id") == "block-2"
+        ]
+        self.assertTrue(block_lines)
+        self.assertTrue(all(line["line_slope"] == 10 for line in block_lines))
+
+    def test_page_geometry_is_reserved_for_trusted_reflow(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        operation = [{
+            "operation": "update_page_settings",
+            "target_id": "page-1",
+            "patch": {"margin_left": 80},
+        }]
+        with self.assertRaises(cop.CopilotError):
+            cop.validate_and_sanitize_operations(operation, layout, blocks)
+        trusted = cop.validate_and_sanitize_operations(
+            operation, layout, blocks, trusted_internal=True
+        )
+        self.assertEqual(80, trusted[0]["patch"]["margin_left"])
+
+    def test_copilot_ranges_match_pdf_layout_contract(self):
+        patch = cop._sanitize_patch({
+            "opacity": 0.1, "kalinlik": 9, "jitter": 99,
+            "scale_jitter": 99, "letter_spacing": 100,
+            "word_spacing": -5, "line_offset_y": 999,
+        }, cop.ALLOWED_LINE_STYLE_FIELDS)
+        self.assertEqual(0.4, patch["opacity"])
+        self.assertEqual(4, patch["kalinlik"])
+        self.assertEqual(15, patch["jitter"])
+        self.assertEqual(35, patch["scale_jitter"])
+        self.assertEqual(42, patch["letter_spacing"])
+        self.assertEqual(10, patch["word_spacing"])
+        self.assertEqual(120, patch["line_offset_y"])
 
     def test_document_slope_and_physical_sizes_are_supported(self):
         blocks = _make_blocks()
@@ -549,6 +608,21 @@ class TestCopilotOperations(unittest.TestCase):
         self.assertEqual(result["clarification_question"], "Hangi bloğu değiştireyim?")
         self.assertEqual(result["new_layout"], layout)  # layout değişmemeli
 
+    def test_selected_page_physical_layout_requires_scope_confirmation(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        result = cop.process_copilot_edit(
+            api_key="",
+            model="gemini-3.5-flash",
+            instruction="Bu sayfanın kenar boşluğunu 5 mm yap",
+            layout=layout,
+            blocks=blocks,
+            selection={"type": "page", "id": "page-1"},
+        )
+        self.assertTrue(result["needs_clarification"])
+        self.assertIn("tüm belgeye", result["clarification_question"].lower())
+        self.assertEqual("policy", result["provider"])
+
     # 21. apply_text_effect highlight işaretlemesi
     def test_apply_text_effect_highlight(self):
         # ASCII-only metinle test et (encoding sorunundan kaçın)
@@ -588,6 +662,24 @@ class TestCopilotOperations(unittest.TestCase):
         self.assertIn("selection", snap)
         self.assertEqual(snap["selection"]["block_id"], "block-1")
 
+    def test_snapshot_exposes_current_render_controls(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        layout["pages"][0]["lines"][0].update({
+            "line_slope": 8,
+            "opacity": 0.72,
+            "letter_spacing": 7,
+            "ink_color": "#123456",
+        })
+        snap = cop.build_document_snapshot(
+            layout, blocks, {"type": "line", "id": "line-1"}
+        )
+        line = snap["selection_context"]
+        self.assertEqual(8, line["line_slope"])
+        self.assertEqual(0.72, line["opacity"])
+        self.assertEqual(7, line["letter_spacing"])
+        self.assertEqual("#123456", line["ink_color"])
+
     # 24. Page hash deterministik
     def test_page_hash_deterministic(self):
         layout = _make_layout()
@@ -605,6 +697,19 @@ class TestCopilotOperations(unittest.TestCase):
         page2["lines"][0]["text"] = "Farklı metin"
         h2 = cop.layout_page_hash(page2)
         self.assertNotEqual(h1, h2)
+
+    def test_page_hash_covers_every_rendered_line_control(self):
+        base = _make_layout()["pages"][0]
+        original = cop.layout_page_hash(base)
+        fields = {
+            "line_slope": 12, "kalinlik": 3, "letter_spacing": 9,
+            "word_spacing": 90, "line_offset_y": 18, "max_x": 1800,
+        }
+        for field, value in fields.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(base)
+                changed["lines"][0][field] = value
+                self.assertNotEqual(original, cop.layout_page_hash(changed))
 
     # 26. add_margin_note inverse = remove_block
     def test_add_margin_note_inverse(self):
@@ -688,14 +793,48 @@ class TestCopilotOperations(unittest.TestCase):
         _, changed_blocks, _ = cop.apply_operations(clean, layout, blocks)
         self.assertEqual("1453 yılı", cop._get_block_by_id(changed_blocks, "block-2")["text"])
 
+    def test_missing_text_effect_target_is_rejected(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        clean = cop.validate_and_sanitize_operations([{
+            "operation": "apply_text_effect",
+            "target_id": "block-2",
+            "target_word": "mevcut-değil",
+            "patch": {"effect": "highlight"},
+        }], layout, blocks)
+        with self.assertRaises(cop.CopilotError):
+            cop.apply_operations(clean, layout, blocks)
+
 
 class CopilotProviderTests(unittest.TestCase):
+    @patch("ai_copilot.ai_provider.call_structured_with_fallback")
+    def test_empty_provider_edit_is_rejected_instead_of_claiming_success(self, mock_provider):
+        mock_provider.return_value = ({
+            "needs_clarification": False,
+            "assistant_message": "Düzenledim.",
+            "operations": [],
+        }, "groq", "openai/gpt-oss-120b")
+        blocks = _make_blocks()
+        with self.assertRaises(cop.CopilotError):
+            cop.process_copilot_edit(
+                api_key="",
+                model="gemini-3.5-flash",
+                instruction="Başlığı düzenle",
+                layout=_make_layout(blocks),
+                blocks=blocks,
+                provider_config={"groq_key": "gsk_" + "x" * 32},
+            )
+
     @patch("ai_copilot.ai_provider.call_structured_with_fallback")
     def test_copilot_accepts_groq_fallback_result(self, mock_provider):
         mock_provider.return_value = ({
             "needs_clarification": False,
             "assistant_message": "Başlık düzenlendi.",
-            "operations": [],
+            "operations": [{
+                "operation": "replace_block_text",
+                "target_id": "block-1",
+                "new_text": "Yeni başlık",
+            }],
             "reflow_scope": "none",
         }, "groq", "openai/gpt-oss-120b")
         blocks = _make_blocks()
@@ -709,6 +848,7 @@ class CopilotProviderTests(unittest.TestCase):
         )
         self.assertEqual("groq", result["provider"])
         self.assertEqual("openai/gpt-oss-120b", result["model"])
+        self.assertEqual("Yeni başlık", result["new_blocks"][0]["text"])
 
 
 class CopilotHistoryTests(unittest.TestCase):
