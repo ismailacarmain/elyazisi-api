@@ -2079,9 +2079,33 @@ def _effective_page_settings(result: dict, requested: Any, current: Any) -> dict
         return _canonical_page_settings(
             result_settings, current, preserve_missing_target=False
         )
+
+    merged = dict(current) if isinstance(current, dict) else {}
     if isinstance(requested, dict):
-        return _canonical_page_settings(requested, current)
-    return _canonical_page_settings(current)
+        merged.update(requested)
+
+    new_layout = result.get("new_layout")
+    layout_settings = (
+        new_layout.get("settings")
+        if isinstance(new_layout, dict) and isinstance(new_layout.get("settings"), dict)
+        else None
+    )
+    if isinstance(layout_settings, dict):
+        units = layout_settings.get("units")
+        if isinstance(units, dict):
+            merged.update(units)
+        for key in (
+            "paper_type", "ink_color", "horizontal_align", "vertical_align",
+            "jitter", "line_slope", "opacity", "kalinlik", "pen_dying_effect",
+            "paper_age", "coffee_stains", "crease_effect", "scale_jitter",
+            "multi_author", "letter_height_mm", "line_spacing_mm",
+            "letter_spacing_mm", "word_spacing_mm", "margin_top_mm",
+            "margin_bottom_mm", "margin_left_mm", "margin_right_mm",
+            "target_page_count",
+        ):
+            if key in layout_settings:
+                merged[key] = layout_settings[key]
+    return _canonical_page_settings(merged, current)
 
 
 def _sanitize_client_copilot_blocks(value: Any) -> list[dict]:
@@ -2189,6 +2213,7 @@ def _copilot_reflow_state(
     visual_fields = (
         "paper_type", "paper_age", "coffee_stains", "crease_effect",
         "pen_dying_effect", "opacity", "kalinlik", "scale_jitter", "multi_author",
+        "ink_color", "jitter", "line_slope",
     )
     for index, page in enumerate(rebuilt.get("pages", [])):
         if index >= len(patched_pages):
@@ -2196,6 +2221,14 @@ def _copilot_reflow_state(
         for key in visual_fields:
             if key in patched_pages[index]:
                 page[key] = patched_pages[index][key]
+        line_visual_patch = {
+            key: patched_pages[index][key]
+            for key in _cop.PAGE_LINE_VISUAL_FIELDS
+            if key in patched_pages[index]
+        }
+        if line_visual_patch:
+            for line in page.get("lines", []):
+                line.update(line_visual_patch)
 
     rebuilt, blocks = _cop.ensure_document_ids(rebuilt, blocks)
     return rebuilt, blocks, fit_result
@@ -2514,6 +2547,7 @@ def copilot_save_manual_state(document_id: str):
             "version": new_version,
             "new_layout": layout,
             "new_blocks": blocks,
+            "page_settings": page_settings,
             "page_hashes": page_hashes,
             "can_undo": False,
             "can_redo": False,
@@ -2599,6 +2633,7 @@ def copilot_edit_document(document_id: str):
                         "operations": h.get("operations", []),
                         "new_layout": doc["layout"],
                         "new_blocks": doc["blocks"],
+                        "page_settings": doc.get("page_settings", {}),
                         "page_hashes": page_hashes,
                         "affected_pages": list(page_hashes.keys()),
                         "reflow_needed": True,
@@ -2696,6 +2731,7 @@ def copilot_edit_document(document_id: str):
                         "reflow_needed": result["reflow_needed"],
                         "new_layout": result["new_layout"],
                         "new_blocks": result["new_blocks"],
+                        "page_settings": persisted_page_settings,
                         "can_undo": True,
                         "can_redo": False,
                         "provider": result.get("provider"),
@@ -2774,6 +2810,7 @@ def copilot_edit_document(document_id: str):
                 "reflow_needed": result["reflow_needed"],
                 "new_layout": result["new_layout"],
                 "new_blocks": result["new_blocks"],
+                "page_settings": persisted_page_settings,
                 "can_undo": True,
                 "can_redo": False,
                 "provider": result.get("provider"),
@@ -2840,6 +2877,7 @@ def copilot_undo(document_id: str):
             "version": new_version,
             "new_layout": new_layout,
             "new_blocks": new_blocks,
+            "page_settings": record.get("page_settings_before") or {},
             "page_hashes": page_hashes,
             "can_undo": len(doc["history"]) > 0,
             "can_redo": True,
@@ -2901,6 +2939,7 @@ def copilot_redo(document_id: str):
             "version": new_version,
             "new_layout": new_layout,
             "new_blocks": new_blocks,
+            "page_settings": record.get("page_settings_after") or {},
             "page_hashes": page_hashes,
             "can_undo": True,
             "can_redo": len(doc["redo_stack"]) > 0,

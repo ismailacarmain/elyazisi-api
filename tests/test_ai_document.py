@@ -252,12 +252,27 @@ class AiDocumentTests(unittest.TestCase):
             "margin_bottom_mm": 45,
         }, 0)
         units = ai_document.normalize_page_settings(compact)["units"]
-        self.assertEqual(5.5, units["letter_height_mm"])
-        self.assertEqual(7.0, units["line_spacing_mm"])
+        self.assertEqual(ai_document.MIN_LETTER_HEIGHT_MM, units["letter_height_mm"])
+        self.assertEqual(ai_document.MIN_LINE_SPACING_MM, units["line_spacing_mm"])
         self.assertEqual(-0.7, units["letter_spacing_mm"])
-        self.assertEqual(1.5, units["word_spacing_mm"])
-        self.assertEqual(8.0, units["margin_left_mm"])
-        self.assertEqual(8.0, units["margin_top_mm"])
+        self.assertEqual(ai_document.MIN_WORD_SPACING_MM, units["word_spacing_mm"])
+        self.assertEqual(ai_document.MIN_MARGIN_MM, units["margin_left_mm"])
+        self.assertEqual(ai_document.MIN_MARGIN_MM, units["margin_top_mm"])
+
+    def test_dense_solver_shrinks_long_text_to_one_page_when_still_readable(self):
+        blocks = [{"type": "paragraph", "text": "abc " * 1500, "page_break_before": False}]
+        result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {
+            "letter_height_mm": 14,
+            "line_spacing_mm": 20,
+        }, 1)
+        self.assertTrue(result["success"])
+        self.assertEqual(1, len(result["layout"]["pages"]))
+        self.assertEqual("dense", result["report"]["density_mode"])
+        self.assertLess(result["report"]["settings_after"]["letter_height_mm"], 5.5)
+        self.assertGreaterEqual(
+            result["report"]["settings_after"]["letter_height_mm"],
+            ai_document.MIN_LETTER_HEIGHT_MM,
+        )
 
     def test_page_fit_solver_expands_short_content_to_an_exact_target(self):
         blocks = [{"type": "paragraph", "text": "abc " * 20, "page_break_before": False}]
@@ -281,7 +296,7 @@ class AiDocumentTests(unittest.TestCase):
         self.assertEqual(1, result["report"]["actual_pages"])
 
     def test_page_fit_solver_refuses_unreadable_one_page_result(self):
-        blocks = [{"type": "paragraph", "text": "abc " * 1500, "page_break_before": False}]
+        blocks = [{"type": "paragraph", "text": "abc " * 3000, "page_break_before": False}]
         result = ai_document.fit_layout_to_page_target(blocks, fake_font(), {
             "letter_height_mm": 14,
             "line_spacing_mm": 20,
@@ -289,14 +304,20 @@ class AiDocumentTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertFalse(result["report"]["fits"])
         self.assertGreater(result["report"]["actual_pages"], 1)
-        self.assertEqual(5.5, result["report"]["settings_after"]["letter_height_mm"])
+        self.assertEqual(
+            ai_document.MIN_LETTER_HEIGHT_MM,
+            result["report"]["settings_after"]["letter_height_mm"],
+        )
 
     @patch("ai_document.call_gemini")
     def test_impossible_page_target_returns_clarification_instead_of_wrong_pdf(self, mock_call):
         mock_call.return_value = {
             "needs_clarification": False,
             "document_title": "Uzun Ödev",
-            "blocks": [{"type": "paragraph", "text": "abc " * 1500}],
+            "blocks": [
+                {"type": "paragraph", "text": "abc " * 1500},
+                {"type": "paragraph", "text": "abc " * 1500},
+            ],
             "page_settings_override": {"target_page_count": 1},
             "summary": "Hazır",
         }

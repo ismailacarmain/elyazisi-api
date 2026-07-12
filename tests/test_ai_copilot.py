@@ -293,6 +293,98 @@ class TestCopilotOperations(unittest.TestCase):
         restored_layout, _, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
         self.assertEqual([100, 200], [page["margin_left"] for page in restored_layout["pages"]])
 
+    def test_unknown_page_target_is_not_mistaken_for_all_pages(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        clean = cop.validate_and_sanitize_operations([{
+            "operation": "update_page_settings",
+            "target_id": "page-missing",
+            "patch": {"line_slope": 12},
+        }], layout, blocks)
+        with self.assertRaises(cop.CopilotError):
+            cop.apply_operations(clean, layout, blocks)
+
+    def test_page_slope_updates_rendered_lines_and_round_trips_exactly(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        layout["pages"][0]["line_slope"] = 2
+        layout["pages"][0]["lines"][0]["line_slope"] = 1
+        layout["pages"][0]["lines"][1]["line_slope"] = 3
+        layout["pages"][0]["lines"][2]["line_slope"] = 5
+        ops = [{
+            "operation": "update_page_settings",
+            "target_id": "page-1",
+            "patch": {"line_slope": 11},
+        }]
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks)
+        changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
+        self.assertEqual(11, changed_layout["pages"][0]["line_slope"])
+        self.assertEqual(
+            [11, 11, 11],
+            [line["line_slope"] for line in changed_layout["pages"][0]["lines"]],
+        )
+
+        clean_inverse = cop.validate_and_sanitize_operations(
+            inverses, changed_layout, changed_blocks, trusted_internal=True
+        )
+        restored_layout, restored_blocks, redo = cop.apply_operations(
+            clean_inverse, changed_layout, changed_blocks
+        )
+        self.assertEqual(2, restored_layout["pages"][0]["line_slope"])
+        self.assertEqual(
+            [1, 3, 5],
+            [line["line_slope"] for line in restored_layout["pages"][0]["lines"]],
+        )
+
+        clean_redo = cop.validate_and_sanitize_operations(
+            redo, restored_layout, restored_blocks, trusted_internal=True
+        )
+        redone_layout, _, _ = cop.apply_operations(
+            clean_redo, restored_layout, restored_blocks
+        )
+        self.assertEqual(11, redone_layout["pages"][0]["line_slope"])
+        self.assertEqual(
+            [11, 11, 11],
+            [line["line_slope"] for line in redone_layout["pages"][0]["lines"]],
+        )
+
+    def test_document_slope_and_physical_sizes_are_supported(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        ops = [{
+            "operation": "update_document_settings",
+            "patch": {
+                "line_slope": 9,
+                "letter_height_mm": 4.5,
+                "margin_left_mm": 5,
+            },
+        }]
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks)
+        changed_layout, _, _ = cop.apply_operations(clean, layout, blocks)
+        self.assertEqual(9, changed_layout["settings"]["line_slope"])
+        self.assertEqual(4.5, changed_layout["settings"]["letter_height_mm"])
+        self.assertEqual(5, changed_layout["settings"]["margin_left_mm"])
+
+    def test_empty_style_patch_is_rejected_instead_of_claiming_success(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        with self.assertRaises(cop.CopilotError) as error:
+            cop.validate_and_sanitize_operations([{
+                "operation": "update_page_settings",
+                "target_id": "page-1",
+                "patch": {"unknown_setting": 12},
+            }], layout, blocks)
+        self.assertEqual(422, error.exception.status_code)
+
+    def test_copilot_schema_exposes_physical_document_controls(self):
+        properties = (
+            cop._copilot_response_schema()["properties"]["operations"]
+            ["items"]["properties"]["patch"]["properties"]
+        )
+        self.assertIn("letter_height_mm", properties)
+        self.assertIn("margin_left_mm", properties)
+        self.assertIn("line_slope", properties)
+
     def test_inverse_removes_a_document_setting_that_did_not_exist_before(self):
         blocks = _make_blocks()
         layout = _make_layout(blocks)

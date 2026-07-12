@@ -28,6 +28,7 @@ MAX_INSTRUCTION_CHARS = 1_000
 MAX_OPERATIONS_PER_REQUEST = 12
 MAX_UNDO_STACK = 50
 MAX_BLOCKS = 120
+MAX_BATCHED_LINE_STYLES = 600
 COPILOT_MODEL_ENV = "COPILOT_GEMINI_MODEL"
 DEFAULT_COPILOT_MODEL = "gemini-3.5-flash"
 
@@ -51,8 +52,12 @@ ALLOWED_OPERATIONS = frozenset({
     "reflow_scope",
     "update_document_settings",
     "restore_block_page_breaks",
+    "restore_line_styles",
+    "restore_page_settings",
 })
-INTERNAL_OPERATIONS = frozenset({"restore_block_page_breaks"})
+INTERNAL_OPERATIONS = frozenset({
+    "restore_block_page_breaks", "restore_line_styles", "restore_page_settings",
+})
 
 # Her operasyon için izin verilen patch alanları
 ALLOWED_BLOCK_STYLE_FIELDS = frozenset({
@@ -70,6 +75,7 @@ ALLOWED_LINE_STYLE_FIELDS = frozenset({
 ALLOWED_PAGE_SETTINGS_FIELDS = frozenset({
     "paper_type", "paper_age", "coffee_stains", "crease_effect",
     "pen_dying_effect", "opacity", "kalinlik", "scale_jitter",
+    "ink_color", "jitter", "line_slope",
     "margin_top", "margin_bottom", "margin_left", "margin_right",
     "line_spacing",
 })
@@ -77,7 +83,14 @@ ALLOWED_PAGE_SETTINGS_FIELDS = frozenset({
 ALLOWED_DOC_SETTINGS_FIELDS = frozenset({
     "ink_color", "horizontal_align", "vertical_align",
     "letter_height_mm", "line_spacing_mm", "letter_spacing_mm",
-    "word_spacing_mm",
+    "word_spacing_mm", "margin_top_mm", "margin_bottom_mm",
+    "margin_left_mm", "margin_right_mm", "jitter", "line_slope",
+    "opacity", "kalinlik", "scale_jitter", "paper_type", "paper_age",
+    "coffee_stains", "crease_effect", "pen_dying_effect",
+})
+
+PAGE_LINE_VISUAL_FIELDS = frozenset({
+    "ink_color", "jitter", "line_slope", "opacity", "kalinlik", "scale_jitter",
 })
 
 FORBIDDEN_FIELDS = frozenset({
@@ -176,6 +189,14 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
             a = _sanitize_align(value)
             if a:
                 clean[field] = a
+        elif field == "horizontal_align":
+            a = _sanitize_align(value)
+            if a:
+                clean[field] = a
+        elif field == "vertical_align":
+            vertical = str(value or "").strip().lower()
+            if vertical in {"top", "center", "bottom"}:
+                clean[field] = vertical
         elif field == "scale_multiplier":
             clean[field] = round(_clamp(value, 0.65, 1.8, 1.0), 3)
         elif field in {"opacity"}:
@@ -205,6 +226,18 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
             clean[field] = int(_clamp(value, 36, 400, 118))
         elif field == "line_spacing":
             clean[field] = int(_clamp(value, 60, 550, 200))
+        elif field == "letter_height_mm":
+            clean[field] = round(_clamp(value, 3.8, 20.0, 11.5), 3)
+        elif field == "line_spacing_mm":
+            clean[field] = round(_clamp(value, 4.8, 32.0, 18.2), 3)
+        elif field == "letter_spacing_mm":
+            clean[field] = round(_clamp(value, -0.7, 3.0, 0.0), 3)
+        elif field == "word_spacing_mm":
+            clean[field] = round(_clamp(value, 1.2, 12.0, 4.7), 3)
+        elif field in {"margin_left_mm", "margin_right_mm"}:
+            clean[field] = round(_clamp(value, 5.0, 40.0, 15.0), 3)
+        elif field in {"margin_top_mm", "margin_bottom_mm"}:
+            clean[field] = round(_clamp(value, 5.0, 45.0, 18.0), 3)
         elif field == "line_offset_y":
             clean[field] = int(_clamp(value, -300, 300, 0))
         else:
@@ -319,7 +352,7 @@ def validate_and_sanitize_operations(
     """Her operasyonu whitelist + alan + hedef doğrulamasından geçir."""
     if not isinstance(operations, list):
         raise CopilotError("'operations' bir liste olmalı.")
-    operation_limit = MAX_OPERATIONS_PER_REQUEST + 2 if trusted_internal else MAX_OPERATIONS_PER_REQUEST
+    operation_limit = 64 if trusted_internal else MAX_OPERATIONS_PER_REQUEST
     if len(operations) > operation_limit:
         raise CopilotError(f"Tek istekte en fazla {operation_limit} operasyon uygulanabilir.")
 
@@ -411,6 +444,55 @@ def validate_and_sanitize_operations(
                 })
             clean_op["page_breaks"] = clean_entries
 
+        if name == "restore_line_styles":
+            entries = op.get("line_styles")
+            if not isinstance(entries, list) or len(entries) > MAX_BATCHED_LINE_STYLES:
+                raise CopilotError("Satır stili geri yükleme verisi geçersiz.")
+            clean_entries = []
+            seen_ids: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                line_id = str(entry.get("id") or "").strip()
+                if not DOCUMENT_ID_RE.fullmatch(line_id) or line_id in seen_ids:
+                    continue
+                seen_ids.add(line_id)
+                clean_entries.append({
+                    "id": line_id,
+                    "patch": _sanitize_patch(
+                        entry.get("patch") or {}, ALLOWED_LINE_STYLE_FIELDS
+                    ),
+                })
+            clean_op["line_styles"] = clean_entries
+
+        if name == "restore_page_settings":
+            page_id = str(op.get("target_id") or "").strip()
+            if not DOCUMENT_ID_RE.fullmatch(page_id):
+                raise CopilotError("Sayfa ayarı geri yükleme hedefi geçersiz.")
+            clean_op["target_id"] = page_id
+            clean_op["patch"] = _sanitize_patch(
+                op.get("patch") or {}, ALLOWED_PAGE_SETTINGS_FIELDS
+            )
+            entries = op.get("line_styles")
+            if not isinstance(entries, list) or len(entries) > MAX_BATCHED_LINE_STYLES:
+                raise CopilotError("Sayfa satır stilleri geri yükleme verisi geçersiz.")
+            clean_entries = []
+            seen_ids: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                line_id = str(entry.get("id") or "").strip()
+                if not DOCUMENT_ID_RE.fullmatch(line_id) or line_id in seen_ids:
+                    continue
+                seen_ids.add(line_id)
+                clean_entries.append({
+                    "id": line_id,
+                    "patch": _sanitize_patch(
+                        entry.get("patch") or {}, ALLOWED_LINE_STYLE_FIELDS
+                    ),
+                })
+            clean_op["line_styles"] = clean_entries
+
         if name == "insert_block":
             btype = str(op.get("block_type", "paragraph")).lower()
             if btype not in {"title", "heading", "paragraph", "list_item", "quote"}:
@@ -425,6 +507,12 @@ def validate_and_sanitize_operations(
                     "title", "heading", "paragraph", "list_item", "quote"
                 } else "paragraph"
                 clean_op["_restore_block"] = restored
+
+        if name in {
+            "update_block_style", "update_line_style", "update_page_settings",
+            "update_document_settings", "switch_block_author", "switch_line_author",
+        } and not clean_op.get("patch"):
+            raise CopilotError("Copilot uygulanabilir bir ayar değişikliği üretmedi.", 422)
 
         clean_ops.append(clean_op)
     return clean_ops
@@ -492,25 +580,33 @@ def apply_operations(
 
         elif name == "update_page_settings":
             page = _get_page_by_id(new_layout, target_id)
-            if page is None:
-                # global page yoksa tüm sayfaları güncelle
-                for p in new_layout.get("pages", []):
-                    patch = op.get("patch", {})
-                    old_vals = {k: p.get(k) for k in patch}
-                    _apply_dict_patch(p, patch)
-                    inverses.append({
-                        "operation": "update_page_settings",
-                        "target_id": p.get("id", ""),
-                        "patch": old_vals,
-                    })
-            else:
-                patch = op.get("patch", {})
-                old_vals = {k: page.get(k) for k in patch}
-                _apply_dict_patch(page, patch)
+            if target_id and page is None:
+                raise CopilotError(f"Sayfa bulunamadı: {target_id}")
+            target_pages = [page] if page is not None else list(new_layout.get("pages", []))
+            patch = op.get("patch", {})
+            visual_patch = {
+                key: value for key, value in patch.items()
+                if key in PAGE_LINE_VISUAL_FIELDS
+            }
+            for target_page in target_pages:
+                old_vals = {k: target_page.get(k) for k in patch}
+                old_line_styles = []
+                if visual_patch:
+                    for line in target_page.get("lines", []):
+                        line_id = str(line.get("id") or "")
+                        if not line_id:
+                            continue
+                        old_line_styles.append({
+                            "id": line_id,
+                            "patch": {key: line.get(key) for key in visual_patch},
+                        })
+                        _apply_dict_patch(line, visual_patch)
+                _apply_dict_patch(target_page, patch)
                 inverses.append({
-                    "operation": "update_page_settings",
-                    "target_id": target_id,
+                    "operation": "restore_page_settings",
+                    "target_id": target_page.get("id", ""),
                     "patch": old_vals,
+                    "line_styles": old_line_styles,
                 })
 
         elif name == "move_line":
@@ -589,6 +685,48 @@ def apply_operations(
                 })
                 block["page_break_before"] = bool(entry.get("page_break_before", False))
             inverses.append({"operation": "restore_block_page_breaks", "page_breaks": old_breaks})
+
+        elif name == "restore_line_styles":
+            old_line_styles = []
+            for entry in op.get("line_styles", []):
+                line = _get_line_by_id(new_layout, entry.get("id"))
+                if line is None:
+                    continue
+                patch = entry.get("patch") or {}
+                old_line_styles.append({
+                    "id": line["id"],
+                    "patch": {key: line.get(key) for key in patch},
+                })
+                _apply_dict_patch(line, patch)
+            inverses.append({
+                "operation": "restore_line_styles",
+                "line_styles": old_line_styles,
+            })
+
+        elif name == "restore_page_settings":
+            page = _get_page_by_id(new_layout, target_id)
+            if page is None:
+                raise CopilotError(f"Sayfa bulunamadı: {target_id}")
+            patch = op.get("patch") or {}
+            previous_page = {key: page.get(key) for key in patch}
+            previous_lines = []
+            for entry in op.get("line_styles", []):
+                line = _get_line_by_id(new_layout, entry.get("id"))
+                if line is None:
+                    continue
+                line_patch = entry.get("patch") or {}
+                previous_lines.append({
+                    "id": line["id"],
+                    "patch": {key: line.get(key) for key in line_patch},
+                })
+                _apply_dict_patch(line, line_patch)
+            _apply_dict_patch(page, patch)
+            inverses.append({
+                "operation": "restore_page_settings",
+                "target_id": target_id,
+                "patch": previous_page,
+                "line_styles": previous_lines,
+            })
 
         elif name == "remove_block":
             idx = _find_block_index(new_blocks, target_id)
@@ -888,6 +1026,13 @@ TEMEL KURALLAR:
 - Kullanıcı kesin sayfa sayısı isterse ölçüleri tahmin etme. Gerekli içerik değişikliğini operasyonlarla yap,
   reflow_needed: true döndür; gerçek font metrikleriyle kesin sığdırmayı sunucu yapar. Önceki soruya eklenmiş
   [Soru: ... Cevap: ...] bölümündeki en son cevabı bağlayıcı kabul et.
+- "Tüm belgenin/yazının eğimi" için update_document_settings + line_slope kullan. Seçili sayfanın eğimi için
+  update_page_settings, seçili tek satır için update_line_style kullan. Eğim 0-20 aralığındadır.
+- "Fontu/yazıyı küçült" için update_document_settings + letter_height_mm; satır, harf ve kelime aralıkları için
+  sırasıyla line_spacing_mm, letter_spacing_mm ve word_spacing_mm kullan. Fiziksel değerleri milimetre olarak uygula.
+- Kenar boşluğu isteğinde update_document_settings ile margin_top_mm, margin_bottom_mm, margin_left_mm,
+  margin_right_mm alanlarını kullan. Belge geneli yerine seçili sayfa istenmişse update_page_settings kullan.
+- Bir operasyonun patch alanı boş kalacaksa o operasyonu üretme; uygulanmayan değişikliği yapılmış gibi anlatma.
 - Kısa ve anlaşılır Türkçe mesaj ver. İç düşünce/chain-of-thought döndürme.
 - Sadece gerçekten belirsizlik varsa soru sor.
 
@@ -953,6 +1098,26 @@ def _copilot_response_schema() -> dict:
                                 "crease_effect": {"type": "BOOLEAN"},
                                 "pen_dying_effect": {"type": "BOOLEAN"},
                                 "ink_color": {"type": "STRING"},
+                                "horizontal_align": {"type": "STRING", "enum": sorted(ALIGN_VALUES)},
+                                "vertical_align": {"type": "STRING", "enum": ["top", "center", "bottom"]},
+                                "letter_height_mm": {"type": "NUMBER"},
+                                "line_spacing_mm": {"type": "NUMBER"},
+                                "letter_spacing_mm": {"type": "NUMBER"},
+                                "word_spacing_mm": {"type": "NUMBER"},
+                                "margin_top_mm": {"type": "NUMBER"},
+                                "margin_bottom_mm": {"type": "NUMBER"},
+                                "margin_left_mm": {"type": "NUMBER"},
+                                "margin_right_mm": {"type": "NUMBER"},
+                                "margin_top": {"type": "INTEGER"},
+                                "margin_bottom": {"type": "INTEGER"},
+                                "margin_left": {"type": "INTEGER"},
+                                "margin_right": {"type": "INTEGER"},
+                                "line_spacing": {"type": "INTEGER"},
+                                "letter_scale": {"type": "INTEGER"},
+                                "letter_spacing": {"type": "INTEGER"},
+                                "word_spacing": {"type": "INTEGER"},
+                                "line_offset_y": {"type": "INTEGER"},
+                                "page_break_before": {"type": "BOOLEAN"},
                                 "effect": {"type": "STRING"},
                             },
                         },

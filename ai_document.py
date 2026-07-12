@@ -31,6 +31,12 @@ MAX_DOCUMENT_CHARS = 30_000
 MAX_BLOCKS = 120
 MAX_PAGES = 20
 MAX_LINES = 400
+MIN_LETTER_HEIGHT_MM = 3.8
+MIN_LINE_SPACING_MM = 4.8
+MIN_MARGIN_MM = 5.0
+MIN_WORD_SPACING_MM = 1.2
+STANDARD_READABLE_LETTER_MM = 5.5
+STANDARD_READABLE_LINE_MM = 7.0
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_MODELS = (
@@ -230,14 +236,14 @@ def normalize_page_settings(raw: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             return default_mm
 
-    margin_left_mm = _clamp(legacy_mm("margin_left_mm", "margin_left", 15.0), 8, 40, 15)
-    margin_right_mm = _clamp(legacy_mm("margin_right_mm", "margin_right", 15.0), 8, 40, 15)
-    margin_top_mm = _clamp(legacy_mm("margin_top_mm", "margin_top", 18.0), 8, 45, 18)
-    margin_bottom_mm = _clamp(legacy_mm("margin_bottom_mm", "margin_bottom", 18.0), 8, 45, 18)
-    letter_height_mm = _clamp(legacy_mm("letter_height_mm", "letter_scale", 11.5), 5.5, 20, 11.5)
-    line_spacing_mm = _clamp(legacy_mm("line_spacing_mm", "line_spacing", 18.2), 7, 32, 18.2)
+    margin_left_mm = _clamp(legacy_mm("margin_left_mm", "margin_left", 15.0), MIN_MARGIN_MM, 40, 15)
+    margin_right_mm = _clamp(legacy_mm("margin_right_mm", "margin_right", 15.0), MIN_MARGIN_MM, 40, 15)
+    margin_top_mm = _clamp(legacy_mm("margin_top_mm", "margin_top", 18.0), MIN_MARGIN_MM, 45, 18)
+    margin_bottom_mm = _clamp(legacy_mm("margin_bottom_mm", "margin_bottom", 18.0), MIN_MARGIN_MM, 45, 18)
+    letter_height_mm = _clamp(legacy_mm("letter_height_mm", "letter_scale", 11.5), MIN_LETTER_HEIGHT_MM, 20, 11.5)
+    line_spacing_mm = _clamp(legacy_mm("line_spacing_mm", "line_spacing", 18.2), MIN_LINE_SPACING_MM, 32, 18.2)
     letter_spacing_mm = _clamp(legacy_mm("letter_spacing_mm", "letter_spacing", 0.0), -0.7, 3, 0)
-    word_spacing_mm = _clamp(legacy_mm("word_spacing_mm", "word_spacing", 4.7), 1.5, 12, 4.7)
+    word_spacing_mm = _clamp(legacy_mm("word_spacing_mm", "word_spacing", 4.7), MIN_WORD_SPACING_MM, 12, 4.7)
     paper_type = str(settings.get("paper_type", "cizgili"))
     if paper_type not in ALLOWED_PAPER_TYPES:
         paper_type = "cizgili"
@@ -273,7 +279,7 @@ def normalize_page_settings(raw: Any) -> dict[str, Any]:
         "letter_spacing": int(round(letter_spacing_mm * PX_PER_MM)),
         "word_spacing": int(round(word_spacing_mm * PX_PER_MM)),
         "jitter": int(round(_clamp(settings.get("jitter", 4), 0, 15, 4))),
-        "line_slope": round(_clamp(settings.get("line_slope", 3), 0, 15, 3), 2),
+        "line_slope": round(_clamp(settings.get("line_slope", 3), 0, 20, 3), 2),
         "opacity": opacity,
         "kalinlik": kalinlik,
         "pen_dying_effect": pen_dying_effect,
@@ -659,14 +665,14 @@ def _compact_page_settings(raw_settings: Any, factor: float) -> dict[str, Any]:
 
     candidate = dict(source)
     candidate.update({
-        "letter_height_mm": round(toward_minimum(units["letter_height_mm"], 5.5), 3),
-        "line_spacing_mm": round(toward_minimum(units["line_spacing_mm"], 7.0), 3),
+        "letter_height_mm": round(toward_minimum(units["letter_height_mm"], MIN_LETTER_HEIGHT_MM), 3),
+        "line_spacing_mm": round(toward_minimum(units["line_spacing_mm"], MIN_LINE_SPACING_MM), 3),
         "letter_spacing_mm": round(toward_minimum(units["letter_spacing_mm"], -0.7), 3),
-        "word_spacing_mm": round(toward_minimum(units["word_spacing_mm"], 1.5), 3),
-        "margin_left_mm": round(toward_minimum(units["margin_left_mm"], 8.0), 3),
-        "margin_right_mm": round(toward_minimum(units["margin_right_mm"], 8.0), 3),
-        "margin_top_mm": round(toward_minimum(units["margin_top_mm"], 8.0), 3),
-        "margin_bottom_mm": round(toward_minimum(units["margin_bottom_mm"], 8.0), 3),
+        "word_spacing_mm": round(toward_minimum(units["word_spacing_mm"], MIN_WORD_SPACING_MM), 3),
+        "margin_left_mm": round(toward_minimum(units["margin_left_mm"], MIN_MARGIN_MM), 3),
+        "margin_right_mm": round(toward_minimum(units["margin_right_mm"], MIN_MARGIN_MM), 3),
+        "margin_top_mm": round(toward_minimum(units["margin_top_mm"], MIN_MARGIN_MM), 3),
+        "margin_bottom_mm": round(toward_minimum(units["margin_bottom_mm"], MIN_MARGIN_MM), 3),
     })
     return candidate
 
@@ -701,6 +707,14 @@ def _fit_report(
 ) -> dict[str, Any]:
     before_units = _fit_units(before)
     after_units = _fit_units(after)
+    dense_mode = (
+        after_units["letter_height_mm"] < STANDARD_READABLE_LETTER_MM
+        or after_units["line_spacing_mm"] < STANDARD_READABLE_LINE_MM
+        or min(
+            after_units["margin_left_mm"], after_units["margin_right_mm"],
+            after_units["margin_top_mm"], after_units["margin_bottom_mm"],
+        ) < 8.0
+    )
     return {
         "fits": fits,
         "constraint": "exact" if fits else (
@@ -713,6 +727,12 @@ def _fit_report(
         "removed_forced_page_breaks": removed_breaks,
         "settings_before": before_units,
         "settings_after": after_units,
+        "density_mode": "dense" if dense_mode else "standard",
+        "estimated_letter_points": round(after_units["letter_height_mm"] * 72 / 25.4, 1),
+        "readability_note": (
+            "Hedef sayfa sayısına ulaşmak için güvenli yoğun düzen kullanıldı."
+            if dense_mode else "Standart okunabilir düzen kullanıldı."
+        ),
     }
 
 
@@ -1043,7 +1063,7 @@ def _response_schema() -> dict[str, Any]:
                     "margin_left_mm": {"type": "NUMBER"},
                     "margin_right_mm": {"type": "NUMBER"},
                     "margin_bottom_mm": {"type": "NUMBER"},
-                    "letter_height_mm": {"type": "NUMBER", "description": "Harf boyutu (5.0 ile 20.0 arası)"},
+                    "letter_height_mm": {"type": "NUMBER", "description": "Harf boyutu (3.8 ile 20.0 mm arası)"},
                     "letter_spacing_mm": {"type": "NUMBER"},
                     "word_spacing_mm": {"type": "NUMBER"},
                     "jitter": {"type": "NUMBER", "description": "Yazının ne kadar dağınık/çirkin olduğu (0 düzgün, 15 çok dağınık)"},

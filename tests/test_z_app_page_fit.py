@@ -8,9 +8,9 @@ from tests.test_ai_document import fake_font
 
 
 class CopilotPageFitIntegrationTests(unittest.TestCase):
-    def _state(self, word_count: int, target_pages: int = 1):
+    def _state(self, word_count: int, target_pages: int = 1, settings: dict | None = None):
         blocks = [{"type": "paragraph", "text": "abc " * word_count, "page_break_before": False}]
-        settings = {"letter_height_mm": 14, "line_spacing_mm": 20}
+        settings = settings or {"letter_height_mm": 14, "line_spacing_mm": 20}
         layout = ai_document.build_layout(blocks, fake_font(), settings)
         layout, blocks = ai_copilot.ensure_document_ids(layout, blocks)
         doc = {
@@ -48,7 +48,10 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
     @patch("app._load_font_images", return_value=fake_font())
     @patch("app._font_access_for_user", return_value=(object(), {}))
     def test_copilot_asks_before_breaking_readability(self, _access, _load):
-        doc, result = self._state(1500)
+        doc, result = self._state(
+            3000,
+            settings={"letter_height_mm": 8, "line_spacing_mm": 10},
+        )
         finalized = app._finalize_copilot_result(doc, result)
         self.assertTrue(finalized["needs_clarification"])
         self.assertFalse(finalized["fit_report"]["fits"])
@@ -110,6 +113,27 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         )
         self.assertNotIn("target_page_count", settings)
         self.assertEqual(12, settings["letter_height_mm"])
+
+    def test_effective_settings_use_copilot_layout_values_over_stale_client_values(self):
+        settings = app._effective_page_settings(
+            {
+                "new_layout": {
+                    "settings": {
+                        "line_slope": 11,
+                        "units": {
+                            "letter_height_mm": 6.25,
+                            "line_spacing_mm": 7.4,
+                        },
+                    },
+                },
+            },
+            {"line_slope": 3, "letter_height_mm": 12},
+            {"line_slope": 1, "letter_height_mm": 11, "target_page_count": 1},
+        )
+        self.assertEqual(11, settings["line_slope"])
+        self.assertEqual(6.25, settings["letter_height_mm"])
+        self.assertEqual(7.4, settings["line_spacing_mm"])
+        self.assertEqual(1, settings["target_page_count"])
 
     def test_manual_state_preflight_allows_cross_origin_patch(self):
         response = app.app.test_client().open(
