@@ -15,6 +15,8 @@ import os
 import re
 import time
 import unicodedata
+import uuid
+from copy import deepcopy
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,9 +26,10 @@ MAX_INSTRUCTION_CHARS = 1_000
 MAX_OPERATIONS_PER_REQUEST = 12
 MAX_UNDO_STACK = 50
 COPILOT_MODEL_ENV = "COPILOT_GEMINI_MODEL"
-DEFAULT_COPILOT_MODEL = "gemini-1.5-flash"
+DEFAULT_COPILOT_MODEL = "gemini-3.5-flash"
 
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+DOCUMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 
 ALLOWED_OPERATIONS = frozenset({
     "replace_block_text",
@@ -156,6 +159,11 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
         if field not in allowed_fields:
             # sessizce atla — bilinmeyen alan hatası yerine filtrele
             continue
+        # Inverse operations use None to remove a value that did not exist
+        # before an edit. Preserve that meaning through sanitization.
+        if value is None:
+            clean[field] = None
+            continue
         # Alan tipine göre sanitize
         if field == "color" or field == "ink_color":
             clean[field] = _sanitize_color(value)
@@ -199,6 +207,72 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
     return clean
 
 
+def ensure_document_ids(
+    layout: dict,
+    blocks: list[dict],
+) -> tuple[dict, list[dict]]:
+    """Return defensive copies with stable, unique page/block/line IDs."""
+    if not isinstance(layout, dict) or not isinstance(blocks, list):
+        raise CopilotError("Geçerli layout ve blocks gerekli.")
+
+    safe_layout = deepcopy(layout)
+    safe_blocks = deepcopy(blocks)
+
+    used_block_ids: set[str] = set()
+    for index, block in enumerate(safe_blocks):
+        if not isinstance(block, dict):
+            raise CopilotError("Belge blokları geçersiz.")
+        candidate = str(block.get("id") or "").strip()
+        if not DOCUMENT_ID_RE.fullmatch(candidate) or candidate in used_block_ids:
+            candidate = f"block-{index + 1}"
+            suffix = 2
+            while candidate in used_block_ids:
+                candidate = f"block-{index + 1}-{suffix}"
+                suffix += 1
+        block["id"] = candidate
+        used_block_ids.add(candidate)
+
+    used_page_ids: set[str] = set()
+    used_line_ids: set[str] = set()
+    line_number = 0
+    pages = safe_layout.get("pages")
+    if not isinstance(pages, list):
+        raise CopilotError("Layout sayfaları geçersiz.")
+
+    for page_index, page in enumerate(pages):
+        if not isinstance(page, dict):
+            raise CopilotError("Layout sayfası geçersiz.")
+        page_id = str(page.get("id") or "").strip()
+        if not DOCUMENT_ID_RE.fullmatch(page_id) or page_id in used_page_ids:
+            page_id = f"page-{page_index + 1}"
+        page["id"] = page_id
+        used_page_ids.add(page_id)
+
+        lines = page.get("lines")
+        if not isinstance(lines, list):
+            raise CopilotError("Layout satırları geçersiz.")
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            line_number += 1
+            line_id = str(line.get("id") or "").strip()
+            if not DOCUMENT_ID_RE.fullmatch(line_id) or line_id in used_line_ids:
+                line_id = f"line-{line_number}"
+            line["id"] = line_id
+            used_line_ids.add(line_id)
+
+            try:
+                block_index = int(line.get("block_index", 0))
+            except (TypeError, ValueError):
+                block_index = 0
+            if safe_blocks:
+                block_index = max(0, min(len(safe_blocks) - 1, block_index))
+                line["block_index"] = block_index
+                line["block_id"] = safe_blocks[block_index]["id"]
+
+    return safe_layout, safe_blocks
+
+
 # ─── Operasyon validatörü ─────────────────────────────────────────────────────
 
 def _find_block(layout: dict, target_id: str) -> dict | None:
@@ -235,6 +309,7 @@ def validate_and_sanitize_operations(
     blocks: list[dict],
     *,
     secondary_font_available: bool = False,
+    trusted_internal: bool = False,
 ) -> list[dict]:
     """Her operasyonu whitelist + alan + hedef doğrulamasından geçir."""
     if not isinstance(operations, list):
@@ -316,6 +391,13 @@ def validate_and_sanitize_operations(
             clean_op["block_type"] = btype
             clean_op["text"] = _sanitize_text(op.get("text", ""), 5_000)
             clean_op["after_block_id"] = str(op.get("after_block_id", ""))
+            if trusted_internal and isinstance(op.get("_restore_block"), dict):
+                restored = deepcopy(op["_restore_block"])
+                restored["text"] = _sanitize_text(restored.get("text", ""), 5_000)
+                restored["type"] = restored.get("type") if restored.get("type") in {
+                    "title", "heading", "paragraph", "list_item", "quote"
+                } else "paragraph"
+                clean_op["_restore_block"] = restored
 
         clean_ops.append(clean_op)
     return clean_ops
@@ -349,7 +431,7 @@ def apply_operations(
             old_style = {k: block.get(k) for k in patch}
             _apply_dict_patch(block, patch)
             # layout'taki satırları da güncelle
-            _patch_layout_lines_for_block(new_layout, new_blocks, block, patch)
+            _patch_layout_lines_for_block(new_layout, new_blocks, block, patch, old_style)
             inverses.append({
                 "operation": "update_block_style",
                 "target_id": target_id,
@@ -420,8 +502,8 @@ def apply_operations(
             inverses.append({
                 "operation": "move_line",
                 "target_id": target_id,
-                "delta_x_px": old_x - new_x,
-                "delta_y_px": old_y - new_y,
+                "delta_x_mm": round((old_x - new_x) / PX_PER_MM, 4),
+                "delta_y_mm": round((old_y - new_y) / PX_PER_MM, 4),
             })
 
         elif name == "switch_block_author":
@@ -431,6 +513,13 @@ def apply_operations(
             old_slot = block.get("author_slot", "primary")
             new_slot = (op.get("patch") or {}).get("author_slot", "secondary")
             block["author_slot"] = new_slot
+            _patch_layout_lines_for_block(
+                new_layout,
+                new_blocks,
+                block,
+                {"author_slot": new_slot},
+                {"author_slot": old_slot},
+            )
             inverses.append({
                 "operation": "switch_block_author",
                 "target_id": target_id,
@@ -475,8 +564,9 @@ def apply_operations(
             })
 
         elif name == "insert_block":
-            new_block = {
-                "id": f"block-{int(time.time() * 1000)}",
+            restored_block = op.get("_restore_block")
+            new_block = deepcopy(restored_block) if isinstance(restored_block, dict) else {
+                "id": f"block-{uuid.uuid4().hex[:12]}",
                 "type": op.get("block_type", "paragraph"),
                 "text": op.get("text", ""),
             }
@@ -518,7 +608,7 @@ def apply_operations(
         elif name == "add_margin_note":
             note_text = op.get("text", "")
             new_block = {
-                "id": f"block-mn-{int(time.time() * 1000)}",
+                "id": f"block-mn-{uuid.uuid4().hex[:12]}",
                 "type": "paragraph",
                 "text": note_text,
                 "is_margin_note": True,
@@ -529,7 +619,26 @@ def apply_operations(
                 "target_id": new_block["id"],
             })
 
-        elif name in {"reflow_scope", "remove_text_effect"}:
+        elif name == "remove_text_effect":
+            block = _get_block_by_id(new_blocks, target_id)
+            if block is None:
+                raise CopilotError(f"Blok bulunamadı: {target_id}")
+            effect = str(op.get("patch", {}).get("effect", "highlight")).lower()
+            target_word = op.get("target_word", "")
+            markers = {"highlight": "==", "underline": "__", "strikethrough": "~~"}
+            marker = markers.get(effect)
+            old_text = block.get("text", "")
+            if marker and target_word:
+                block["text"] = old_text.replace(f"{marker}{target_word}{marker}", target_word, 1)
+                if effect == "underline":
+                    block["text"] = block["text"].replace(f"**{target_word}**", target_word, 1)
+            inverses.append({
+                "operation": "replace_block_text",
+                "target_id": target_id,
+                "new_text": old_text,
+            })
+
+        elif name == "reflow_scope":
             # reflow ve efekt kaldırma — layout rebuild gerektirir
             inverses.append({"operation": "reflow_scope"})
 
@@ -588,6 +697,7 @@ def _patch_layout_lines_for_block(
     blocks: list[dict],
     updated_block: dict,
     patch: dict,
+    previous_values: dict | None = None,
 ) -> None:
     """Blok stilini layout'taki ilgili satırlara yansıt."""
     block_id = updated_block.get("id")
@@ -598,21 +708,40 @@ def _patch_layout_lines_for_block(
             break
     if block_index is None:
         return
+    previous_values = previous_values or {}
     for page in layout.get("pages", []):
         for line in page.get("lines", []):
-            if line.get("block_index") == block_index:
+            if line.get("block_index") == block_index or line.get("block_id") == block_id:
+                line["block_id"] = block_id or f"block-{block_index + 1}"
                 if "color" in patch:
-                    line["ink_color"] = patch["color"]
+                    line["ink_color"] = patch["color"] or layout.get("settings", {}).get("ink_color", "#1b1b1d")
                 if "opacity" in patch:
-                    line["opacity"] = patch["opacity"]
+                    line["opacity"] = patch["opacity"] if patch["opacity"] is not None else page.get("opacity", 0.95)
                 if "kalinlik" in patch:
-                    line["kalinlik"] = patch["kalinlik"]
+                    line["kalinlik"] = patch["kalinlik"] if patch["kalinlik"] is not None else page.get("kalinlik", 0)
                 if "jitter" in patch:
-                    line["jitter"] = patch["jitter"]
+                    line["jitter"] = patch["jitter"] if patch["jitter"] is not None else layout.get("settings", {}).get("jitter", 4)
                 if "scale_jitter" in patch:
-                    line["scale_jitter"] = patch["scale_jitter"]
+                    line["scale_jitter"] = patch["scale_jitter"] if patch["scale_jitter"] is not None else page.get("scale_jitter", 0)
                 if "font_slot" in patch or "author_slot" in patch:
                     line["font_slot"] = patch.get("font_slot") or patch.get("author_slot")
+                if "scale_multiplier" in patch:
+                    old_multiplier = _clamp(previous_values.get("scale_multiplier"), 0.65, 1.8, 1.0)
+                    new_multiplier = _clamp(patch.get("scale_multiplier"), 0.65, 1.8, 1.0)
+                    ratio = new_multiplier / max(0.01, old_multiplier)
+                    line["letter_scale"] = int(_clamp(round(line.get("letter_scale", 135) * ratio), 45, 260, 135))
+                    line["estimated_width"] = int(_clamp(round(line.get("estimated_width", 400) * ratio), 1, PAGE_WIDTH_PX, 400))
+                if "align" in patch:
+                    width = int(line.get("estimated_width", 400))
+                    left = int(page.get("margin_left", 180))
+                    right = PAGE_WIDTH_PX - int(page.get("margin_right", 180))
+                    align = patch.get("align")
+                    if align == "center":
+                        line["start_x"] = max(left, left + (right - left - width) // 2)
+                    elif align == "right":
+                        line["start_x"] = max(left, right - width)
+                    elif align == "left":
+                        line["start_x"] = left
 
 
 # ─── Belge snapshot (Gemini'ye gönderilecek kompakt versiyon) ────────────────
@@ -624,10 +753,29 @@ def build_document_snapshot(
 ) -> dict:
     """Gemini'ye gönderilecek kompakt belge özeti."""
     pages_summary = []
+    selection_context: dict[str, Any] = {}
+    selection_type = str((selection or {}).get("type") or "")
+    selection_id = str((selection or {}).get("id") or "")
     for page_idx, page in enumerate(layout.get("pages", [])):
         page_blocks: list[dict] = []
+        page_lines: list[dict] = []
         seen_block_indices: set = set()
         for line in page.get("lines", []):
+            line_summary = {
+                "id": line.get("id"),
+                "block_id": line.get("block_id"),
+                "text": (line.get("text") or "")[:240],
+                "font_slot": line.get("font_slot", "primary"),
+            }
+            page_lines.append(line_summary)
+            if selection_type == "line" and line.get("id") == selection_id:
+                selection_context = {
+                    **line_summary,
+                    "type": "line",
+                    "page_id": page.get("id", f"page-{page_idx + 1}"),
+                    "baseline_y": line.get("baseline_y"),
+                    "start_x": line.get("start_x"),
+                }
             bi = line.get("block_index")
             if bi in seen_block_indices:
                 continue
@@ -637,7 +785,7 @@ def build_document_snapshot(
                 page_blocks.append({
                     "id": block.get("id", f"block-{bi}"),
                     "type": block.get("type", "paragraph"),
-                    "text": (block.get("text") or "")[:300],
+                    "text": (block.get("text") or "")[:2000],
                     "style": {
                         k: block.get(k)
                         for k in ("color", "align", "scale_multiplier",
@@ -651,7 +799,26 @@ def build_document_snapshot(
             "paper_type": page.get("paper_type", "cizgili"),
             "line_count": len(page.get("lines", [])),
             "blocks": page_blocks,
+            "lines": page_lines,
         })
+
+        if selection_type == "page" and page.get("id") == selection_id:
+            selection_context = {
+                "type": "page",
+                "id": page.get("id"),
+                "paper_type": page.get("paper_type", "cizgili"),
+                "line_count": len(page.get("lines", [])),
+            }
+
+    if selection_type == "block":
+        block = _get_block_by_id(blocks, selection_id)
+        if block:
+            selection_context = {
+                "type": "block",
+                "id": block.get("id"),
+                "block_type": block.get("type"),
+                "text": (block.get("text") or "")[:2000],
+            }
 
     return {
         "version": layout.get("version", 1),
@@ -659,6 +826,7 @@ def build_document_snapshot(
         "global_settings": layout.get("settings", {}),
         "pages": pages_summary,
         "selection": selection or {},
+        "selection_context": selection_context,
     }
 
 
@@ -712,7 +880,7 @@ def _copilot_response_schema() -> dict:
                 "items": {
                     "type": "OBJECT",
                     "properties": {
-                        "operation": {"type": "STRING"},
+                        "operation": {"type": "STRING", "enum": sorted(ALLOWED_OPERATIONS)},
                         "target_id": {"type": "STRING"},
                         "new_text": {"type": "STRING"},
                         "text": {"type": "STRING"},
@@ -726,17 +894,17 @@ def _copilot_response_schema() -> dict:
                             "type": "OBJECT",
                             "properties": {
                                 "color": {"type": "STRING"},
-                                "align": {"type": "STRING"},
+                                "align": {"type": "STRING", "enum": sorted(ALIGN_VALUES)},
                                 "scale_multiplier": {"type": "NUMBER"},
                                 "is_margin_note": {"type": "BOOLEAN"},
-                                "author_slot": {"type": "STRING"},
-                                "font_slot": {"type": "STRING"},
+                                "author_slot": {"type": "STRING", "enum": sorted(FONT_SLOTS)},
+                                "font_slot": {"type": "STRING", "enum": sorted(FONT_SLOTS)},
                                 "opacity": {"type": "NUMBER"},
                                 "kalinlik": {"type": "INTEGER"},
                                 "jitter": {"type": "INTEGER"},
                                 "scale_jitter": {"type": "INTEGER"},
                                 "line_slope": {"type": "NUMBER"},
-                                "paper_type": {"type": "STRING"},
+                                "paper_type": {"type": "STRING", "enum": sorted(PAPER_TYPES)},
                                 "paper_age": {"type": "INTEGER"},
                                 "coffee_stains": {"type": "BOOLEAN"},
                                 "crease_effect": {"type": "BOOLEAN"},
@@ -762,14 +930,14 @@ def call_copilot_gemini(
 ) -> dict:
     """Gemini'yi copilot modu için çağır ve response'u parse et."""
     import requests as req
+    from ai_document import validate_api_key, validate_model
 
-    if not api_key:
-        raise CopilotError("Gemini API anahtarı bulunamadı.", 503)
-
-    # Modeli doğrula
-    model_re = re.compile(r"^gemini-[a-z0-9][a-z0-9._-]{2,80}$")
-    if not model_re.match(model):
-        model = DEFAULT_COPILOT_MODEL
+    try:
+        api_key = validate_api_key(api_key)
+        model = validate_model(model)
+    except ValueError as exc:
+        status = int(getattr(exc, "status_code", 400))
+        raise CopilotError(str(exc), status) from exc
 
     # Gemini'ye gönderilecek kullanıcı mesajı
     user_content = (
@@ -777,9 +945,20 @@ def call_copilot_gemini(
         f"KULLANICI TALİMATI: {instruction}"
     )
 
+    # The browser owns conversation presentation, but only a short, normalized
+    # transcript is allowed into the model context. This avoids malformed roles
+    # and unbounded user-provided text changing the Gemini request shape.
     contents = []
-    for h in (chat_history or []):
-        contents.append({"role": h.get("role", "user"), "parts": [{"text": h.get("text", "")}]})
+    for item in (chat_history or [])[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        message = item.get("text")
+        if role not in {"user", "model"} or not isinstance(message, str):
+            continue
+        message = " ".join(message.split())[:1200]
+        if message:
+            contents.append({"role": role, "parts": [{"text": message}]})
     contents.append({"role": "user", "parts": [{"text": user_content}]})
 
     payload = {
@@ -793,28 +972,40 @@ def call_copilot_gemini(
         },
     }
 
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={api_key}"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     try:
-        resp = req.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
+        resp = req.post(
+            url,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=(5, 45),
+        )
     except req.exceptions.Timeout:
         raise CopilotError("Gemini zaman aşımı. Lütfen tekrar deneyin.", 504)
     except req.exceptions.RequestException as exc:
-        err_msg = str(exc)
-        if getattr(exc, 'response', None) is not None:
-            err_msg = f"{exc.response.status_code}: {exc.response.text}"
-        raise CopilotError(f"Gemini bağlantı hatası: {err_msg}", 502)
+        logger.warning("Copilot Gemini transport error: %s", type(exc).__name__)
+        raise CopilotError("Gemini bağlantısı kurulamadı. Lütfen tekrar deneyin.", 503) from exc
 
     try:
         body = resp.json()
+    except ValueError as exc:
+        raise CopilotError("Gemini geçersiz bir sunucu yanıtı döndürdü.", 502) from exc
+
+    if not resp.ok:
+        upstream = str((body.get("error") or {}).get("message") or "Gemini isteği reddedildi.")
+        upstream = re.sub(r"[\r\n\x00-\x1f]+", " ", upstream)[:240]
+        status = 401 if resp.status_code in {400, 401, 403} else 429 if resp.status_code == 429 else 502
+        raise CopilotError(upstream, status)
+
+    try:
         raw_text = body["candidates"][0]["content"]["parts"][0]["text"]
         parsed = json.loads(raw_text)
     except (KeyError, IndexError, json.JSONDecodeError) as exc:
         raise CopilotError("Gemini geçersiz yanıt döndürdü. Lütfen tekrar deneyin.", 502)
+
+    if not isinstance(parsed, dict):
+        raise CopilotError("Gemini belge komutu nesne biçiminde değil.", 502)
 
     return parsed
 
@@ -881,14 +1072,7 @@ def process_copilot_edit(
     new_layout, new_blocks, inverse_ops = apply_operations(clean_ops, layout, blocks)
     new_layout["version"] = current_version + 1
 
-    reflow_needed = bool(raw.get("reflow_needed", False)) or any(
-        op["operation"] in {
-            "replace_block_text", "rewrite_block", "insert_block",
-            "remove_block", "add_margin_note", "remove_text_effect",
-            "apply_text_effect",
-        }
-        for op in clean_ops
-    )
+    reflow_needed = bool(raw.get("reflow_needed", False)) or operations_require_reflow(clean_ops)
 
     return {
         "needs_clarification": False,
@@ -904,6 +1088,28 @@ def process_copilot_edit(
     }
 
 
+def operations_require_reflow(operations: list[dict]) -> bool:
+    """Return whether operations can change wrapping or block flow."""
+    content_operations = {
+        "replace_block_text", "rewrite_block", "insert_block", "remove_block",
+        "add_margin_note", "remove_text_effect", "apply_text_effect",
+        "update_document_settings", "reflow_scope",
+    }
+    for operation in operations:
+        name = operation.get("operation")
+        if name in content_operations:
+            return True
+        if name == "update_block_style" and set((operation.get("patch") or {})) & {
+            "align", "scale_multiplier", "is_margin_note", "page_break_before",
+        }:
+            return True
+        if name == "update_page_settings" and set((operation.get("patch") or {})) & {
+            "margin_top", "margin_bottom", "margin_left", "margin_right", "line_spacing",
+        }:
+            return True
+    return False
+
+
 # ─── Sürüm geçmişi yardımcıları ─────────────────────────────────────────────
 
 def make_operation_record(
@@ -915,6 +1121,7 @@ def make_operation_record(
     inverse_operations: list[dict],
     user_id: str,
     idempotency_key: str | None = None,
+    assistant_message: str = "",
 ) -> dict:
     return {
         "base_version": base_version,
@@ -924,6 +1131,7 @@ def make_operation_record(
         "inverse_operations": inverse_operations,
         "user_id": user_id,
         "idempotency_key": idempotency_key,
+        "assistant_message": str(assistant_message)[:600],
         "created_at": time.time(),
     }
 

@@ -19,6 +19,7 @@ class FakeDocRef:
         snap.exists = bool(self.data)
         snap.to_dict.return_value = self.data.copy()
         snap.id = self.id
+        snap.reference = self
         return snap
 
     def update(self, new_data):
@@ -44,6 +45,9 @@ class FakeCollection:
                 yield doc.get()
                 
     def order_by(self, field, direction=None):
+        return self
+
+    def where(self, field, op, value):
         return self
 
     def list_documents(self):
@@ -107,7 +111,7 @@ class TestCopilotStore(unittest.TestCase):
     def test_access_denied(self):
         doc_id = copilot_store.create_document(
             user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1, 
-            layout={}, blocks=[]
+            layout={"pages": []}, blocks=[]
         )
         with self.assertRaises(CopilotStoreError) as ctx:
             copilot_store.get_document(doc_id, "user2")
@@ -116,13 +120,61 @@ class TestCopilotStore(unittest.TestCase):
     def test_version_conflict(self):
         doc_id = copilot_store.create_document(
             user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1, 
-            layout={}, blocks=[]
+            layout={"pages": []}, blocks=[]
         )
-        new_version = copilot_store.update_document(doc_id, "user1", 1, {"version": 2}, [], {"instruction": "test"})
+        new_version = copilot_store.update_document(doc_id, "user1", 1, {"version": 2, "pages": []}, [], {"instruction": "test"})
         self.assertEqual(new_version, 2)
         
         with self.assertRaises(VersionConflictError):
-            copilot_store.update_document(doc_id, "user1", 1, {"version": 3}, [], {"instruction": "test2"})
+            copilot_store.update_document(doc_id, "user1", 1, {"version": 3, "pages": []}, [], {"instruction": "test2"})
+
+    def test_update_and_undo_redo_survive_a_fresh_load(self):
+        doc_id = copilot_store.create_document(
+            user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1,
+            layout={"pages": [{"id": "p1"}]}, blocks=[{"id": "b1", "text": "before"}]
+        )
+        record = {
+            "instruction": "rewrite",
+            "operations": [{"operation": "replace_block_text", "target_id": "b1"}],
+            "inverse_operations": [{"operation": "replace_block_text", "target_id": "b1"}],
+        }
+        copilot_store.update_document(
+            doc_id, "user1", 1, {"version": 2, "pages": [{"id": "p2"}]},
+            [{"id": "b1", "text": "after"}], record
+        )
+        reloaded = copilot_store.get_document(doc_id, "user1")
+        self.assertEqual(2, reloaded["version"])
+        self.assertEqual("after", reloaded["blocks"][0]["text"])
+        self.assertEqual("p2", reloaded["layout"]["pages"][0]["id"])
+        self.assertEqual(1, len(reloaded["history"]))
+
+        copilot_store.undo_document(
+            doc_id, "user1", 2, {"version": 3, "pages": [{"id": "p3"}]},
+            [{"id": "b1", "text": "before"}], record
+        )
+        after_undo = copilot_store.get_document(doc_id, "user1")
+        self.assertEqual(3, after_undo["version"])
+        self.assertEqual("before", after_undo["blocks"][0]["text"])
+        self.assertEqual([], after_undo["history"])
+        self.assertEqual(1, len(after_undo["redo_stack"]))
+
+        copilot_store.redo_document(
+            doc_id, "user1", 3, {"version": 4, "pages": [{"id": "p4"}]},
+            [{"id": "b1", "text": "after"}], record
+        )
+        after_redo = copilot_store.get_document(doc_id, "user1")
+        self.assertEqual(4, after_redo["version"])
+        self.assertEqual("after", after_redo["blocks"][0]["text"])
+        self.assertEqual(1, len(after_redo["history"]))
+        self.assertEqual([], after_redo["redo_stack"])
+
+    def test_oversized_child_document_is_rejected(self):
+        with self.assertRaises(CopilotStoreError) as ctx:
+            copilot_store.create_document(
+                user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1,
+                layout={"pages": []}, blocks=[{"text": "x" * 900_000}]
+            )
+        self.assertEqual(413, ctx.exception.status_code)
 
 if __name__ == '__main__':
     unittest.main()

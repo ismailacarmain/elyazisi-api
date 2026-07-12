@@ -1941,11 +1941,13 @@ def _get_copilot_doc(document_id: str, user_id: str) -> dict:
     except _store.CopilotStoreError as e:
         raise _cop.CopilotError(str(e), e.status_code)
     except Exception as e:
-        logger.error(f"Firestore error: {e}", exc_info=True)
-        raise _cop.CopilotError("Belge yüklenirken bir hata oluştu.", 500)
+        logger.error("Firestore document load failed: %s", type(e).__name__, exc_info=True)
+        raise _cop.CopilotError("Belge depolama hizmeti şu anda kullanılamıyor.", 503)
 
 def _copilot_error_response(exc: Exception):
     if isinstance(exc, _cop.CopilotError):
+        return jsonify({"success": False, "message": str(exc)}), exc.status_code
+    if isinstance(exc, _store.CopilotStoreError):
         return jsonify({"success": False, "message": str(exc)}), exc.status_code
     logger.error("Copilot error: %s", type(exc).__name__, exc_info=True)
     return jsonify({"success": False, "message": "Copilot işlemi tamamlanamadı."}), 500
@@ -2093,8 +2095,11 @@ def copilot_get_latest_document():
         }
         return jsonify({
             "success": True,
-            "document_id": doc.get("id") or [k for k in doc if "id" in k], # Need to get document_id from store doc
+            "document_id": doc["id"],
             "version": doc["version"],
+            "font_id": doc.get("font_id", ""),
+            "secondary_font_id": doc.get("secondary_font_id", ""),
+            "page_settings": doc.get("page_settings", {}),
             "layout": doc["layout"],
             "blocks": doc["blocks"],
             "page_hashes": page_hashes,
@@ -2122,6 +2127,10 @@ def copilot_get_document(document_id: str):
         return jsonify({
             "success": True,
             "version": doc["version"],
+            "document_id": doc["id"],
+            "font_id": doc.get("font_id", ""),
+            "secondary_font_id": doc.get("secondary_font_id", ""),
+            "page_settings": doc.get("page_settings", {}),
             "layout": doc["layout"],
             "blocks": doc["blocks"],
             "page_hashes": page_hashes,

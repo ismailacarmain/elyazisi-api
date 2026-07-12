@@ -1,231 +1,364 @@
+"""Durable, owner-scoped storage for Fontify Copilot documents.
+
+The root document intentionally contains metadata only. Blocks and rendered
+pages live in subcollections so a long document cannot hit Firestore's 1 MiB
+document limit. All state transitions go through one optimistic transaction.
+"""
+
+from __future__ import annotations
+
+import json
 import time
 import uuid
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Any, Optional
+
 from firebase_admin import firestore
+from google.cloud.firestore_v1 import Query
 from google.cloud.firestore_v1.transaction import Transaction
+
+
+MAX_BLOCKS = 120
+MAX_PAGES = 20
+MAX_HISTORY = 30
+MAX_SUBDOCUMENT_BYTES = 850_000
+MAX_SETTINGS_BYTES = 96_000
+
 
 class CopilotStoreError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
 
+
 class VersionConflictError(CopilotStoreError):
     def __init__(self):
-        super().__init__("Belge başka bir cihazda veya sekmede değiştirilmiş. Lütfen sayfayı yenileyin.", 409)
+        super().__init__(
+            "Belge başka bir cihazda veya sekmede değiştirildi. Lütfen sayfayı yenileyin.",
+            409,
+        )
+
 
 def _db():
     return firestore.client()
 
-def _delete_collection(coll_ref, batch_size=100):
-    docs = coll_ref.limit(batch_size).stream()
-    deleted = 0
-    for doc in docs:
-        doc.reference.delete()
-        deleted += 1
-    if deleted >= batch_size:
-        return _delete_collection(coll_ref, batch_size)
 
-def create_document(user_id: str, font_id: str, secondary_font_id: str, page_settings: dict, version: int, layout: dict, blocks: list) -> str:
-    document_id = str(uuid.uuid4())
-    now = time.time()
-    
-    batch = _db().batch()
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    
-    doc_data = {
-        "user_id": user_id,
-        "version": version,
-        "font_id": font_id,
-        "secondary_font_id": secondary_font_id,
-        "page_settings": page_settings,
-        "created_at": now,
-        "updated_at": now,
-        "last_accessed_at": now,
-        "status": "active",
-        "schema_version": 1
+def _json_size(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise CopilotStoreError("Belge verisi kaydedilebilir bir JSON biçiminde değil.") from exc
+
+
+def _ensure_small(value: Any, label: str, maximum: int) -> None:
+    if _json_size(value) > maximum:
+        raise CopilotStoreError(f"{label} Firestore sınırını aşıyor.", 413)
+
+
+def _validate_state(layout: dict, blocks: list, page_settings: Optional[dict] = None) -> None:
+    if not isinstance(layout, dict) or not isinstance(blocks, list):
+        raise CopilotStoreError("Copilot belge durumu geçersiz.")
+    pages = layout.get("pages")
+    if not isinstance(pages, list):
+        raise CopilotStoreError("Belge sayfaları geçersiz.")
+    if len(blocks) > MAX_BLOCKS:
+        raise CopilotStoreError(f"En fazla {MAX_BLOCKS} blok kaydedilebilir.", 413)
+    if len(pages) > MAX_PAGES:
+        raise CopilotStoreError(f"En fazla {MAX_PAGES} sayfa kaydedilebilir.", 413)
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise CopilotStoreError("Belge bloğu geçersiz.")
+        _ensure_small(block, "Bir belge bloğu", MAX_SUBDOCUMENT_BYTES)
+    for page in pages:
+        if not isinstance(page, dict):
+            raise CopilotStoreError("Belge sayfası geçersiz.")
+        _ensure_small(page, "Bir belge sayfası", MAX_SUBDOCUMENT_BYTES)
+    _ensure_small(layout.get("settings", {}), "Belge ayarları", MAX_SETTINGS_BYTES)
+    if page_settings is not None:
+        if not isinstance(page_settings, dict):
+            raise CopilotStoreError("Sayfa ayarları geçersiz.")
+        _ensure_small(page_settings, "Sayfa ayarları", MAX_SETTINGS_BYTES)
+
+
+def _layout_meta(layout: dict) -> dict:
+    return {
+        key: layout[key]
+        for key in ("page_size", "page_width", "page_height", "px_per_mm")
+        if key in layout
     }
-    batch.set(doc_ref, doc_data)
-    
-    for i, block in enumerate(blocks):
-        block_ref = doc_ref.collection('blocks').document(str(i))
-        batch.set(block_ref, {"index": i, "data": block})
-        
-    for i, page in enumerate(layout.get('pages', [])):
-        page_ref = doc_ref.collection('pages').document(str(i))
-        batch.set(page_ref, {"index": i, "data": page})
-        
-    batch.commit()
-    return document_id
 
-def get_document(document_id: str, user_id: str) -> dict:
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    doc_snap = doc_ref.get()
-    
-    if not doc_snap.exists:
-        raise CopilotStoreError("Belge bulunamadı. Önce kaydedin.", 404)
-        
-    doc_data = doc_snap.to_dict()
-    doc_data["id"] = document_id
-    if doc_data.get("user_id") != user_id:
-        raise CopilotStoreError("Bu belgeye erişim yetkiniz yok.", 403)
-        
-    # Update last_accessed_at asynchronously or in a separate batch to avoid locking
-    # But since it's just a get, we can fire and forget a set
-    doc_ref.update({"last_accessed_at": time.time()})
-    
-    return _load_document_state(doc_ref, doc_data)
+
+def _document_ref(document_id: str):
+    return _db().collection("ai_copilot_documents").document(document_id)
+
 
 def _load_document_state(doc_ref, doc_data: dict) -> dict:
-    # Load blocks
-    blocks = []
-    blocks_snap = doc_ref.collection('blocks').order_by('index').stream()
-    for b in blocks_snap:
-        blocks.append(b.to_dict().get('data'))
-        
-    # Load pages
-    pages = []
-    pages_snap = doc_ref.collection('pages').order_by('index').stream()
-    for p in pages_snap:
-        pages.append(p.to_dict().get('data'))
-        
-    # Load history metadata
-    history = []
-    history_snap = doc_ref.collection('history').order_by('sequence').stream()
-    for h in history_snap:
-        history.append(h.to_dict())
-        
-    redo_stack = []
-    redo_snap = doc_ref.collection('redo').order_by('sequence').stream()
-    for r in redo_snap:
-        redo_stack.append(r.to_dict())
-        
-    layout = {
-        "version": doc_data.get("version"),
-        "page_size": "A4",
-        "page_width": 2480,
-        "page_height": 3508,
-        "px_per_mm": 11.809524,
-        "settings": doc_data.get("page_settings"),
-        "pages": pages
-    }
-    
-    doc_data["layout"] = layout
+    blocks = [
+        snapshot.to_dict().get("data")
+        for snapshot in doc_ref.collection("blocks").order_by("index").stream()
+    ]
+    pages = [
+        snapshot.to_dict().get("data")
+        for snapshot in doc_ref.collection("pages").order_by("index").stream()
+    ]
+    history = [
+        snapshot.to_dict()
+        for snapshot in doc_ref.collection("history").order_by("sequence").stream()
+    ]
+    redo_stack = [
+        snapshot.to_dict()
+        for snapshot in doc_ref.collection("redo").order_by("sequence").stream()
+    ]
+    metadata = dict(doc_data.get("layout_meta") or {})
+    metadata.update({
+        "version": doc_data.get("version", 1),
+        "settings": dict(doc_data.get("layout_settings") or doc_data.get("page_settings") or {}),
+        "pages": pages,
+    })
+    doc_data["layout"] = metadata
     doc_data["blocks"] = blocks
     doc_data["history"] = history
     doc_data["redo_stack"] = redo_stack
     return doc_data
 
+
+def create_document(
+    *,
+    user_id: str,
+    font_id: str,
+    secondary_font_id: str,
+    page_settings: dict,
+    version: int,
+    layout: dict,
+    blocks: list,
+) -> str:
+    _validate_state(layout, blocks, page_settings)
+    document_id = str(uuid.uuid4())
+    now = time.time()
+    db = _db()
+    doc_ref = db.collection("ai_copilot_documents").document(document_id)
+    batch = db.batch()
+    batch.set(doc_ref, {
+        "user_id": user_id,
+        "version": int(version),
+        "font_id": font_id,
+        "secondary_font_id": secondary_font_id,
+        "page_settings": dict(page_settings),
+        "layout_settings": dict(layout.get("settings") or {}),
+        "layout_meta": _layout_meta(layout),
+        "created_at": now,
+        "updated_at": now,
+        "last_accessed_at": now,
+        "status": "active",
+        "schema_version": 2,
+    })
+    for index, block in enumerate(blocks):
+        batch.set(doc_ref.collection("blocks").document(str(index)), {"index": index, "data": block})
+    for index, page in enumerate(layout.get("pages", [])):
+        batch.set(doc_ref.collection("pages").document(str(index)), {"index": index, "data": page})
+    batch.commit()
+    return document_id
+
+
+def _owned_document(document_id: str, user_id: str) -> tuple[Any, dict]:
+    doc_ref = _document_ref(document_id)
+    snapshot = doc_ref.get()
+    if not snapshot.exists:
+        raise CopilotStoreError("Belge bulunamadı.", 404)
+    data = snapshot.to_dict()
+    if data.get("user_id") != user_id:
+        raise CopilotStoreError("Bu belgeye erişim yetkiniz yok.", 403)
+    data["id"] = document_id
+    return doc_ref, data
+
+
+def get_document(document_id: str, user_id: str) -> dict:
+    doc_ref, data = _owned_document(document_id, user_id)
+    doc_ref.update({"last_accessed_at": time.time()})
+    return _load_document_state(doc_ref, data)
+
+
 def get_latest_document(user_id: str) -> Optional[dict]:
-    docs = _db().collection('ai_copilot_documents').where('user_id', '==', user_id).where('status', '==', 'active').order_by('updated_at', direction=firestore.Query.DESCENDING).limit(1).stream()
-    for doc in docs:
-        doc_ref = doc.reference
-        doc_data = doc.to_dict()
-        doc_data["id"] = doc.id
-        doc_ref.update({"last_accessed_at": time.time()})
-        return _load_document_state(doc_ref, doc_data)
-    return None
+    query = (
+        _db().collection("ai_copilot_documents")
+        .where("user_id", "==", user_id)
+        .where("status", "==", "active")
+        .order_by("updated_at", direction=Query.DESCENDING)
+        .limit(1)
+    )
+    snapshot = next(iter(query.stream()), None)
+    if snapshot is None:
+        return None
+    doc_ref = snapshot.reference
+    data = snapshot.to_dict()
+    data["id"] = snapshot.id
+    doc_ref.update({"last_accessed_at": time.time()})
+    return _load_document_state(doc_ref, data)
+
+
+def _bounded_snapshots(collection_ref, *, transaction: Transaction) -> list:
+    return list(
+        collection_ref.order_by("sequence", direction=Query.ASCENDING)
+        .limit(MAX_HISTORY)
+        .stream(transaction=transaction)
+    )
+
 
 @firestore.transactional
-def _update_document_txn(transaction: Transaction, doc_ref, user_id: str, expected_version: int, new_layout: dict, new_blocks: list, record: Optional[dict] = None, page_settings: Optional[dict] = None, is_undo: bool = False, is_redo: bool = False, redo_record: Optional[dict] = None):
-    doc_snap = doc_ref.get(transaction=transaction)
-    if not doc_snap.exists:
+def _update_document_txn(
+    transaction: Transaction,
+    doc_ref,
+    user_id: str,
+    expected_version: int,
+    new_layout: dict,
+    new_blocks: list,
+    record: Optional[dict] = None,
+    page_settings: Optional[dict] = None,
+    *,
+    is_undo: bool = False,
+    is_redo: bool = False,
+    redo_record: Optional[dict] = None,
+) -> int:
+    # Firestore requires all reads to finish before transaction writes. Read the
+    # root and bounded history stacks first; all child-state writes are then
+    # deterministic numeric document IDs.
+    doc_snapshot = doc_ref.get(transaction=transaction)
+    if not doc_snapshot.exists:
         raise CopilotStoreError("Belge bulunamadı.", 404)
-        
-    doc_data = doc_snap.to_dict()
-    if doc_data.get("user_id") != user_id:
+    current = doc_snapshot.to_dict()
+    if current.get("user_id") != user_id:
         raise CopilotStoreError("Bu belgeye erişim yetkiniz yok.", 403)
-        
-    if doc_data.get("version") != expected_version:
+    if int(current.get("version", 0)) != int(expected_version):
         raise VersionConflictError()
-        
-    new_version = new_layout.get("version", expected_version + 1)
-    
-    update_data = {
+
+    history_snapshots = _bounded_snapshots(doc_ref.collection("history"), transaction=transaction)
+    redo_snapshots = _bounded_snapshots(doc_ref.collection("redo"), transaction=transaction)
+
+    try:
+        new_version = int(new_layout.get("version", int(expected_version) + 1))
+    except (TypeError, ValueError) as exc:
+        raise CopilotStoreError("Belge sürümü geçersiz.") from exc
+    if new_version != int(expected_version) + 1:
+        raise VersionConflictError()
+
+    now = time.time()
+    root_update = {
         "version": new_version,
-        "updated_at": time.time()
+        "updated_at": now,
+        "last_accessed_at": now,
+        "layout_settings": dict(new_layout.get("settings") or {}),
+        "layout_meta": _layout_meta(new_layout),
     }
     if page_settings is not None:
-        update_data["page_settings"] = page_settings
-        
-    transaction.update(doc_ref, update_data)
-    
-    # Overwrite blocks efficiently to save transaction limits
-    for i, block in enumerate(new_blocks):
-        block_ref = doc_ref.collection('blocks').document(str(i))
-        transaction.set(block_ref, {"index": i, "data": block})
-        
-    # Delete excess blocks
-    # Since we can't easily query in transaction for "index >= len", we just try to delete up to a reasonable max (120)
-    for i in range(len(new_blocks), 120):
-        block_ref = doc_ref.collection('blocks').document(str(i))
-        transaction.delete(block_ref)
-        
-    for i, page in enumerate(new_layout.get('pages', [])):
-        page_ref = doc_ref.collection('pages').document(str(i))
-        transaction.set(page_ref, {"index": i, "data": page})
-        
-    # Delete excess pages
-    for i in range(len(new_layout.get('pages', [])), 20):
-        page_ref = doc_ref.collection('pages').document(str(i))
-        transaction.delete(page_ref)
+        root_update["page_settings"] = dict(page_settings)
+    transaction.update(doc_ref, root_update)
 
-    if record:
-        record["sequence"] = new_version
-        record["created_at"] = time.time()
-        hist_ref = doc_ref.collection('history').document(str(new_version))
-        transaction.set(hist_ref, record)
-        
-        if not is_undo and not is_redo:
-            # Clear redo stack
-            existing_redo = list(doc_ref.collection('redo').list_documents())
-            for r in existing_redo:
-                transaction.delete(r)
-                
-    if is_undo and redo_record:
-        # Move last history to redo
-        existing_history = list(doc_ref.collection('history').order_by('sequence', direction=firestore.Query.DESCENDING).limit(1).stream(transaction=transaction))
-        for h in existing_history:
-            transaction.delete(h.reference)
-            
-        redo_record["sequence"] = new_version
-        redo_ref = doc_ref.collection('redo').document(str(new_version))
-        transaction.set(redo_ref, redo_record)
-        
-    if is_redo and record:
-        # Move last redo to history
-        existing_redo = list(doc_ref.collection('redo').order_by('sequence', direction=firestore.Query.DESCENDING).limit(1).stream(transaction=transaction))
-        for r in existing_redo:
-            transaction.delete(r.reference)
-            
+    pages = new_layout.get("pages", [])
+    for index in range(MAX_BLOCKS):
+        ref = doc_ref.collection("blocks").document(str(index))
+        if index < len(new_blocks):
+            transaction.set(ref, {"index": index, "data": new_blocks[index]})
+        else:
+            transaction.delete(ref)
+    for index in range(MAX_PAGES):
+        ref = doc_ref.collection("pages").document(str(index))
+        if index < len(pages):
+            transaction.set(ref, {"index": index, "data": pages[index]})
+        else:
+            transaction.delete(ref)
+
+    if is_undo:
+        if not history_snapshots or not redo_record:
+            raise CopilotStoreError("Geri alınacak işlem yok.", 400)
+        transaction.delete(history_snapshots[-1].reference)
+        if len(redo_snapshots) >= MAX_HISTORY:
+            transaction.delete(redo_snapshots[0].reference)
+        stored_redo = dict(redo_record)
+        stored_redo.update({"sequence": new_version, "created_at": now})
+        transaction.set(doc_ref.collection("redo").document(str(new_version)), stored_redo)
+    elif is_redo:
+        if not redo_snapshots or not record:
+            raise CopilotStoreError("İleri alınacak işlem yok.", 400)
+        transaction.delete(redo_snapshots[-1].reference)
+        if len(history_snapshots) >= MAX_HISTORY:
+            transaction.delete(history_snapshots[0].reference)
+        stored_history = dict(record)
+        stored_history.update({"sequence": new_version, "created_at": now})
+        transaction.set(doc_ref.collection("history").document(str(new_version)), stored_history)
+    elif record:
+        for snapshot in redo_snapshots:
+            transaction.delete(snapshot.reference)
+        if len(history_snapshots) >= MAX_HISTORY:
+            transaction.delete(history_snapshots[0].reference)
+        stored_history = dict(record)
+        stored_history.update({"sequence": new_version, "created_at": now})
+        transaction.set(doc_ref.collection("history").document(str(new_version)), stored_history)
+
     return new_version
 
-def update_document(document_id: str, user_id: str, expected_version: int, new_layout: dict, new_blocks: list, record: Optional[dict] = None, page_settings: Optional[dict] = None):
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    transaction = _db().transaction()
-    return _update_document_txn(transaction, doc_ref, user_id, expected_version, new_layout, new_blocks, record, page_settings)
 
-def undo_document(document_id: str, user_id: str, expected_version: int, new_layout: dict, new_blocks: list, redo_record: dict):
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    transaction = _db().transaction()
-    return _update_document_txn(transaction, doc_ref, user_id, expected_version, new_layout, new_blocks, is_undo=True, redo_record=redo_record)
+def update_document(
+    document_id: str,
+    user_id: str,
+    expected_version: int,
+    new_layout: dict,
+    new_blocks: list,
+    record: Optional[dict] = None,
+    page_settings: Optional[dict] = None,
+) -> int:
+    _validate_state(new_layout, new_blocks, page_settings)
+    if record is not None:
+        _ensure_small(record, "İşlem geçmişi", MAX_SUBDOCUMENT_BYTES)
+    return _update_document_txn(
+        _db().transaction(),
+        _document_ref(document_id),
+        user_id,
+        expected_version,
+        new_layout,
+        new_blocks,
+        record,
+        page_settings,
+    )
 
-def redo_document(document_id: str, user_id: str, expected_version: int, new_layout: dict, new_blocks: list, history_record: dict):
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    transaction = _db().transaction()
-    return _update_document_txn(transaction, doc_ref, user_id, expected_version, new_layout, new_blocks, is_redo=True, record=history_record)
 
-def get_history(document_id: str):
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    history = []
-    history_snap = doc_ref.collection('history').order_by('sequence').stream()
-    for h in history_snap:
-        history.append(h.to_dict())
-    return history
+def undo_document(
+    document_id: str,
+    user_id: str,
+    expected_version: int,
+    new_layout: dict,
+    new_blocks: list,
+    redo_record: dict,
+) -> int:
+    _validate_state(new_layout, new_blocks)
+    _ensure_small(redo_record, "Geri alma geçmişi", MAX_SUBDOCUMENT_BYTES)
+    return _update_document_txn(
+        _db().transaction(),
+        _document_ref(document_id),
+        user_id,
+        expected_version,
+        new_layout,
+        new_blocks,
+        is_undo=True,
+        redo_record=redo_record,
+    )
 
-def get_redo_stack(document_id: str):
-    doc_ref = _db().collection('ai_copilot_documents').document(document_id)
-    redo_stack = []
-    redo_snap = doc_ref.collection('redo').order_by('sequence').stream()
-    for r in redo_snap:
-        redo_stack.append(r.to_dict())
-    return redo_stack
+
+def redo_document(
+    document_id: str,
+    user_id: str,
+    expected_version: int,
+    new_layout: dict,
+    new_blocks: list,
+    history_record: dict,
+) -> int:
+    _validate_state(new_layout, new_blocks)
+    _ensure_small(history_record, "İleri alma geçmişi", MAX_SUBDOCUMENT_BYTES)
+    return _update_document_txn(
+        _db().transaction(),
+        _document_ref(document_id),
+        user_id,
+        expected_version,
+        new_layout,
+        new_blocks,
+        record=history_record,
+        is_redo=True,
+    )

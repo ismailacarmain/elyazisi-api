@@ -23,6 +23,11 @@ def fake_font():
 
 
 class AiDocumentTests(unittest.TestCase):
+    def test_current_gemini_models_are_allowed(self):
+        self.assertEqual("gemini-3.5-flash", ai_document.DEFAULT_GEMINI_MODEL)
+        self.assertIn("gemini-3.1-flash-lite", ai_document.allowed_models())
+        self.assertEqual("gemini-3.5-flash", ai_document.validate_model("gemini-3.5-flash"))
+
     def test_settings_are_millimetric_and_bounded(self):
         settings = ai_document.normalize_page_settings({
             "margin_left_mm": 18,
@@ -76,6 +81,7 @@ class AiDocumentTests(unittest.TestCase):
         clean = ai_document.validate_layout(layout)
         self.assertEqual("A4", clean["page_size"])
         self.assertTrue(clean["pages"][0]["lines"])
+        self.assertTrue(clean["pages"][0]["lines"][0]["block_id"])
 
     def test_layout_limits_are_enforced(self):
         with self.assertRaises(ai_document.AiDocumentError):

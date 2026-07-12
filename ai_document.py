@@ -31,11 +31,13 @@ MAX_BLOCKS = 120
 MAX_PAGES = 20
 MAX_LINES = 400
 
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_MODELS = (
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash",
-    "gemini-1.0-pro",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
 )
 ALLOWED_BLOCK_TYPES = {"title", "heading", "paragraph", "list_item", "quote"}
 ALLOWED_PAPER_TYPES = {"cizgili", "kareli", "duz"}
@@ -100,7 +102,7 @@ def allowed_models() -> tuple[str, ...]:
 
 
 def validate_model(value: Any) -> str:
-    model = str(value or "gemini-1.5-flash").strip().lower()
+    model = str(value or DEFAULT_GEMINI_MODEL).strip().lower()
     if not MODEL_RE.fullmatch(model) or model not in allowed_models():
         raise AiDocumentError("Bu Gemini modeli sunucuda izinli değil.")
     return model
@@ -418,6 +420,16 @@ def build_layout(
             style["align"] = str(block["align"])
         if "color" in block:
             style["ink_color"] = str(block["color"])
+        if "opacity" in block:
+            style["opacity"] = round(_clamp(block.get("opacity"), 0.4, 1.0, settings["opacity"]), 3)
+        if "kalinlik" in block:
+            style["kalinlik"] = int(_clamp(block.get("kalinlik"), -2, 4, settings["kalinlik"]))
+        if "jitter" in block:
+            style["jitter"] = int(_clamp(block.get("jitter"), 0, 15, style["jitter"]))
+        if "scale_jitter" in block:
+            style["scale_jitter"] = round(_clamp(block.get("scale_jitter"), 0, 35, settings["scale_jitter"]), 2)
+        if "line_slope" in block:
+            style["line_slope"] = round(_clamp(block.get("line_slope"), 0, 20, settings["line_slope"]), 2)
         
         is_margin_note = block.get("is_margin_note", False)
         if is_margin_note:
@@ -470,6 +482,7 @@ def build_layout(
                     raise AiDocumentError(f"Belge en fazla {MAX_LINES} satır olabilir.")
                 page["lines"].append({
                     "id": f"line-{line_counter}",
+                    "block_id": str(block.get("id") or f"block-{block_index + 1}"),
                     "block_index": block_index,
                     "block_type": block_type,
                     "is_margin_note": is_margin_note,
@@ -482,10 +495,12 @@ def build_layout(
                     "letter_scale": scale,
                     "letter_spacing": settings["letter_spacing"],
                     "word_spacing": settings["word_spacing"],
-                    "line_slope": settings["line_slope"] + 15.0 if is_margin_note else settings["line_slope"],
+                    "line_slope": style.get("line_slope", settings["line_slope"]) + 15.0 if is_margin_note else style.get("line_slope", settings["line_slope"]),
                     "jitter": style["jitter"],
-                    "scale_jitter": settings["scale_jitter"],
+                    "scale_jitter": style.get("scale_jitter", settings["scale_jitter"]),
                     "ink_color": style.get("ink_color", settings["ink_color"]),
+                    "opacity": style.get("opacity", settings["opacity"]),
+                    "kalinlik": style.get("kalinlik", settings["kalinlik"]),
                     "line_offset_y": 0,
                     "seed": 10_000 + line_counter,
                 })
@@ -603,6 +618,8 @@ def validate_layout(layout: Any) -> dict[str, Any]:
                 color = "#1b1b1d"
             clean_line = {
                 "id": str(raw_line.get("id") or f"line-{page_index + 1}-{line_index + 1}")[:80],
+                "block_id": str(raw_line.get("block_id") or "")[:80],
+                "block_index": int(_clamp(raw_line.get("block_index"), 0, MAX_BLOCKS - 1, 0)),
                 "block_type": str(raw_line.get("block_type", "paragraph"))[:30],
                 "is_margin_note": is_margin_note,
                 "font_slot": "secondary" if raw_line.get("font_slot") == "secondary" else "primary",
