@@ -44,3 +44,19 @@ Sunucu durumu kontrolü
    - FIREBASE_PRIVATE_KEY
    - FIREBASE_CLIENT_EMAIL
    - FIREBASE_CLIENT_ID
+
+## AI sağlayıcı yedekleme
+
+Fontify AI Studio tek bir sağlayıcıya bağlı değildir. Render environment
+variables üzerinden aşağıdaki anahtarlar yapılandırılabilir:
+
+- `GEMINI_API_KEY`: Ana belge planlama sağlayıcısı.
+- `GROQ_API_KEY`: Ücretsiz kotası yüksek, structured JSON destekli Copilot sağlayıcısı.
+- `OPENROUTER_API_KEY`: Son yedek sağlayıcı; varsayılan model `openrouter/free`.
+- `GROQ_MODEL`: Varsayılan `openai/gpt-oss-120b`.
+- `OPENROUTER_MODEL`: Varsayılan `openrouter/free`.
+- `AI_DOCUMENT_PROVIDER_ORDER`: Varsayılan `gemini,groq,openrouter`.
+- `COPILOT_PROVIDER_ORDER`: Varsayılan `groq,gemini,openrouter`.
+
+Anahtarlar kaynak koda veya frontend'e yazılmaz. Sağlayıcılar sırayla denenir;
+kota, bağlantı veya servis hatasında bir sonraki sağlayıcıya geçilir.

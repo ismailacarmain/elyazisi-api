@@ -1,0 +1,128 @@
+import json
+import unittest
+from unittest.mock import MagicMock, patch
+
+import ai_provider
+
+
+class ProviderFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.schema = {
+            "type": "OBJECT",
+            "properties": {"status": {"type": "STRING"}},
+            "required": ["status"],
+        }
+        self.messages = [{"role": "user", "content": "JSON döndür"}]
+
+    @staticmethod
+    def response(payload, *, ok=True, status=200):
+        result = MagicMock()
+        result.ok = ok
+        result.status_code = status
+        result.json.return_value = payload
+        return result
+
+    def test_configured_provider_names_never_include_keys(self):
+        providers = ai_provider.configured_providers({
+            "gemini_key": "AIza" + "x" * 32,
+            "groq_key": "gsk_" + "y" * 32,
+            "openrouter_key": "",
+        })
+        self.assertEqual(["gemini", "groq"], providers)
+
+    def test_gemini_quota_falls_back_to_groq_structured_json(self):
+        success = self.response({
+            "choices": [{"message": {"content": json.dumps({"status": "OK"})}}]
+        })
+        error = RuntimeError("quota")
+        error.status_code = 429
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            parsed, provider, model = ai_provider.call_structured_with_fallback(
+                config={
+                    "gemini_key": "AIza" + "x" * 32,
+                    "gemini_model": "gemini-3.5-flash",
+                    "groq_key": "gsk_" + "y" * 32,
+                    "groq_model": "openai/gpt-oss-120b",
+                },
+                gemini_call=lambda _key: (_ for _ in ()).throw(error),
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+        self.assertEqual({"status": "OK"}, parsed)
+        self.assertEqual("groq", provider)
+        self.assertEqual("openai/gpt-oss-120b", model)
+        url = post.call_args.args[0]
+        kwargs = post.call_args.kwargs
+        self.assertEqual("https://api.groq.com/openai/v1/chat/completions", url)
+        self.assertNotIn("gsk_", url)
+        self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer gsk_"))
+        response_schema = kwargs["json"]["response_format"]["json_schema"]["schema"]
+        self.assertEqual("object", response_schema["type"])
+        self.assertEqual("string", response_schema["properties"]["status"]["type"])
+
+    def test_groq_failure_falls_back_to_openrouter(self):
+        denied = self.response({"error": {"message": "limited"}}, ok=False, status=429)
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", side_effect=[denied, success]) as post:
+            parsed, provider, model = ai_provider.call_structured_with_fallback(
+                config={
+                    "groq_key": "gsk_" + "y" * 32,
+                    "openrouter_key": "sk-or-v1-" + "z" * 32,
+                },
+                gemini_call=lambda _key: {},
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+        self.assertEqual("OK", parsed["status"])
+        self.assertEqual("openrouter", provider)
+        self.assertEqual("openrouter/free", model)
+        self.assertEqual(2, post.call_count)
+        self.assertEqual(
+            {"type": "json_object"},
+            post.call_args.kwargs["json"]["response_format"],
+        )
+
+    def test_provider_order_can_preserve_gemini_quota(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        gemini = MagicMock(return_value={"status": "GEMINI"})
+        with patch("ai_provider.requests.post", return_value=success):
+            parsed, provider, _ = ai_provider.call_structured_with_fallback(
+                config={
+                    "provider_order": "groq,gemini,openrouter",
+                    "gemini_key": "AIza" + "x" * 32,
+                    "groq_key": "gsk_" + "y" * 32,
+                },
+                gemini_call=gemini,
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+        self.assertEqual("groq", provider)
+        self.assertEqual("OK", parsed["status"])
+        gemini.assert_not_called()
+
+    def test_missing_provider_configuration_is_actionable(self):
+        with self.assertRaises(ai_provider.AiProviderError) as ctx:
+            ai_provider.call_structured_with_fallback(
+                config={},
+                gemini_call=lambda _key: {},
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+        self.assertEqual(503, ctx.exception.status_code)
+        self.assertIn("GROQ_API_KEY", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

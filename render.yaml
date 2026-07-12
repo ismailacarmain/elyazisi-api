@@ -19,3 +19,15 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: OPENROUTER_MODEL
+        value: openrouter/free
+      - key: AI_DOCUMENT_PROVIDER_ORDER
+        value: gemini,groq,openrouter
+      - key: COPILOT_PROVIDER_ORDER
+        value: groq,gemini,openrouter

@@ -19,6 +19,8 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
+import ai_provider
+
 logger = logging.getLogger(__name__)
 
 # ─── Sabitler ─────────────────────────────────────────────────────────────────
@@ -1023,6 +1025,7 @@ def process_copilot_edit(
     chat_history: list[dict] | None = None,
     secondary_font_available: bool = False,
     current_version: int = 0,
+    provider_config: dict[str, Any] | None = None,
 ) -> dict:
     """
     Kullanıcının talebini işleyip yeni layout ve inverse operations döndür.
@@ -1045,7 +1048,38 @@ def process_copilot_edit(
         raise CopilotError(f"Talimat en fazla {MAX_INSTRUCTION_CHARS} karakter olabilir.")
 
     snapshot = build_document_snapshot(layout, blocks, selection)
-    raw = call_copilot_gemini(api_key, model, instruction, snapshot, chat_history)
+    if provider_config:
+        user_content = (
+            f"BELGE DURUMU:\n{json.dumps(snapshot, ensure_ascii=False, indent=2)}\n\n"
+            f"KULLANICI TALİMATI: {instruction}"
+        )
+        messages = [{"role": "system", "content": _COPILOT_SYSTEM_PROMPT}]
+        for item in (chat_history or [])[-10:]:
+            if not isinstance(item, dict) or item.get("role") not in {"user", "model"}:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                messages.append({"role": item["role"], "content": " ".join(text.split())[:1200]})
+        messages.append({"role": "user", "content": user_content})
+        config = dict(provider_config)
+        config.setdefault("gemini_key", api_key)
+        config.setdefault("gemini_model", model)
+        try:
+            raw, provider, actual_model = ai_provider.call_structured_with_fallback(
+                config=config,
+                gemini_call=lambda key: call_copilot_gemini(
+                    key, model, instruction, snapshot, chat_history
+                ),
+                messages=messages,
+                schema=_copilot_response_schema(),
+                schema_name="fontify_copilot_edit",
+                max_tokens=2_048,
+            )
+        except ai_provider.AiProviderError as exc:
+            raise CopilotError(str(exc), exc.status_code) from exc
+    else:
+        raw = call_copilot_gemini(api_key, model, instruction, snapshot, chat_history)
+        provider, actual_model = "gemini", model
 
     if raw.get("needs_clarification"):
         return {
@@ -1061,6 +1095,8 @@ def process_copilot_edit(
             "new_blocks": blocks,
             "reflow_needed": False,
             "reflow_scope": "none",
+            "provider": provider,
+            "model": actual_model,
         }
 
     raw_ops = raw.get("operations") or []
@@ -1085,6 +1121,8 @@ def process_copilot_edit(
         "new_blocks": new_blocks,
         "reflow_needed": reflow_needed,
         "reflow_scope": str(raw.get("reflow_scope", "document")),
+        "provider": provider,
+        "model": actual_model,
     }
 
 

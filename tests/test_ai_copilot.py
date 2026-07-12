@@ -553,6 +553,28 @@ class TestCopilotOperations(unittest.TestCase):
         self.assertEqual("1453 yılı", cop._get_block_by_id(changed_blocks, "block-2")["text"])
 
 
+class CopilotProviderTests(unittest.TestCase):
+    @patch("ai_copilot.ai_provider.call_structured_with_fallback")
+    def test_copilot_accepts_groq_fallback_result(self, mock_provider):
+        mock_provider.return_value = ({
+            "needs_clarification": False,
+            "assistant_message": "Başlık düzenlendi.",
+            "operations": [],
+            "reflow_scope": "none",
+        }, "groq", "openai/gpt-oss-120b")
+        blocks = _make_blocks()
+        result = cop.process_copilot_edit(
+            api_key="",
+            model="gemini-3.5-flash",
+            instruction="Başlığı düzenle",
+            layout=_make_layout(blocks),
+            blocks=blocks,
+            provider_config={"groq_key": "gsk_" + "x" * 32},
+        )
+        self.assertEqual("groq", result["provider"])
+        self.assertEqual("openai/gpt-oss-120b", result["model"])
+
+
 class CopilotHistoryTests(unittest.TestCase):
     def test_operation_record_preserves_safe_assistant_message(self):
         record = cop.make_operation_record(

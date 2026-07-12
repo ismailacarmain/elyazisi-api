@@ -37,6 +37,7 @@ from glyph_normalizer import (
     normalize_digital_glyph,
 )
 import ai_document
+import ai_provider
 
 # Logging setup
 logging.basicConfig(
@@ -145,7 +146,8 @@ CORS(app, resources={
     r"/process_single": {"origins": _configured_frontend_origins()},
     r"/download": {"origins": _configured_frontend_origins()}
 }, supports_credentials=False, allow_headers=[
-    'Authorization', 'Content-Type', 'X-Gemini-Api-Key'
+    'Authorization', 'Content-Type', 'X-Gemini-Api-Key',
+    'X-Groq-Api-Key', 'X-OpenRouter-Api-Key'
 ], methods=['GET', 'POST', 'OPTIONS'])
 
 @app.route('/health')
@@ -1641,6 +1643,33 @@ def _gemini_api_key():
     )
 
 
+def _ai_provider_config(provider_order=None):
+    """Collect optional BYOK/server credentials without exposing them."""
+    return {
+        "gemini_key": (
+            request.headers.get("X-Gemini-Api-Key")
+            or os.environ.get("GEMINI_API_KEY", "")
+        ).strip(),
+        "gemini_model": os.environ.get("GEMINI_MODEL", ai_document.DEFAULT_GEMINI_MODEL),
+        "groq_key": (
+            request.headers.get("X-Groq-Api-Key")
+            or os.environ.get("GROQ_API_KEY", "")
+        ).strip(),
+        "groq_model": os.environ.get("GROQ_MODEL", ai_provider.DEFAULT_GROQ_MODEL).strip(),
+        "openrouter_key": (
+            request.headers.get("X-OpenRouter-Api-Key")
+            or os.environ.get("OPENROUTER_API_KEY", "")
+        ).strip(),
+        "openrouter_model": os.environ.get(
+            "OPENROUTER_MODEL", ai_provider.DEFAULT_OPENROUTER_MODEL
+        ).strip(),
+        "provider_order": str(
+            provider_order
+            or os.environ.get("AI_PROVIDER_ORDER", "gemini,groq,openrouter")
+        ).strip(),
+    }
+
+
 def _load_glyph_value(raw):
     if isinstance(raw, str) and raw.lower().startswith('https://'):
         if not is_safe_url(raw):
@@ -1726,6 +1755,8 @@ def _load_secondary_font(data, user_id, primary_font_id):
 def _ai_error_response(exc):
     if isinstance(exc, ai_document.AiDocumentError):
         return jsonify({'success': False, 'message': str(exc)}), exc.status_code
+    if isinstance(exc, ai_provider.AiProviderError):
+        return jsonify({'success': False, 'message': str(exc)}), exc.status_code
     logger.error('AI Document Studio error: %s', type(exc).__name__, exc_info=True)
     return jsonify({'success': False, 'message': 'Belge işlemi şu anda tamamlanamadı.'}), 500
 
@@ -1738,9 +1769,23 @@ def ai_status():
         copilot_model = ai_document.validate_model(copilot_model)
     except ValueError:
         copilot_model = ai_document.DEFAULT_GEMINI_MODEL
+    server_config = {
+        "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
+        "groq_key": os.environ.get("GROQ_API_KEY", ""),
+        "openrouter_key": os.environ.get("OPENROUTER_API_KEY", ""),
+    }
+    providers = ai_provider.configured_providers(server_config)
     return jsonify({
         'success': True,
-        'server_key_configured': bool(os.environ.get('GEMINI_API_KEY', '').strip()),
+        'server_key_configured': bool(providers),
+        'configured_providers': providers,
+        'provider_order': os.environ.get('AI_PROVIDER_ORDER', 'gemini,groq,openrouter'),
+        'document_provider_order': os.environ.get(
+            'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openrouter'
+        ),
+        'copilot_provider_order': os.environ.get(
+            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openrouter'
+        ),
         'default_model': ai_document.DEFAULT_GEMINI_MODEL,
         'allowed_models': list(ai_document.allowed_models()),
         'copilot_model': copilot_model,
@@ -1753,8 +1798,17 @@ def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
         model = data.get('model', ai_document.DEFAULT_GEMINI_MODEL)
-        ai_document.test_gemini_connection(_gemini_api_key(), model)
-        return jsonify({'success': True, 'model': ai_document.validate_model(model)})
+        if request.headers.get('X-Gemini-Api-Key'):
+            ai_document.test_gemini_connection(_gemini_api_key(), model)
+            provider, actual_model = 'gemini', ai_document.validate_model(model)
+        else:
+            config = _ai_provider_config()
+            config['gemini_model'] = ai_document.validate_model(model)
+            provider, actual_model = ai_provider.test_provider_chain(
+                config=config,
+                gemini_test=lambda key: ai_document.test_gemini_connection(key, model),
+            )
+        return jsonify({'success': True, 'provider': provider, 'model': actual_model})
     except Exception as exc:
         return _ai_error_response(exc)
 
@@ -1791,8 +1845,11 @@ def ai_document_plan():
                 'model': None,
             }
         elif source == 'ai':
+            provider_config = _ai_provider_config(os.environ.get(
+                'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openrouter'
+            ))
             result = ai_document.create_ai_layout(
-                api_key=_gemini_api_key(),
+                api_key=provider_config.get('gemini_key'),
                 model=data.get('model', ai_document.DEFAULT_GEMINI_MODEL),
                 template=str(data.get('template', 'odev')),
                 topic=data.get('topic', ''),
@@ -1802,6 +1859,7 @@ def ai_document_plan():
                 page_settings=requested_settings,
                 secondary_harfler=secondary_harfler,
                 secondary_repetition=(secondary_font_data or {}).get('repetition', 1),
+                provider_config=provider_config,
             )
         else:
             raise ai_document.AiDocumentError("source yalnızca 'ai' veya 'manual' olabilir.")
@@ -2213,7 +2271,10 @@ def copilot_edit_document(document_id: str):
         secondary_available = bool(doc["layout"].get("settings", {}).get("multi_author"))
         configured_model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
         model = ai_document.validate_model(data.get("model") or configured_model)
-        req_api_key = _gemini_api_key()
+        provider_config = _ai_provider_config(os.environ.get(
+            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openrouter'
+        ))
+        req_api_key = provider_config.get("gemini_key", "")
 
         def _run_edit():
             result = _cop.process_copilot_edit(
@@ -2226,6 +2287,7 @@ def copilot_edit_document(document_id: str):
                 chat_history=chat_history[-10:],
                 secondary_font_available=secondary_available,
                 current_version=base_version,
+                provider_config=provider_config,
             )
             return _finalize_copilot_result(doc, result)
 
@@ -2239,11 +2301,17 @@ def copilot_edit_document(document_id: str):
                             "question": result["clarification_question"],
                             "options": result["clarification_options"],
                             "message": result["assistant_message"],
+                            "provider": result.get("provider"),
+                            "model": result.get("model"),
                         })
                         yield _sse_event("complete", {"message": result["assistant_message"]})
                         return
 
-                    yield _sse_event("plan", {"message": result["assistant_message"]})
+                    yield _sse_event("plan", {
+                        "message": result["assistant_message"],
+                        "provider": result.get("provider"),
+                        "model": result.get("model"),
+                    })
                     yield _sse_event("patch", {"operations": result["operations"]})
 
                     new_version = result["new_layout"]["version"]
@@ -2280,6 +2348,8 @@ def copilot_edit_document(document_id: str):
                         "new_blocks": result["new_blocks"],
                         "can_undo": True,
                         "can_redo": False,
+                        "provider": result.get("provider"),
+                        "model": result.get("model"),
                     })
                     yield _sse_event("complete", {"message": result["assistant_message"]})
 
@@ -2307,6 +2377,8 @@ def copilot_edit_document(document_id: str):
                     "clarification_question": result["clarification_question"],
                     "clarification_options": result["clarification_options"],
                     "assistant_message": result["assistant_message"],
+                    "provider": result.get("provider"),
+                    "model": result.get("model"),
                     "version": doc["version"],
                 })
 
@@ -2347,6 +2419,8 @@ def copilot_edit_document(document_id: str):
                 "new_blocks": result["new_blocks"],
                 "can_undo": True,
                 "can_redo": False,
+                "provider": result.get("provider"),
+                "model": result.get("model"),
             })
 
     except Exception as exc:

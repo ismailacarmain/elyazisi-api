@@ -208,6 +208,30 @@ class AiDocumentTests(unittest.TestCase):
                 page_settings={},
             )
 
+    @patch("ai_document.ai_provider.call_structured_with_fallback")
+    def test_document_plan_accepts_non_gemini_provider(self, mock_provider):
+        mock_provider.return_value = ({
+            "needs_clarification": False,
+            "document_title": "Deneme",
+            "blocks": [{"type": "paragraph", "text": "abc"}],
+            "page_settings_override": {},
+            "summary": "Hazır",
+        }, "groq", "openai/gpt-oss-120b")
+        result = ai_document.create_ai_layout(
+            api_key=None,
+            model="gemini-3.5-flash",
+            template="odev",
+            topic="Deneme konusu",
+            instructions="",
+            harfler=fake_font(),
+            repetition=1,
+            page_settings={},
+            provider_config={"groq_key": "gsk_" + "x" * 32},
+        )
+        self.assertEqual("groq", result["provider"])
+        self.assertEqual("openai/gpt-oss-120b", result["model"])
+        self.assertTrue(result["layout"]["pages"])
+
 
 if __name__ == "__main__":
     unittest.main()

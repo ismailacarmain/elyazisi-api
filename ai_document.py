@@ -21,6 +21,7 @@ import requests
 from PIL import Image
 
 import core_generator
+import ai_provider
 
 
 PAGE_WIDTH_PX = 2480
@@ -877,10 +878,11 @@ def test_gemini_connection(api_key: str, model: str) -> str:
 
 
 def create_ai_layout(
-    *, api_key: str, model: str, template: str, topic: str, instructions: str,
+    *, api_key: str | None, model: str, template: str, topic: str, instructions: str,
     harfler: dict[str, list[Image.Image]], repetition: int, page_settings: Any,
     secondary_harfler: dict[str, list[Image.Image]] | None = None,
     secondary_repetition: int = 1,
+    provider_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     topic = normalize_text(topic, maximum=500)
     instructions = normalize_text(instructions, maximum=3000)
@@ -896,12 +898,25 @@ def create_ai_layout(
     sample_parts = sample_image_parts(harfler)[:4]
     if secondary_harfler:
         sample_parts.extend(sample_image_parts(secondary_harfler)[:3])
-    parsed = call_gemini(
-        api_key,
-        model,
-        _gemini_prompt(template, topic, instructions, profile),
-        sample_parts[:6],
-    )
+    prompt = _gemini_prompt(template, topic, instructions, profile)
+    if provider_config:
+        config = dict(provider_config)
+        config.setdefault("gemini_key", api_key)
+        config.setdefault("gemini_model", validate_model(model))
+        try:
+            parsed, provider, actual_model = ai_provider.call_structured_with_fallback(
+                config=config,
+                gemini_call=lambda key: call_gemini(key, model, prompt, sample_parts[:6]),
+                messages=[{"role": "user", "content": prompt}],
+                schema=_response_schema(),
+                schema_name="fontify_document_plan",
+                max_tokens=16_000,
+            )
+        except ai_provider.AiProviderError as exc:
+            raise GeminiServiceError(str(exc), exc.status_code) from exc
+    else:
+        parsed = call_gemini(api_key or "", model, prompt, sample_parts[:6])
+        provider, actual_model = "gemini", validate_model(model)
     
     # Check if AI needs clarification from the user
     if parsed.get("needs_clarification"):
@@ -915,6 +930,8 @@ def create_ai_layout(
             "needs_clarification": True,
             "clarification_question": question,
             "clarification_options": options,
+            "provider": provider,
+            "model": actual_model,
         }
 
     # Override page settings if AI decided to change them based on instructions
@@ -970,6 +987,7 @@ def create_ai_layout(
         "full_text": full_text,
         "summary": normalize_text(parsed.get("summary", ""), maximum=500),
         "font_profile": profile,
-        "model": validate_model(model),
+        "model": actual_model,
+        "provider": provider,
         "updated_settings": updated_settings,
     }
