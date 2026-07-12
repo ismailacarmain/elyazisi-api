@@ -15,6 +15,13 @@ import requests
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+DEFAULT_PROVIDER_ORDER = ("gemini", "groq", "openrouter")
+TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_SECRET_PATTERNS = (
+    re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\b(?:gsk|sk-or-v1|sk|rk|xai)-[A-Za-z0-9._-]{16,}\b", re.IGNORECASE),
+    re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}"),
+)
 
 
 class AiProviderError(Exception):
@@ -56,7 +63,44 @@ def _safe_upstream_message(data: Any, fallback: str) -> str:
             fallback = str(error.get("message") or fallback)
         elif isinstance(error, str):
             fallback = error
-    return re.sub(r"[\r\n\x00-\x1f]+", " ", fallback)[:240]
+    message = re.sub(r"[\r\n\x00-\x1f]+", " ", fallback)
+    for pattern in _SECRET_PATTERNS:
+        if pattern.pattern.startswith("(?i)(\\bBearer"):
+            message = pattern.sub(r"\1[redacted]", message)
+        else:
+            message = pattern.sub("[redacted]", message)
+    return message[:240]
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Only retry/fail over errors that are safe to retry with another provider."""
+    try:
+        status = int(getattr(exc, "status_code", 503))
+    except (TypeError, ValueError):
+        status = 503
+    return status in TRANSIENT_STATUS_CODES
+
+
+def _normalized_error(provider: str, exc: Exception) -> AiProviderError:
+    try:
+        status = int(getattr(exc, "status_code", 503))
+    except (TypeError, ValueError):
+        status = 503
+    message = _safe_upstream_message(
+        {"error": {"message": str(exc)}},
+        f"{provider} isteÄŸi tamamlanamadÄ±.",
+    )
+    return AiProviderError(message, status, provider)
+
+
+def _bounded_content(content: str, limit: int = 60_000) -> str:
+    """Keep both the context opening and final user constraints within a cap."""
+    if len(content) <= limit:
+        return content
+    marker = "\n\n[... ara bağlam kısaltıldı; son talimatlar korunuyor ...]\n\n"
+    head = min(45_000, limit - len(marker))
+    tail = max(0, limit - head - len(marker))
+    return content[:head] + marker + content[-tail:]
 
 
 def _parse_openai_response(response: requests.Response, provider: str) -> dict[str, Any]:
@@ -66,7 +110,7 @@ def _parse_openai_response(response: requests.Response, provider: str) -> dict[s
         raise AiProviderError(f"{provider} geçersiz bir yanıt döndürdü.", 502, provider) from exc
     if not response.ok:
         message = _safe_upstream_message(data, f"{provider} isteği reddedildi.")
-        status = 429 if response.status_code == 429 else 401 if response.status_code in {401, 403} else 502
+        status = response.status_code if 400 <= response.status_code < 500 else 502
         raise AiProviderError(message, status, provider)
     try:
         content = data["choices"][0]["message"]["content"]
@@ -107,7 +151,7 @@ def _call_openai_compatible(
             continue
         content = item.get("content")
         if isinstance(content, str) and content.strip():
-            clean_messages.append({"role": role, "content": content[:60_000]})
+            clean_messages.append({"role": role, "content": _bounded_content(content)})
     if not clean_messages:
         raise AiProviderError("AI mesajı boş olamaz.", 400, provider)
 
@@ -152,7 +196,7 @@ def _call_openai_compatible(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
-            timeout=(6, 75),
+            timeout=(6, 45),
         )
     except requests.Timeout as exc:
         raise AiProviderError(f"{provider} zaman aşımına uğradı.", 504, provider) from exc
@@ -172,13 +216,16 @@ def call_structured_with_fallback(
 ) -> tuple[dict[str, Any], str, str]:
     """Try configured providers in a deterministic, cost-conscious order."""
     attempts: list[tuple[str, int]] = []
-    requested_order = str(
-        config.get("provider_order") or "gemini,groq,openrouter"
-    ).lower().split(",")
+    configured_order = str(config.get("provider_order") or "").strip()
+    requested_order = (
+        configured_order.lower().split(",")
+        if configured_order
+        else list(DEFAULT_PROVIDER_ORDER)
+    )
     order = []
-    for name in requested_order + ["gemini", "groq", "openrouter"]:
+    for name in requested_order:
         name = name.strip()
-        if name in {"gemini", "groq", "openrouter"} and name not in order:
+        if name in DEFAULT_PROVIDER_ORDER and name not in order:
             order.append(name)
 
     for provider in order:
@@ -189,7 +236,10 @@ def call_structured_with_fallback(
             try:
                 return gemini_call(key), "gemini", str(config.get("gemini_model") or "")
             except Exception as exc:  # The caller owns the Gemini-specific error type.
-                attempts.append(("gemini", int(getattr(exc, "status_code", 503))))
+                normalized = _normalized_error("gemini", exc)
+                if not _is_transient_error(normalized):
+                    raise normalized from exc
+                attempts.append(("gemini", normalized.status_code))
             continue
         default_model = DEFAULT_GROQ_MODEL if provider == "groq" else DEFAULT_OPENROUTER_MODEL
         model = str(config.get(f"{provider}_model") or default_model).strip()
@@ -205,6 +255,8 @@ def call_structured_with_fallback(
             )
             return parsed, provider, model
         except AiProviderError as exc:
+            if not _is_transient_error(exc):
+                raise exc
             attempts.append((provider, exc.status_code))
 
     if not attempts:

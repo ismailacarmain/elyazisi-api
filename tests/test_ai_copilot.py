@@ -279,6 +279,43 @@ class TestCopilotOperations(unittest.TestCase):
             )),
         )
 
+    def test_global_page_setting_undo_preserves_each_page_value(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        second_page = copy.deepcopy(layout["pages"][0])
+        second_page["id"] = "page-2"
+        layout["pages"].append(second_page)
+        layout["pages"][0]["margin_left"] = 100
+        layout["pages"][1]["margin_left"] = 200
+        ops = [{"operation": "update_page_settings", "target_id": "", "patch": {"margin_left": 150}}]
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks)
+        changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
+        restored_layout, _, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
+        self.assertEqual([100, 200], [page["margin_left"] for page in restored_layout["pages"]])
+
+    def test_inverse_removes_a_document_setting_that_did_not_exist_before(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        ops = [{"operation": "update_document_settings", "patch": {"letter_height_mm": 8.5}}]
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks)
+        changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
+        restored_layout, _, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
+        self.assertNotIn("letter_height_mm", restored_layout["settings"])
+
+    def test_internal_page_break_restore_is_reversible(self):
+        blocks = _make_blocks()
+        blocks[1]["page_break_before"] = True
+        layout = _make_layout(blocks)
+        ops = [{
+            "operation": "restore_block_page_breaks",
+            "page_breaks": [{"id": "block-2", "page_break_before": False}],
+        }]
+        clean = cop.validate_and_sanitize_operations(ops, layout, blocks, trusted_internal=True)
+        changed_layout, changed_blocks, inverses = cop.apply_operations(clean, layout, blocks)
+        self.assertFalse(cop._get_block_by_id(changed_blocks, "block-2")["page_break_before"])
+        restored_layout, restored_blocks, _ = cop.apply_operations(inverses, changed_layout, changed_blocks)
+        self.assertTrue(cop._get_block_by_id(restored_blocks, "block-2")["page_break_before"])
+
     # 14. Çok uzun talimat reddedilir (process_copilot_edit seviyesinde)
     def test_too_long_instruction_rejected(self):
         blocks = _make_blocks()

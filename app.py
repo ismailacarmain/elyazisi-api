@@ -23,6 +23,7 @@ from pdf2image import convert_from_bytes
 from PIL import Image as PILImage
 import requests
 from functools import wraps
+from typing import Any
 from werkzeug.exceptions import HTTPException
 
 from character_manifest import (
@@ -148,7 +149,7 @@ CORS(app, resources={
 }, supports_credentials=False, allow_headers=[
     'Authorization', 'Content-Type', 'X-Gemini-Api-Key',
     'X-Groq-Api-Key', 'X-OpenRouter-Api-Key'
-], methods=['GET', 'POST', 'OPTIONS'])
+], methods=['GET', 'POST', 'PATCH', 'OPTIONS'])
 
 @app.route('/health')
 def health():
@@ -2007,11 +2008,116 @@ def _copilot_error_response(exc: Exception):
         return jsonify({"success": False, "message": str(exc)}), exc.status_code
     if isinstance(exc, _store.CopilotStoreError):
         return jsonify({"success": False, "message": str(exc)}), exc.status_code
+    if isinstance(exc, ai_document.AiDocumentError):
+        return jsonify({"success": False, "message": str(exc)}), exc.status_code
     logger.error("Copilot error: %s", type(exc).__name__, exc_info=True)
     return jsonify({"success": False, "message": "Copilot işlemi tamamlanamadı."}), 500
 
 def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stored_page_target(settings: Any) -> int | None:
+    if not isinstance(settings, dict):
+        return None
+    try:
+        target = int(settings.get("target_page_count"))
+    except (TypeError, ValueError):
+        return None
+    return target if 1 <= target <= ai_document.MAX_PAGES else None
+
+
+def _canonical_page_settings(
+    value: Any,
+    fallback: Any = None,
+    *,
+    preserve_missing_target: bool = True,
+) -> dict:
+    """Normalize persisted page settings and retain an active page target safely."""
+    source = value if isinstance(value, dict) else {}
+    normalized = ai_document.normalize_page_settings(source)
+    # Firestore/API state deliberately uses the same flat, millimetric shape
+    # as the frontend. ``normalize_page_settings`` is an internal pixel layout
+    # representation, so persisting it directly would lose mm controls on the
+    # next reflow.
+    settings = {
+        "paper_type": normalized["paper_type"],
+        "ink_color": normalized["ink_color"],
+        "horizontal_align": normalized["horizontal_align"],
+        "vertical_align": normalized["vertical_align"],
+        "jitter": normalized["jitter"],
+        "line_slope": normalized["line_slope"],
+        "opacity": normalized["opacity"],
+        "kalinlik": normalized["kalinlik"],
+        "pen_dying_effect": normalized["pen_dying_effect"],
+        "paper_age": normalized["paper_age"],
+        "coffee_stains": normalized["coffee_stains"],
+        "crease_effect": normalized["crease_effect"],
+        "scale_jitter": normalized["scale_jitter"],
+        "multi_author": normalized["multi_author"],
+        **normalized["units"],
+    }
+    target_source = source
+    if (
+        preserve_missing_target
+        and "target_page_count" not in source
+        and isinstance(fallback, dict)
+    ):
+        target_source = fallback
+    target = _stored_page_target(target_source)
+    if target:
+        settings["target_page_count"] = target
+    return settings
+
+
+def _effective_page_settings(result: dict, requested: Any, current: Any) -> dict:
+    """Choose the exact settings snapshot that will be persisted with an edit."""
+    result_settings = result.get("page_settings_update")
+    if isinstance(result_settings, dict):
+        # A result snapshot can intentionally remove target_page_count after a
+        # user chooses manual measurements, so do not inherit it here.
+        return _canonical_page_settings(
+            result_settings, current, preserve_missing_target=False
+        )
+    if isinstance(requested, dict):
+        return _canonical_page_settings(requested, current)
+    return _canonical_page_settings(current)
+
+
+def _sanitize_client_copilot_blocks(value: Any) -> list[dict]:
+    """Canonicalize browser-supplied blocks before they can become server state."""
+    if not isinstance(value, list) or len(value) > ai_document.MAX_BLOCKS:
+        raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
+    cleaned: list[dict] = []
+    for raw_block in value:
+        if not isinstance(raw_block, dict):
+            continue
+        try:
+            normalized = ai_document.sanitize_blocks([raw_block])[0]
+        except (ai_document.AiDocumentError, IndexError):
+            continue
+        candidate_id = str(raw_block.get("id") or "").strip()
+        if _cop.DOCUMENT_ID_RE.fullmatch(candidate_id):
+            normalized["id"] = candidate_id
+        style_patch = _cop._sanitize_patch(
+            raw_block,
+            _cop.ALLOWED_BLOCK_STYLE_FIELDS,
+        )
+        normalized.update(style_patch)
+        cleaned.append(normalized)
+    if not cleaned:
+        raise _cop.CopilotError("Güncel belge blokları geçersiz.")
+    return cleaned
+
+
+def _copilot_full_text(blocks: Any) -> str:
+    if not isinstance(blocks, list):
+        return ""
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("text") or "").strip()
+    )[:ai_document.MAX_DOCUMENT_CHARS]
 
 
 def _copilot_reflow_state(
@@ -2100,7 +2206,21 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
     if result.get("needs_clarification"):
         return result
 
-    target_pages = result.get("target_page_count")
+    page_target_intent = str(result.get("page_target_intent") or "")
+    if page_target_intent == "manual":
+        target_pages = None
+    elif page_target_intent == "exact":
+        target_pages = _stored_page_target({"target_page_count": result.get("target_page_count")})
+    else:
+        target_pages = _stored_page_target(doc.get("page_settings"))
+
+    if page_target_intent == "manual":
+        cleared_settings = dict(doc.get("page_settings") or {})
+        cleared_settings.pop("target_page_count", None)
+        result["page_settings_update"] = cleared_settings
+        if isinstance(result.get("new_layout"), dict):
+            result["new_layout"].setdefault("settings", {}).pop("target_page_count", None)
+
     if result.get("reflow_needed") or target_pages:
         layout, blocks, fit_result = _copilot_reflow_state(
             doc,
@@ -2157,6 +2277,22 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
                 "margin_left": "margin_left_mm", "margin_right": "margin_right_mm",
                 "line_spacing": "line_spacing_mm",
             }
+            prior_breaks = {
+                str(block.get("id")): bool(block.get("page_break_before", False))
+                for block in result.get("new_blocks", [])
+                if isinstance(block, dict) and block.get("id")
+            }
+            changed_breaks = [
+                {"id": str(block.get("id")), "page_break_before": bool(block.get("page_break_before", False))}
+                for block in blocks
+                if isinstance(block, dict)
+                and block.get("id")
+                and prior_breaks.get(str(block.get("id")), False) != bool(block.get("page_break_before", False))
+            ]
+            previous_breaks = [
+                {"id": entry["id"], "page_break_before": prior_breaks[entry["id"]]}
+                for entry in changed_breaks
+            ]
             fit_operations = [{
                 "operation": "update_document_settings",
                 "patch": {key: after[key] for key in doc_fields},
@@ -2168,6 +2304,9 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
                     for px_key, mm_key in page_field_map.items()
                 },
             }]
+            if changed_breaks:
+                fit_operations.append({"operation": "restore_block_page_breaks", "page_breaks": changed_breaks})
+
             fit_inverse = [{
                 "operation": "update_page_settings",
                 "target_id": "",
@@ -2179,10 +2318,15 @@ def _finalize_copilot_result(doc: dict, result: dict) -> dict:
                 "operation": "update_document_settings",
                 "patch": {key: before[key] for key in doc_fields},
             }]
+            if previous_breaks:
+                fit_inverse.append({"operation": "restore_block_page_breaks", "page_breaks": previous_breaks})
             result["operations"] = list(result.get("operations") or []) + fit_operations
             result["inverse_operations"] = fit_inverse + list(result.get("inverse_operations") or [])
             result["fit_report"] = report
-            result["page_settings_update"] = fit_result["settings"]
+            persisted_settings = dict(fit_result["settings"])
+            persisted_settings["target_page_count"] = target_pages
+            result["page_settings_update"] = persisted_settings
+            layout.setdefault("settings", {})["target_page_count"] = target_pages
             result["reflow_needed"] = True
             result["assistant_message"] = (
                 f"Belgeyi {report['actual_pages']} sayfaya gerçek font ölçüleriyle sığdırdım: "
@@ -2213,6 +2357,20 @@ def copilot_save_document():
         if len(blocks) > ai_document.MAX_BLOCKS:
             raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
 
+        # A browser payload is untrusted even when it originates from our own
+        # editor. Canonicalize it before it becomes the durable Copilot base.
+        raw_page_settings = data.get("page_settings") if isinstance(data.get("page_settings"), dict) else {}
+        try:
+            source_version = int(layout.get("version", 1))
+        except (TypeError, ValueError) as exc:
+            raise _cop.CopilotError("Geçerli bir belge sürümü gerekli.") from exc
+        layout = ai_document.validate_layout(layout)
+        layout["version"] = source_version
+        persisted_page_settings = _canonical_page_settings(
+            raw_page_settings, preserve_missing_target=False
+        )
+        layout["settings"] = dict(persisted_page_settings)
+        blocks = _sanitize_client_copilot_blocks(blocks)
         layout, blocks = _cop.ensure_document_ids(layout, blocks)
         font_id = str(data.get("font_id") or "").strip()
         secondary_font_id = str(data.get("secondary_font_id") or "").strip()
@@ -2222,14 +2380,12 @@ def copilot_save_document():
             _font_access_for_user(secondary_font_id, request.uid)
             if secondary_font_id == font_id:
                 raise _cop.CopilotError("İkinci font birinci fonttan farklı olmalı.")
-        raw_page_settings = data.get("page_settings") if isinstance(data.get("page_settings"), dict) else {}
-
         version = int(layout.get("version", 1))
         document_id = _store.create_document(
             user_id=request.uid,
             font_id=font_id,
             secondary_font_id=secondary_font_id,
-            page_settings=raw_page_settings,
+            page_settings=persisted_page_settings,
             version=version,
             layout=layout,
             blocks=blocks
@@ -2266,6 +2422,7 @@ def copilot_get_latest_document():
             "page_settings": doc.get("page_settings", {}),
             "layout": doc["layout"],
             "blocks": doc["blocks"],
+            "full_text": _copilot_full_text(doc["blocks"]),
             "page_hashes": page_hashes,
             "can_undo": len(doc.get("history", [])) > 0,
             "can_redo": len(doc.get("redo_stack", [])) > 0,
@@ -2297,12 +2454,73 @@ def copilot_get_document(document_id: str):
             "page_settings": doc.get("page_settings", {}),
             "layout": doc["layout"],
             "blocks": doc["blocks"],
+            "full_text": _copilot_full_text(doc["blocks"]),
             "page_hashes": page_hashes,
             "can_undo": len(doc["history"]) > 0,
             "can_redo": len(doc["redo_stack"]) > 0,
         })
     except Exception as exc:
         return _copilot_error_response(exc)
+
+@app.route("/api/ai/documents/<document_id>/state", methods=["PATCH", "OPTIONS"])
+@verified_login_required
+def copilot_save_manual_state(document_id: str):
+    """Durably save direct inspector edits without replaying stale AI history."""
+    if request.method == "OPTIONS":
+        return "", 204
+    try:
+        data = request.get_json(silent=True) or {}
+        doc = _get_copilot_doc(document_id, request.uid)
+        try:
+            client_version = int(data.get("document_version"))
+        except (TypeError, ValueError) as exc:
+            raise _cop.CopilotError("Belge sürümü gerekli.") from exc
+        if client_version != doc["version"]:
+            raise _cop.VersionConflictError()
+        client_layout = data.get("layout")
+        client_blocks = data.get("blocks")
+        if not isinstance(client_layout, dict) or not isinstance(client_blocks, list):
+            raise _cop.CopilotError("Güncel layout ve bloklar gerekli.")
+        if len(json.dumps(client_layout, ensure_ascii=False)) > 2_000_000:
+            raise _cop.CopilotError("Güncel layout çok büyük.", 413)
+        layout = ai_document.validate_layout(client_layout)
+        blocks = _sanitize_client_copilot_blocks(client_blocks)
+        supplied_page_settings = data.get("page_settings")
+        if not isinstance(supplied_page_settings, dict):
+            supplied_page_settings = dict(doc.get("page_settings") or {})
+        page_settings = _canonical_page_settings(
+            supplied_page_settings, doc.get("page_settings")
+        )
+        stored_target = _stored_page_target(page_settings)
+
+        # Layout-level settings are server-owned state. Inspector edits only
+        # change page settings, blocks, and page geometry sent by the client.
+        layout["settings"] = dict((doc.get("layout") or {}).get("settings") or {})
+        if stored_target:
+            layout["settings"]["target_page_count"] = stored_target
+        else:
+            layout["settings"].pop("target_page_count", None)
+        layout, blocks = _cop.ensure_document_ids(layout, blocks)
+        layout["version"] = doc["version"] + 1
+        new_version = _store.save_manual_state(
+            document_id, request.uid, doc["version"], layout, blocks, page_settings
+        )
+        page_hashes = {
+            page.get("id", f"p{i}"): _cop.layout_page_hash(page)
+            for i, page in enumerate(layout.get("pages", []))
+        }
+        return jsonify({
+            "success": True,
+            "version": new_version,
+            "new_layout": layout,
+            "new_blocks": blocks,
+            "page_hashes": page_hashes,
+            "can_undo": False,
+            "can_redo": False,
+        })
+    except Exception as exc:
+        return _copilot_error_response(exc)
+
 
 @app.route("/api/ai/documents/<document_id>/edits", methods=["POST", "OPTIONS"])
 @verified_login_required
@@ -2342,11 +2560,25 @@ def copilot_edit_document(document_id: str):
                 raise _cop.CopilotError("Güncel layout çok büyük.", 413)
             if len(client_blocks) > ai_document.MAX_BLOCKS:
                 raise _cop.CopilotError(f"En fazla {ai_document.MAX_BLOCKS} blok.")
-            ai_document.validate_layout(client_layout)
-            base_layout, base_blocks = _cop.ensure_document_ids(client_layout, client_blocks)
+            sanitized_layout = ai_document.validate_layout(client_layout)
+            sanitized_blocks = _sanitize_client_copilot_blocks(client_blocks)
+            # validate_layout intentionally drops arbitrary settings. Restore
+            # the server-owned document settings rather than trusting a client
+            # snapshot to keep Copilot state and target-page intent intact.
+            sanitized_layout["settings"] = dict(
+                (doc.get("layout") or {}).get("settings") or {}
+            )
+            base_layout, base_blocks = _cop.ensure_document_ids(sanitized_layout, sanitized_blocks)
             base_version = int(client_version) if client_version is not None else int(doc["version"])
             if isinstance(data.get("page_settings"), dict):
-                page_settings_update = data["page_settings"]
+                page_settings_update = _canonical_page_settings(
+                    data["page_settings"], doc.get("page_settings")
+                )
+                target = _stored_page_target(page_settings_update)
+                if target:
+                    base_layout["settings"]["target_page_count"] = target
+                else:
+                    base_layout["settings"].pop("target_page_count", None)
         else:
             base_version = int(doc["version"])
             base_layout = copy.deepcopy(doc["layout"])
@@ -2395,7 +2627,11 @@ def copilot_edit_document(document_id: str):
                 current_version=base_version,
                 provider_config=provider_config,
             )
-            result["target_page_count"] = ai_document.requested_page_count(instruction)
+            requested_target, manual_target = ai_document.page_target_intent(instruction)
+            result["target_page_count"] = requested_target
+            result["page_target_intent"] = (
+                "manual" if manual_target else "exact" if requested_target else ""
+            )
             return _finalize_copilot_result(doc, result)
 
         if use_streaming:
@@ -2434,11 +2670,16 @@ def copilot_edit_document(document_id: str):
                         idempotency_key=idempotency_key,
                         assistant_message=result["assistant_message"],
                     )
+                    persisted_page_settings = _effective_page_settings(
+                        result, page_settings_update, doc.get("page_settings")
+                    )
+                    record["page_settings_before"] = dict(doc.get("page_settings") or {})
+                    record["page_settings_after"] = persisted_page_settings
                     try:
                         _store.update_document(
                             document_id, request.uid, base_version, 
                             result["new_layout"], result["new_blocks"], 
-                            record, result.get("page_settings_update") or page_settings_update
+                            record, persisted_page_settings
                         )
                     except _store.CopilotStoreError as e:
                         raise _cop.CopilotError(str(e), e.status_code)
@@ -2504,11 +2745,16 @@ def copilot_edit_document(document_id: str):
                 idempotency_key=idempotency_key,
                 assistant_message=result["assistant_message"],
             )
+            persisted_page_settings = _effective_page_settings(
+                result, page_settings_update, doc.get("page_settings")
+            )
+            record["page_settings_before"] = dict(doc.get("page_settings") or {})
+            record["page_settings_after"] = persisted_page_settings
             try:
                 _store.update_document(
                     document_id, request.uid, base_version, 
                     result["new_layout"], result["new_blocks"], 
-                    record, result.get("page_settings_update") or page_settings_update
+                    record, persisted_page_settings
                 )
             except _store.CopilotStoreError as e:
                 raise _cop.CopilotError(str(e), e.status_code)
@@ -2564,7 +2810,8 @@ def copilot_undo(document_id: str):
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_inv):
             new_layout, new_blocks, _ = _copilot_reflow_state(
-                doc, new_layout, new_blocks, new_version
+                doc, new_layout, new_blocks, new_version,
+                _stored_page_target(record.get("page_settings_before")),
             )
         else:
             new_layout["version"] = new_version
@@ -2577,7 +2824,8 @@ def copilot_undo(document_id: str):
         try:
             _store.undo_document(
                 document_id, request.uid, doc["version"], 
-                new_layout, new_blocks, redo_record
+                new_layout, new_blocks, redo_record,
+                page_settings=record.get("page_settings_before"),
             )
             doc["history"] = doc["history"][:-1]
         except _store.CopilotStoreError as e:
@@ -2626,7 +2874,8 @@ def copilot_redo(document_id: str):
         new_version = doc["version"] + 1
         if _cop.operations_require_reflow(clean_ops):
             new_layout, new_blocks, _ = _copilot_reflow_state(
-                doc, new_layout, new_blocks, new_version
+                doc, new_layout, new_blocks, new_version,
+                _stored_page_target(record.get("page_settings_after")),
             )
         else:
             new_layout["version"] = new_version
@@ -2636,7 +2885,8 @@ def copilot_redo(document_id: str):
         try:
             _store.redo_document(
                 document_id, request.uid, doc["version"], 
-                new_layout, new_blocks, hist_record
+                new_layout, new_blocks, hist_record,
+                page_settings=record.get("page_settings_after"),
             )
             doc["redo_stack"] = doc["redo_stack"][:-1]
         except _store.CopilotStoreError as e:

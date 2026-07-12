@@ -95,15 +95,49 @@ def normalize_text(value: Any, *, maximum: int = MAX_DOCUMENT_CHARS) -> str:
 
 
 _PAGE_COUNT_RE = re.compile(
-    r"\b(?P<count>\d{1,2}|tek|bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|dokuz|on)"
-    r"\s*(?:a4\s*)?(?:sayfa(?:ya|yı|yi|lık|lik|da|dan)?|pages?)\b",
+    r"\b(?P<count>\d{1,2}|tek|bir|iki|üç|uc|dört|dort|beş|bes|altı|alti|yedi|sekiz|dokuz|on|"
+    r"one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"[-\s]*(?:a4[-\s]*)?(?:sayfa(?:ya|yı|yi|lık|lik|da|dan)?|pages?)\b",
     re.IGNORECASE,
 )
 _PAGE_COUNT_WORDS = {
     "tek": 1, "bir": 1, "iki": 2, "üç": 3, "uc": 3, "dört": 4, "dort": 4,
     "beş": 5, "bes": 5, "altı": 6, "alti": 6, "yedi": 7, "sekiz": 8,
-    "dokuz": 9, "on": 10,
+    "dokuz": 9, "on": 10, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
+_PAGE_TARGET_MANUAL_RE = re.compile(r"\[\s*page-target\s*:\s*manual\s*\]", re.IGNORECASE)
+
+
+def page_target_intent(*values: Any) -> tuple[int | None, bool]:
+    """Return the latest explicit page target and whether it was deliberately cleared.
+
+    The frontend adds an ASCII marker only when the user selects the manual
+    measurement route in a clarification. Keeping this separate from natural
+    language avoids mistaking an older "1 sayfa" phrase for an active target.
+    """
+    requested: int | None = None
+    manually_cleared = False
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        text = unicodedata.normalize("NFKC", value).casefold()
+        events: list[tuple[int, str, Any]] = [
+            (match.start(), "manual", None)
+            for match in _PAGE_TARGET_MANUAL_RE.finditer(text)
+        ]
+        events.extend((match.start(), "count", match) for match in _PAGE_COUNT_RE.finditer(text))
+        for _, kind, match in sorted(events, key=lambda item: item[0]):
+            if kind == "manual":
+                requested = None
+                manually_cleared = True
+                continue
+            token = match.group("count")
+            count = int(token) if token.isdigit() else _PAGE_COUNT_WORDS.get(token)
+            if count is not None and 1 <= count <= MAX_PAGES:
+                requested = count
+                manually_cleared = False
+    return requested, manually_cleared
 
 
 def requested_page_count(*values: Any) -> int | None:
@@ -113,16 +147,11 @@ def requested_page_count(*values: Any) -> int | None:
     so using the final match also lets a later "2 sayfaya çıkar" answer override
     an earlier "1 sayfa" request without trusting the language model to infer it.
     """
-    requested: int | None = None
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        for match in _PAGE_COUNT_RE.finditer(unicodedata.normalize("NFKC", value).casefold()):
-            token = match.group("count")
-            count = int(token) if token.isdigit() else _PAGE_COUNT_WORDS.get(token)
-            if count is not None and 1 <= count <= MAX_PAGES:
-                requested = count
-    return requested
+    return page_target_intent(*values)[0]
+
+
+def page_target_is_manual(*values: Any) -> bool:
+    return page_target_intent(*values)[1]
 
 
 def allowed_models() -> tuple[str, ...]:
@@ -189,11 +218,17 @@ def normalize_page_settings(raw: Any) -> dict[str, Any]:
     settings = raw if isinstance(raw, dict) else {}
 
     def legacy_mm(mm_key: str, px_key: str, default_mm: float) -> float:
-        if mm_key in settings:
-            return float(settings[mm_key])
-        if px_key in settings:
-            return float(settings[px_key]) / PX_PER_MM
-        return default_mm
+        value = settings.get(mm_key)
+        divisor = 1.0
+        if mm_key not in settings and px_key in settings:
+            value = settings.get(px_key)
+            divisor = PX_PER_MM
+        if value is None:
+            return default_mm
+        try:
+            return float(value) / divisor
+        except (TypeError, ValueError):
+            return default_mm
 
     margin_left_mm = _clamp(legacy_mm("margin_left_mm", "margin_left", 15.0), 8, 40, 15)
     margin_right_mm = _clamp(legacy_mm("margin_right_mm", "margin_right", 15.0), 8, 40, 15)
@@ -1194,7 +1229,7 @@ def create_ai_layout(
     # Override page settings if AI decided to change them based on instructions
     effective_settings = dict(page_settings) if isinstance(page_settings, dict) else {}
     override = parsed.get("page_settings_override")
-    explicit_page_target = requested_page_count(topic, instructions)
+    explicit_page_target, manual_page_target = page_target_intent(topic, instructions)
     ai_page_target = None
     if isinstance(override, dict):
         try:
@@ -1203,7 +1238,7 @@ def create_ai_layout(
                 ai_page_target = proposed_target
         except (TypeError, ValueError):
             pass
-    target_page_count = explicit_page_target or ai_page_target
+    target_page_count = None if manual_page_target else (explicit_page_target or ai_page_target)
     allowed_override_keys = {
         "ink_color", "paper_type", "horizontal_align", "vertical_align",
         "line_spacing_mm", "margin_top_mm", "margin_left_mm", "margin_right_mm",
@@ -1287,6 +1322,7 @@ def create_ai_layout(
         "crease_effect": normalized_settings["crease_effect"],
         "scale_jitter": normalized_settings["scale_jitter"],
         "multi_author": normalized_settings["multi_author"] and bool(secondary_harfler),
+        "target_page_count": target_page_count,
         **normalized_settings["units"],
     }
     

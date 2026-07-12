@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 MAX_INSTRUCTION_CHARS = 1_000
 MAX_OPERATIONS_PER_REQUEST = 12
 MAX_UNDO_STACK = 50
+MAX_BLOCKS = 120
 COPILOT_MODEL_ENV = "COPILOT_GEMINI_MODEL"
 DEFAULT_COPILOT_MODEL = "gemini-3.5-flash"
 
@@ -49,7 +50,9 @@ ALLOWED_OPERATIONS = frozenset({
     "remove_text_effect",
     "reflow_scope",
     "update_document_settings",
+    "restore_block_page_breaks",
 })
+INTERNAL_OPERATIONS = frozenset({"restore_block_page_breaks"})
 
 # Her operasyon için izin verilen patch alanları
 ALLOWED_BLOCK_STYLE_FIELDS = frozenset({
@@ -328,6 +331,8 @@ def validate_and_sanitize_operations(
         name = op.get("operation", "")
         if name not in ALLOWED_OPERATIONS:
             raise CopilotError(f"Bilinmeyen operasyon: '{name}'")
+        if name in INTERNAL_OPERATIONS and not trusted_internal:
+            raise CopilotError("Bu dahili operasyon istemciden uygulanamaz.", 403)
 
         target_id = op.get("target_id")
 
@@ -387,6 +392,25 @@ def validate_and_sanitize_operations(
             clean_op["target_page_id"] = str(op.get("target_page_id", ""))
 
         # remove_block / insert_block
+        if name == "restore_block_page_breaks":
+            entries = op.get("page_breaks")
+            if not isinstance(entries, list) or len(entries) > MAX_BLOCKS:
+                raise CopilotError("Sayfa kırımı geri yükleme verisi geçersiz.")
+            seen_ids: set[str] = set()
+            clean_entries = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                block_id = str(entry.get("id") or "").strip()
+                if not DOCUMENT_ID_RE.fullmatch(block_id) or block_id in seen_ids:
+                    continue
+                seen_ids.add(block_id)
+                clean_entries.append({
+                    "id": block_id,
+                    "page_break_before": _sanitize_bool(entry.get("page_break_before")),
+                })
+            clean_op["page_breaks"] = clean_entries
+
         if name == "insert_block":
             btype = str(op.get("block_type", "paragraph")).lower()
             if btype not in {"title", "heading", "paragraph", "list_item", "quote"}:
@@ -438,7 +462,7 @@ def apply_operations(
             inverses.append({
                 "operation": "update_block_style",
                 "target_id": target_id,
-                "patch": {k: v for k, v in old_style.items() if v is not None},
+                "patch": old_style,
             })
 
         elif name == "replace_block_text" or name == "rewrite_block":
@@ -463,7 +487,7 @@ def apply_operations(
             inverses.append({
                 "operation": "update_line_style",
                 "target_id": target_id,
-                "patch": {k: v for k, v in old_vals.items() if v is not None},
+                "patch": old_vals,
             })
 
         elif name == "update_page_settings":
@@ -474,11 +498,11 @@ def apply_operations(
                     patch = op.get("patch", {})
                     old_vals = {k: p.get(k) for k in patch}
                     _apply_dict_patch(p, patch)
-                inverses.append({
-                    "operation": "update_page_settings",
-                    "target_id": target_id,
-                    "patch": {k: v for k, v in old_vals.items() if v is not None},
-                })
+                    inverses.append({
+                        "operation": "update_page_settings",
+                        "target_id": p.get("id", ""),
+                        "patch": old_vals,
+                    })
             else:
                 patch = op.get("patch", {})
                 old_vals = {k: page.get(k) for k in patch}
@@ -486,7 +510,7 @@ def apply_operations(
                 inverses.append({
                     "operation": "update_page_settings",
                     "target_id": target_id,
-                    "patch": {k: v for k, v in old_vals.items() if v is not None},
+                    "patch": old_vals,
                 })
 
         elif name == "move_line":
@@ -550,8 +574,21 @@ def apply_operations(
             _apply_dict_patch(new_layout["settings"], patch)
             inverses.append({
                 "operation": "update_document_settings",
-                "patch": {k: v for k, v in old_settings.items() if v is not None},
+                "patch": old_settings,
             })
+
+        elif name == "restore_block_page_breaks":
+            old_breaks = []
+            for entry in op.get("page_breaks", []):
+                block = _get_block_by_id(new_blocks, entry.get("id"))
+                if block is None:
+                    continue
+                old_breaks.append({
+                    "id": block["id"],
+                    "page_break_before": bool(block.get("page_break_before", False)),
+                })
+                block["page_break_before"] = bool(entry.get("page_break_before", False))
+            inverses.append({"operation": "restore_block_page_breaks", "page_breaks": old_breaks})
 
         elif name == "remove_block":
             idx = _find_block_index(new_blocks, target_id)
@@ -886,7 +923,7 @@ def _copilot_response_schema() -> dict:
                 "items": {
                     "type": "OBJECT",
                     "properties": {
-                        "operation": {"type": "STRING", "enum": sorted(ALLOWED_OPERATIONS)},
+                        "operation": {"type": "STRING", "enum": sorted(ALLOWED_OPERATIONS - INTERNAL_OPERATIONS)},
                         "target_id": {"type": "STRING"},
                         "new_text": {"type": "STRING"},
                         "text": {"type": "STRING"},
@@ -1135,7 +1172,7 @@ def operations_require_reflow(operations: list[dict]) -> bool:
     content_operations = {
         "replace_block_text", "rewrite_block", "insert_block", "remove_block",
         "add_margin_note", "remove_text_effect", "apply_text_effect",
-        "update_document_settings", "reflow_scope",
+        "update_document_settings", "reflow_scope", "restore_block_page_breaks",
     }
     for operation in operations:
         name = operation.get("operation")

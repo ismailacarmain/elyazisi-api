@@ -216,6 +216,7 @@ def _update_document_txn(
     *,
     is_undo: bool = False,
     is_redo: bool = False,
+    clear_history: bool = False,
     redo_record: Optional[dict] = None,
 ) -> int:
     # Firestore requires all reads to finish before transaction writes. Read the
@@ -266,7 +267,12 @@ def _update_document_txn(
         else:
             transaction.delete(ref)
 
-    if is_undo:
+    if clear_history:
+        for snapshot in history_snapshots:
+            transaction.delete(snapshot.reference)
+        for snapshot in redo_snapshots:
+            transaction.delete(snapshot.reference)
+    elif is_undo:
         if not history_snapshots or not redo_record:
             raise CopilotStoreError("Geri alınacak işlem yok.", 400)
         transaction.delete(history_snapshots[-1].reference)
@@ -327,8 +333,9 @@ def undo_document(
     new_layout: dict,
     new_blocks: list,
     redo_record: dict,
+    page_settings: Optional[dict] = None,
 ) -> int:
-    _validate_state(new_layout, new_blocks)
+    _validate_state(new_layout, new_blocks, page_settings)
     _ensure_small(redo_record, "Geri alma geçmişi", MAX_SUBDOCUMENT_BYTES)
     return _update_document_txn(
         _db().transaction(),
@@ -337,6 +344,7 @@ def undo_document(
         expected_version,
         new_layout,
         new_blocks,
+        page_settings=page_settings,
         is_undo=True,
         redo_record=redo_record,
     )
@@ -349,8 +357,9 @@ def redo_document(
     new_layout: dict,
     new_blocks: list,
     history_record: dict,
+    page_settings: Optional[dict] = None,
 ) -> int:
-    _validate_state(new_layout, new_blocks)
+    _validate_state(new_layout, new_blocks, page_settings)
     _ensure_small(history_record, "İleri alma geçmişi", MAX_SUBDOCUMENT_BYTES)
     return _update_document_txn(
         _db().transaction(),
@@ -360,5 +369,33 @@ def redo_document(
         new_layout,
         new_blocks,
         record=history_record,
+        page_settings=page_settings,
         is_redo=True,
+    )
+
+
+def save_manual_state(
+    document_id: str,
+    user_id: str,
+    expected_version: int,
+    new_layout: dict,
+    new_blocks: list,
+    page_settings: dict,
+) -> int:
+    """Persist direct inspector edits as a new canonical base state.
+
+    Manual coordinates cannot be represented safely as a small semantic Copilot
+    operation. Clearing the old operation stacks avoids applying stale undo/redo
+    patches over user-authored geometry.
+    """
+    _validate_state(new_layout, new_blocks, page_settings)
+    return _update_document_txn(
+        _db().transaction(),
+        _document_ref(document_id),
+        user_id,
+        expected_version,
+        new_layout,
+        new_blocks,
+        page_settings=page_settings,
+        clear_history=True,
     )

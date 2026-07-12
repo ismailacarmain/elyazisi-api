@@ -180,6 +180,7 @@ class AiDocumentTests(unittest.TestCase):
 
     def test_last_explicit_page_count_wins_after_clarification(self):
         self.assertEqual(1, ai_document.requested_page_count("Tek A4 sayfa olsun"))
+        self.assertEqual(1, ai_document.requested_page_count("Make this a one-page handout"))
         self.assertEqual(
             2,
             ai_document.requested_page_count(
@@ -187,6 +188,26 @@ class AiDocumentTests(unittest.TestCase):
             ),
         )
         self.assertIsNone(ai_document.requested_page_count("Kısa ve düzenli bir ödev hazırla"))
+
+    def test_manual_page_target_marker_overrides_an_older_request(self):
+        instructions = "1 sayfa olsun\n[Soru: Ölçüler?\nCevabım: Ölçüleri kendim ayarlayacağım]\n[page-target:manual]"
+        self.assertIsNone(ai_document.requested_page_count(instructions))
+        self.assertTrue(ai_document.page_target_is_manual(instructions))
+        self.assertEqual(
+            2,
+            ai_document.requested_page_count(f"{instructions}\n2 sayfaya çıkar"),
+        )
+        self.assertFalse(ai_document.page_target_is_manual(f"{instructions}\n2 sayfaya çıkar"))
+
+    def test_invalid_numeric_page_settings_fall_back_safely(self):
+        settings = ai_document.normalize_page_settings({
+            "letter_height_mm": "not-a-number",
+            "margin_left_mm": [],
+            "line_spacing": object(),
+        })
+        self.assertEqual(11.5, settings["units"]["letter_height_mm"])
+        self.assertEqual(15.0, settings["units"]["margin_left_mm"])
+        self.assertEqual(18.2, settings["units"]["line_spacing_mm"])
 
     def test_page_fit_solver_uses_largest_readable_real_metric_layout(self):
         blocks = [{"type": "paragraph", "text": "abc " * 400, "page_break_before": False}]

@@ -130,7 +130,7 @@ class TestCopilotStore(unittest.TestCase):
 
     def test_update_and_undo_redo_survive_a_fresh_load(self):
         doc_id = copilot_store.create_document(
-            user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1,
+            user_id="user1", font_id="fontA", secondary_font_id="", page_settings={"letter_height_mm": 11}, version=1,
             layout={"pages": [{"id": "p1"}]}, blocks=[{"id": "b1", "text": "before"}]
         )
         record = {
@@ -140,33 +140,56 @@ class TestCopilotStore(unittest.TestCase):
         }
         copilot_store.update_document(
             doc_id, "user1", 1, {"version": 2, "pages": [{"id": "p2"}]},
-            [{"id": "b1", "text": "after"}], record
+            [{"id": "b1", "text": "after"}], record, {"letter_height_mm": 8, "target_page_count": 1}
         )
         reloaded = copilot_store.get_document(doc_id, "user1")
         self.assertEqual(2, reloaded["version"])
         self.assertEqual("after", reloaded["blocks"][0]["text"])
         self.assertEqual("p2", reloaded["layout"]["pages"][0]["id"])
         self.assertEqual(1, len(reloaded["history"]))
+        self.assertEqual(1, reloaded["page_settings"]["target_page_count"])
 
         copilot_store.undo_document(
             doc_id, "user1", 2, {"version": 3, "pages": [{"id": "p3"}]},
-            [{"id": "b1", "text": "before"}], record
+            [{"id": "b1", "text": "before"}], record, {"letter_height_mm": 11}
         )
         after_undo = copilot_store.get_document(doc_id, "user1")
         self.assertEqual(3, after_undo["version"])
         self.assertEqual("before", after_undo["blocks"][0]["text"])
         self.assertEqual([], after_undo["history"])
         self.assertEqual(1, len(after_undo["redo_stack"]))
+        self.assertNotIn("target_page_count", after_undo["page_settings"])
 
         copilot_store.redo_document(
             doc_id, "user1", 3, {"version": 4, "pages": [{"id": "p4"}]},
-            [{"id": "b1", "text": "after"}], record
+            [{"id": "b1", "text": "after"}], record, {"letter_height_mm": 8, "target_page_count": 1}
         )
         after_redo = copilot_store.get_document(doc_id, "user1")
         self.assertEqual(4, after_redo["version"])
         self.assertEqual("after", after_redo["blocks"][0]["text"])
         self.assertEqual(1, len(after_redo["history"]))
         self.assertEqual([], after_redo["redo_stack"])
+        self.assertEqual(1, after_redo["page_settings"]["target_page_count"])
+
+    def test_manual_state_save_clears_stale_history(self):
+        doc_id = copilot_store.create_document(
+            user_id="user1", font_id="fontA", secondary_font_id="", page_settings={}, version=1,
+            layout={"pages": [{"id": "p1"}]}, blocks=[{"id": "b1", "text": "before"}]
+        )
+        copilot_store.update_document(
+            doc_id, "user1", 1, {"version": 2, "pages": [{"id": "p2"}]},
+            [{"id": "b1", "text": "after"}], {"instruction": "AI edit"}, {"letter_height_mm": 10}
+        )
+        copilot_store.save_manual_state(
+            doc_id, "user1", 2, {"version": 3, "pages": [{"id": "p3"}]},
+            [{"id": "b1", "text": "manual"}], {"letter_height_mm": 12}
+        )
+        loaded = copilot_store.get_document(doc_id, "user1")
+        self.assertEqual(3, loaded["version"])
+        self.assertEqual("manual", loaded["blocks"][0]["text"])
+        self.assertEqual([], loaded["history"])
+        self.assertEqual([], loaded["redo_stack"])
+        self.assertEqual(12, loaded["page_settings"]["letter_height_mm"])
 
     def test_oversized_child_document_is_rejected(self):
         with self.assertRaises(CopilotStoreError) as ctx:

@@ -110,6 +110,53 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual("OK", parsed["status"])
         gemini.assert_not_called()
 
+    def test_non_transient_gemini_error_does_not_send_prompt_to_fallback(self):
+        invalid_key = RuntimeError("invalid API key AIza" + "x" * 32)
+        invalid_key.status_code = 401
+        with patch("ai_provider.requests.post") as post:
+            with self.assertRaises(ai_provider.AiProviderError) as ctx:
+                ai_provider.call_structured_with_fallback(
+                    config={
+                        "gemini_key": "AIza" + "x" * 32,
+                        "groq_key": "gsk_" + "y" * 32,
+                    },
+                    gemini_call=lambda _key: (_ for _ in ()).throw(invalid_key),
+                    messages=self.messages,
+                    schema=self.schema,
+                    schema_name="test_schema",
+                    max_tokens=128,
+                )
+        self.assertEqual(401, ctx.exception.status_code)
+        self.assertNotIn("AIza", str(ctx.exception))
+        post.assert_not_called()
+
+    def test_explicit_order_does_not_append_unlisted_providers(self):
+        quota = RuntimeError("quota")
+        quota.status_code = 429
+        with patch("ai_provider.requests.post") as post:
+            with self.assertRaises(ai_provider.AiProviderError) as ctx:
+                ai_provider.call_structured_with_fallback(
+                    config={
+                        "provider_order": "gemini",
+                        "gemini_key": "AIza" + "x" * 32,
+                        "groq_key": "gsk_" + "y" * 32,
+                    },
+                    gemini_call=lambda _key: (_ for _ in ()).throw(quota),
+                    messages=self.messages,
+                    schema=self.schema,
+                    schema_name="test_schema",
+                    max_tokens=128,
+                )
+        self.assertEqual(429, ctx.exception.status_code)
+        post.assert_not_called()
+
+    def test_bounded_content_preserves_tail_constraints(self):
+        content = "opening" + ("x" * 70_000) + "FINAL CONSTRAINT"
+        bounded = ai_provider._bounded_content(content)
+        self.assertLessEqual(len(bounded), 60_000)
+        self.assertTrue(bounded.startswith("opening"))
+        self.assertTrue(bounded.endswith("FINAL CONSTRAINT"))
+
     def test_missing_provider_configuration_is_actionable(self):
         with self.assertRaises(ai_provider.AiProviderError) as ctx:
             ai_provider.call_structured_with_fallback(
