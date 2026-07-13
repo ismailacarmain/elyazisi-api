@@ -23,6 +23,10 @@ def fake_font():
 
 
 class AiDocumentTests(unittest.TestCase):
+    def test_single_page_phrase_is_an_exact_one_page_target(self):
+        self.assertEqual(1, ai_document.requested_page_count("Fit this on a single page"))
+        self.assertEqual(1, ai_document.requested_page_count("Bunu tek sayfaya sığdır"))
+
     def test_current_gemini_models_are_allowed(self):
         self.assertEqual("gemini-3.5-flash", ai_document.DEFAULT_GEMINI_MODEL)
         self.assertIn("gemini-3.1-flash-lite", ai_document.allowed_models())
@@ -72,6 +76,43 @@ class AiDocumentTests(unittest.TestCase):
                 self.assertGreaterEqual(line["start_x"], page["margin_left"])
                 self.assertLessEqual(line["baseline_y"], bottom)
                 self.assertLessEqual(line["start_x"] + line["estimated_width"], right + 1)
+
+    def test_page_scale_jitter_reserves_wrap_width(self):
+        layout = ai_document.build_layout([{
+            "id": "jittered",
+            "type": "paragraph",
+            "text": "abc " * 80,
+        }], fake_font(), {
+            "margin_left_mm": 20,
+            "margin_right_mm": 20,
+            "letter_height_mm": 11,
+            "scale_jitter": 35,
+        })
+        page = layout["pages"][0]
+        content_width = ai_document.PAGE_WIDTH_PX - page["margin_left"] - page["margin_right"]
+        safe_width = int(content_width / 1.35)
+        self.assertTrue(page["lines"])
+        self.assertTrue(all(line["estimated_width"] <= safe_width for line in page["lines"]))
+
+    def test_markdown_style_survives_wrapping_without_marker_leak(self):
+        visible = ("abc " * 40).strip()
+        layout = ai_document.build_layout([{
+            "id": "marked",
+            "type": "paragraph",
+            "text": f"=={visible}==",
+        }], fake_font(), {
+            "margin_left_mm": 60,
+            "margin_right_mm": 60,
+            "letter_height_mm": 14,
+            "line_spacing_mm": 17,
+        })
+        lines = [line["text"] for page in layout["pages"] for line in page["lines"]]
+        self.assertGreater(len(lines), 1)
+        styled = [list(ai_document.core_generator._styled_words(line)) for line in lines]
+        self.assertTrue(all(style == "highlight" for line in styled for _, style in line))
+        self.assertTrue(all("=" not in word for line in styled for word, _ in line))
+        restored = " ".join(word for line in styled for word, _ in line)
+        self.assertEqual(visible, restored)
 
     def test_manual_blocks_and_layout_validation(self):
         blocks = ai_document.manual_blocks("İlk paragraf.\n\n- Bir\n- İki", "Başlık")
@@ -165,8 +206,56 @@ class AiDocumentTests(unittest.TestCase):
         notes = [line for line in page["lines"] if line.get("is_margin_note")]
         self.assertEqual(2, len(flow))
         self.assertTrue(notes)
-        self.assertGreaterEqual(notes[0]["start_x"], ai_document.PAGE_WIDTH_PX - page["margin_right"] - 150)
-        self.assertEqual(ai_document.PAGE_WIDTH_PX - 24, notes[0]["max_x"])
+        flow_right_edge = ai_document.PAGE_WIDTH_PX - page["margin_right"]
+        self.assertGreaterEqual(
+            notes[0]["start_x"],
+            flow_right_edge + ai_document.MARGIN_NOTE_FLOW_GAP_PX,
+        )
+        self.assertTrue(all(
+            line["start_x"] + line["estimated_width"] <= flow_right_edge
+            for line in flow
+        ))
+        self.assertEqual(
+            ai_document.PAGE_WIDTH_PX - ai_document.MARGIN_NOTE_EDGE_PADDING_PX,
+            notes[0]["max_x"],
+        )
+
+    def test_margin_note_rejects_unsafe_lane_without_truncating(self):
+        note = [{
+            "id": "note",
+            "type": "paragraph",
+            "text": "abc abc abc abc",
+            "is_margin_note": True,
+        }]
+        with self.assertRaisesRegex(ai_document.AiDocumentError, "sağ kenar boşluğu yetersiz"):
+            ai_document.build_layout(note, fake_font(), {"margin_right_mm": 5})
+
+        with self.assertRaisesRegex(ai_document.AiDocumentError, "en fazla 3 satır"):
+            ai_document.build_layout(note, fake_font(), {})
+
+    def test_exact_page_fit_reserves_safe_margin_note_lane(self):
+        result = ai_document.fit_layout_to_page_target([
+            {"id": "body", "type": "paragraph", "text": "abc " * 20},
+            {
+                "id": "note",
+                "type": "paragraph",
+                "text": "abc",
+                "is_margin_note": True,
+                "target_page_id": "page-1",
+            },
+        ], fake_font(), {"margin_right_mm": 5}, 1)
+        self.assertTrue(result["success"])
+        page = result["layout"]["pages"][0]
+        note = next(line for line in page["lines"] if line.get("is_margin_note"))
+        flow_right_edge = ai_document.PAGE_WIDTH_PX - page["margin_right"]
+        self.assertGreaterEqual(
+            note["start_x"],
+            flow_right_edge + ai_document.MARGIN_NOTE_FLOW_GAP_PX,
+        )
+        self.assertGreaterEqual(
+            result["report"]["settings_after"]["margin_right_mm"],
+            round(ai_document.MIN_MARGIN_NOTE_RIGHT_MM, 2),
+        )
 
     def test_margin_note_is_relocated_to_requested_page(self):
         blocks = [

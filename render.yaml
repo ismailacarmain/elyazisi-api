@@ -23,11 +23,15 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
       - key: GROQ_MODEL
         value: openai/gpt-oss-120b
       - key: OPENROUTER_MODEL
         value: openrouter/free
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
       - key: AI_DOCUMENT_PROVIDER_ORDER
-        value: gemini,groq,openrouter
+        value: gemini,groq,openai,openrouter
       - key: COPILOT_PROVIDER_ORDER
-        value: groq,gemini,openrouter
+        value: groq,gemini,openai,openrouter

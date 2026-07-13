@@ -502,6 +502,136 @@ class TestCopilotOperations(unittest.TestCase):
         )
         self.assertEqual(len(clean), 1)
 
+    def test_every_secondary_slot_path_requires_a_second_font(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        operations = [
+            {"operation": "switch_line_author", "target_id": "line-1",
+             "patch": {"font_slot": "secondary"}},
+            {"operation": "update_line_style", "target_id": "line-1",
+             "patch": {"font_slot": "secondary"}},
+            {"operation": "update_block_style", "target_id": "block-1",
+             "patch": {"author_slot": "secondary"}},
+        ]
+        for operation in operations:
+            with self.subTest(operation=operation["operation"]):
+                with self.assertRaises(cop.CopilotError):
+                    cop.validate_and_sanitize_operations(
+                        [operation], layout, blocks, secondary_font_available=False
+                    )
+
+    def test_malformed_operation_name_and_patch_are_controlled_errors(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        malformed = [
+            {"operation": [], "patch": {}},
+            {"operation": {}, "patch": {}},
+            {"operation": "apply_text_effect", "target_id": "block-1", "patch": -1},
+            {"operation": "switch_line_author", "target_id": "line-1", "patch": ["secondary"]},
+        ]
+        for operation in malformed:
+            with self.subTest(operation=operation):
+                with self.assertRaises(cop.CopilotError):
+                    cop.validate_and_sanitize_operations(
+                        [operation], layout, blocks, secondary_font_available=True
+                    )
+
+    def test_numeric_stable_id_wins_when_removing_a_block(self):
+        blocks = [
+            {"id": "zero", "type": "paragraph", "text": "A"},
+            {"id": "middle", "type": "paragraph", "text": "B"},
+            {"id": "1", "type": "paragraph", "text": "C"},
+        ]
+        layout = {"settings": {}, "pages": [{"id": "page-1", "lines": []}]}
+        clean = cop.validate_and_sanitize_operations(
+            [{"operation": "remove_block", "target_id": "1"}], layout, blocks
+        )
+        _, updated_blocks, _ = cop.apply_operations(clean, layout, blocks)
+        self.assertEqual(["zero", "middle"], [block["id"] for block in updated_blocks])
+
+    def test_effective_primary_author_operations_are_semantic_noops(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        provider_results = [
+            {"operation": "switch_block_author", "target_id": "block-1",
+             "patch": {"author_slot": "primary"}},
+            {"operation": "update_block_style", "target_id": "block-1",
+             "patch": {"author_slot": "primary"}},
+            {"operation": "switch_line_author", "target_id": "line-1",
+             "patch": {"font_slot": "primary"}},
+            {"operation": "update_line_style", "target_id": "line-1",
+             "patch": {"font_slot": "primary"}},
+        ]
+        for operation in provider_results:
+            raw = {
+                "needs_clarification": False,
+                "assistant_message": "Yazar güncellendi.",
+                "operations": [operation],
+            }
+            with self.subTest(operation=operation["operation"]):
+                with self.assertRaises(cop.CopilotError):
+                    cop._validate_copilot_provider_result(
+                        raw, layout, blocks, secondary_font_available=True
+                    )
+
+    def test_noop_author_patch_does_not_poison_a_mixed_undo_record(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        clean = cop.validate_and_sanitize_operations([
+            {"operation": "update_block_style", "target_id": "block-1",
+             "patch": {"author_slot": "primary"}},
+            {"operation": "update_document_settings", "patch": {"line_slope": 8}},
+        ], layout, blocks, secondary_font_available=True)
+        changed_layout, changed_blocks, inverse = cop.apply_operations(clean, layout, blocks)
+        self.assertEqual(1, len(inverse))
+        clean_inverse = cop.validate_and_sanitize_operations(
+            inverse, changed_layout, changed_blocks,
+            secondary_font_available=True, trusted_internal=True,
+        )
+        restored_layout, restored_blocks, _ = cop.apply_operations(
+            clean_inverse, changed_layout, changed_blocks
+        )
+        self.assertEqual(layout, restored_layout)
+        self.assertEqual(blocks, restored_blocks)
+
+    def test_author_switch_inverse_restores_missing_default_slot(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        layout, blocks = cop.ensure_document_ids(layout, blocks)
+        original_layout = copy.deepcopy(layout)
+        original_blocks = copy.deepcopy(blocks)
+        clean = cop.validate_and_sanitize_operations(
+            [{"operation": "switch_block_author", "target_id": "block-1",
+              "patch": {"author_slot": "secondary"}}],
+            layout, blocks, secondary_font_available=True,
+        )
+        changed_layout, changed_blocks, inverse = cop.apply_operations(clean, layout, blocks)
+        clean_inverse = cop.validate_and_sanitize_operations(
+            inverse, changed_layout, changed_blocks,
+            secondary_font_available=True, trusted_internal=True,
+        )
+        restored_layout, restored_blocks, _ = cop.apply_operations(
+            clean_inverse, changed_layout, changed_blocks
+        )
+        self.assertEqual(original_layout, restored_layout)
+        self.assertEqual(original_blocks, restored_blocks)
+
+    def test_snapshot_selection_is_bounded_to_safe_type_and_id(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        snapshot = cop.build_document_snapshot(
+            layout,
+            blocks,
+            {"type": "line", "id": "line-1", "payload": "X" * 100_000,
+             "nested": {"secret": "not-for-provider"}},
+        )
+        self.assertEqual({"type": "line", "id": "line-1"}, snapshot["selection"])
+        self.assertNotIn("payload", json.dumps(snapshot))
+        invalid = cop.build_document_snapshot(
+            layout, blocks, {"type": "line", "id": "x" * 10_000}
+        )
+        self.assertEqual({}, invalid["selection"])
+
     # 17. Layout validation başarısız → state kaydedilmez (apply raises)
     def test_apply_fake_line_id_raises(self):
         blocks = _make_blocks()
@@ -841,6 +971,26 @@ class TestCopilotOperations(unittest.TestCase):
 
 
 class CopilotProviderTests(unittest.TestCase):
+    def test_provider_result_validator_enforces_selected_block_in_english(self):
+        blocks = _make_blocks()
+        layout = _make_layout(blocks)
+        with self.assertRaisesRegex(cop.CopilotError, "outside the selected item"):
+            cop._validate_copilot_provider_result(
+                {
+                    "needs_clarification": False,
+                    "operations": [{
+                        "operation": "replace_block_text",
+                        "target_id": "block-2",
+                        "new_text": "Out of scope",
+                    }],
+                },
+                layout,
+                blocks,
+                secondary_font_available=False,
+                selection={"type": "block", "id": "block-1"},
+                ui_language="en",
+            )
+
     @patch("ai_copilot.ai_provider.call_structured_with_fallback")
     def test_empty_provider_edit_is_rejected_instead_of_claiming_success(self, mock_provider):
         mock_provider.return_value = ({
@@ -919,6 +1069,27 @@ class CopilotProviderTests(unittest.TestCase):
         )
         self.assertTrue(result["reflow_needed"])
         self.assertEqual(19, result["new_layout"]["version"])
+
+    @patch("ai_copilot.ai_provider.call_structured_with_fallback")
+    def test_single_page_request_is_recognized_as_exact_reflow(self, mock_provider):
+        mock_provider.return_value = ({
+            "needs_clarification": False,
+            "assistant_message": "Fitting to a single page.",
+            "operations": [{"operation": "reflow_scope"}],
+            "reflow_scope": "document",
+        }, "groq", "openai/gpt-oss-120b")
+        blocks = _make_blocks()
+        result = cop.process_copilot_edit(
+            api_key="",
+            model="gemini-3.5-flash",
+            instruction="Fit this on a single page",
+            layout=_make_layout(blocks),
+            blocks=blocks,
+            current_version=18,
+            provider_config={"groq_key": "gsk_" + "x" * 32},
+            ui_language="en",
+        )
+        self.assertTrue(result["reflow_needed"])
 
     @patch("ai_copilot.ai_provider.call_structured_with_fallback")
     def test_copilot_accepts_groq_fallback_result(self, mock_provider):

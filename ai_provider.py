@@ -1,7 +1,8 @@
 """Provider-neutral structured JSON inference with safe failover.
 
-Gemini remains the primary provider. Groq and OpenRouter are optional server-side
-fallbacks so a Gemini quota or transient outage does not stop Fontify.
+Gemini remains the primary provider. Groq, OpenAI and OpenRouter are optional
+server-side fallbacks so a Gemini quota or transient outage does not stop
+Fontify.
 """
 
 from __future__ import annotations
@@ -14,8 +15,9 @@ import requests
 
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
-DEFAULT_PROVIDER_ORDER = ("gemini", "groq", "openrouter")
+DEFAULT_PROVIDER_ORDER = ("gemini", "groq", "openai", "openrouter")
 TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 _SECRET_PATTERNS = (
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
@@ -39,7 +41,7 @@ def _clean_key(value: Any) -> str:
 def configured_providers(config: dict[str, Any] | None) -> list[str]:
     values = config or {}
     return [
-        name for name in ("gemini", "groq", "openrouter")
+        name for name in DEFAULT_PROVIDER_ORDER
         if _clean_key(values.get(f"{name}_key"))
     ]
 
@@ -195,6 +197,23 @@ def _call_openai_compatible(
             "reasoning_format": "hidden",
             "response_format": response_format,
         }
+    elif provider == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        payload = {
+            "model": model or DEFAULT_OPENAI_MODEL,
+            "messages": clean_messages,
+            # Current reasoning-capable OpenAI models use the completion-token
+            # parameter and may reject sampling controls such as temperature.
+            "max_completion_tokens": min(max_tokens, 8_000),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": False,
+                    "schema": normalized_schema,
+                },
+            },
+        }
     else:
         url = "https://openrouter.ai/api/v1/chat/completions"
         selected_model = model or DEFAULT_OPENROUTER_MODEL
@@ -203,17 +222,20 @@ def _call_openai_compatible(
             "messages": clean_messages,
             "temperature": 0.35,
             "max_tokens": max_tokens,
-            "response_format": (
-                {"type": "json_object"}
-                if selected_model == "openrouter/free"
-                else {
-                    "type": "json_schema",
-                    "json_schema": {"name": schema_name, "strict": False, "schema": normalized_schema},
-                }
-            ),
+            # The free router can filter its changing model pool by requested
+            # capabilities. Asking for the real schema here is materially more
+            # reliable than JSON-object mode, which only guarantees parseable
+            # JSON and can silently omit required Fontify operations.
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": False,
+                    "schema": normalized_schema,
+                },
+            },
+            "provider": {"require_parameters": True},
         }
-        if selected_model != "openrouter/free":
-            payload["provider"] = {"require_parameters": True}
 
     try:
         response = requests.post(
@@ -269,7 +291,11 @@ def call_structured_with_fallback(
                     raise normalized from exc
                 attempts.append(("gemini", normalized.status_code))
             continue
-        default_model = DEFAULT_GROQ_MODEL if provider == "groq" else DEFAULT_OPENROUTER_MODEL
+        default_model = {
+            "groq": DEFAULT_GROQ_MODEL,
+            "openai": DEFAULT_OPENAI_MODEL,
+            "openrouter": DEFAULT_OPENROUTER_MODEL,
+        }[provider]
         model = str(config.get(f"{provider}_model") or default_model).strip()
         try:
             parsed = _call_openai_compatible(
@@ -290,7 +316,8 @@ def call_structured_with_fallback(
 
     if not attempts:
         raise AiProviderError(
-            "AI sağlayıcısı yapılandırılmamış. Render'a GEMINI_API_KEY, GROQ_API_KEY veya OPENROUTER_API_KEY ekleyin.",
+            "AI sağlayıcısı yapılandırılmamış. Render'a GEMINI_API_KEY, GROQ_API_KEY, "
+            "OPENAI_API_KEY veya OPENROUTER_API_KEY ekleyin.",
             503,
         )
     providers = ", ".join(name for name, _ in attempts)

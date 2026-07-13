@@ -109,6 +109,7 @@ def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95
     random_source = rng or random
     harf_resmi = random_source.choice(harfler[anahtar]).copy().convert("RGBA")
     arr = np.array(harf_resmi, dtype=np.uint8)
+    original_alpha = arr[:, :, 3].copy()
     ink_mask = (
         (arr[:, :, 0] < 200)
         & (arr[:, :, 1] < 200)
@@ -116,11 +117,11 @@ def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95
         & (arr[:, :, 3] > 0)
     )
     opacity = max(0.0, min(1.0, float(opacity)))
+    noise_rng = np.random.default_rng(random_source.randint(0, 2_000_000_000))
+    noise = noise_rng.integers(-5, 6, size=arr[:, :, :3].shape, dtype=np.int16)
+    base = np.asarray(murekkep_rengi, dtype=np.int16).reshape((1, 1, 3))
+    coloured = np.clip(base + noise, 0, 255).astype(np.uint8)
     if np.any(ink_mask):
-        noise_rng = np.random.default_rng(random_source.randint(0, 2_000_000_000))
-        noise = noise_rng.integers(-5, 6, size=arr[:, :, :3].shape, dtype=np.int16)
-        base = np.asarray(murekkep_rengi, dtype=np.int16).reshape((1, 1, 3))
-        coloured = np.clip(base + noise, 0, 255).astype(np.uint8)
         arr[:, :, :3][ink_mask] = coloured[ink_mask]
         alpha = arr[:, :, 3].astype(np.float32)
         alpha[ink_mask] *= opacity
@@ -135,6 +136,13 @@ def harf_resmini_al(harfler, karakter, murekkep_rengi=(27, 27, 29), opacity=0.95
         else:
             alpha = _cv2.erode(alpha, kern, iterations=abs(kalinlik))
         arr[:, :, 3] = alpha
+        # Dilation makes formerly transparent edge pixels visible. Their RGB
+        # payload is often white in exported glyph PNGs; leaving it untouched
+        # creates a pale halo around a thick pen stroke. Colour every newly
+        # revealed pixel with the same deterministic ink noise as the glyph.
+        newly_visible = (alpha > 0) & (original_alpha == 0)
+        if np.any(newly_visible):
+            arr[:, :, :3][newly_visible] = coloured[newly_visible]
 
     return Image.fromarray(arr)
 
@@ -573,17 +581,14 @@ def metni_koordinatli_yaz(layout, harfler, font_sets=None):
             slope  = (line_rng.random() - 0.5) * (slope_f * 0.0005)
             loff   = (line_rng.random() - 0.5) * (slope_f * 1.5)
 
-            x = start_x
             max_x = int(line_data.get('max_x', PAGE_W - mr))
             max_x = max(start_x + 1, min(PAGE_W, max_x))
 
             words = list(_styled_words(text))
+            natural_x = 0
+            word_runs = []
             for wi, (kelime, word_style) in enumerate(words):
-                is_highlight = word_style == "highlight"
-                is_underline = word_style == "underline"
-                is_strikethrough = word_style == "strikethrough"
-
-                word_start_x = x
+                word_start_x = natural_x
                 rendered_glyphs = []
 
                 for harf in kelime:
@@ -598,29 +603,50 @@ def metni_koordinatli_yaz(layout, harfler, font_sets=None):
                     # Hafif açı gürültüsü
                     angle = line_rng.uniform(-0.2 * jitt, 0.2 * jitt)
                     rot   = sized.rotate(angle, resample=Image.BICUBIC, expand=True)
-                    gw, gh = rot.size
-
-                    # Taşma koruma — max_x'i geçme
-                    if x + gw > max_x:
-                        break
-
-                    # EXACT Y hesabı:
-                    slope_dy = (x - start_x) * slope
+                    gw, _ = rot.size
                     rand_dy  = line_rng.uniform(-jitt, jitt) * 0.4
-                    final_y  = int(baseline_y - lscale + slope_dy + loff + rand_dy + off_y)
+                    rendered_glyphs.append((rot, natural_x, rand_dy))
+                    natural_x += gw + lspc + line_rng.randint(0, 3)
 
-                    rendered_glyphs.append((rot, x, final_y))
-                    x += gw + lspc + line_rng.randint(0, 3)
+                word_runs.append((word_style, word_start_x, natural_x, rendered_glyphs))
+                if wi < len(words) - 1:
+                    natural_x += wspc
 
-                word_end_x = x
-                draw = ImageDraw.Draw(sayfa, "RGBA")
+            # Raster variation, line-level spacing edits and rotation can make
+            # the real glyph run slightly wider than the metric estimate used
+            # during wrapping.  Compress only the horizontal geometry when
+            # necessary; never discard the tail of a word.
+            available_width = max(1, max_x - start_x)
+            natural_width = max(1, natural_x)
+            horizontal_scale = min(1.0, available_width / natural_width)
+            draw = ImageDraw.Draw(sayfa, "RGBA")
+
+            for word_style, natural_start, natural_end, rendered_glyphs in word_runs:
+                is_highlight = word_style == "highlight"
+                is_underline = word_style == "underline"
+                is_strikethrough = word_style == "strikethrough"
+                word_start_x = start_x + int(round(natural_start * horizontal_scale))
+                word_end_x = start_x + int(round(natural_end * horizontal_scale))
+
                 if is_highlight and word_end_x > word_start_x:
                     draw.rectangle(
                         [word_start_x - 3, baseline_y - int(lscale * 0.9), word_end_x + 3, baseline_y + int(lscale * 0.15)],
                         fill=(255, 224, 64, 72),
                     )
 
-                for glyph, glyph_x, glyph_y in rendered_glyphs:
+                for glyph, glyph_natural_x, rand_dy in rendered_glyphs:
+                    glyph_x = min(
+                        max_x - 1,
+                        start_x + int(round(glyph_natural_x * horizontal_scale)),
+                    )
+                    if horizontal_scale < 1.0:
+                        scaled_width = max(1, int(round(glyph.width * horizontal_scale)))
+                        scaled_width = max(1, min(scaled_width, max_x - glyph_x))
+                        if scaled_width != glyph.width:
+                            glyph = glyph.resize((scaled_width, glyph.height), Image.Resampling.LANCZOS)
+                    slope_dy = (glyph_x - start_x) * slope
+                    glyph_y = int(baseline_y - lscale + slope_dy + loff + rand_dy + off_y)
+                    glyph_y = max(0, min(PAGE_H - glyph.height, glyph_y))
                     sayfa.paste(glyph, (glyph_x, glyph_y), glyph)
 
                 if is_underline or is_strikethrough:
@@ -634,9 +660,6 @@ def metni_koordinatli_yaz(layout, harfler, font_sets=None):
                         draw.line([(curr_x, curr_y), (next_x, next_y)], fill=color, width=max(2, int(line_kalinlik) + 2))
                         curr_x = next_x
                         curr_y = next_y
-
-                if wi < len(words) - 1:
-                    x += wspc
 
         yield sayfa
 

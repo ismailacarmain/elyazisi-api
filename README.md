@@ -1,62 +1,48 @@
-# El Yazısı API
+# Fontify El Yazısı API
 
-El yazısı formlarını işleyen ve harfleri çıkaran API servisi.
+Font yükleme, el yazısı karakterlerini çıkarma, yapay zekâ ile belge planlama,
+Copilot düzenleme ve PDF üretme servisidir. Render üzerinde Docker servisi olarak
+çalışır; kimlik doğrulama ve kalıcı Copilot belgeleri Firebase ile yönetilir.
 
-## Endpoint'ler
+## Temel endpoint'ler
 
-### GET /
-API bilgisi
+- `GET /health`: servis ve bağımlılık durumu
+- `POST /process`: iki form görselinden karakterleri çıkarıp font oluşturma
+- `POST /api/ai/plan`: yapay zekâ destekli belge planı hazırlama
+- `POST /api/ai_layout_pdf`: yerleşim planından PDF üretme
+- `/api/ai/documents/*`: kalıcı Copilot belge, düzenleme ve geçmiş işlemleri
 
-### GET /health
-Sunucu durumu kontrolü
+Korunan endpoint'lerde `Authorization: Bearer <Firebase ID token>` başlığı
+zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul edilmez.
 
-### POST /process
-İki sayfa JPG gönder, harfleri çıkar ve Firebase'e kaydet.
+## Render yapılandırması
 
-**Body:**
-```json
-{
-    "user_id": "firebase_user_id",
-    "font_name": "El Yazım 1",
-    "image1": "base64_encoded_jpg",
-    "image2": "base64_encoded_jpg"
-}
-```
+Önemli ortam değişkenleri:
 
-**Response:**
-```json
-{
-    "success": true,
-    "font_id": "uuid",
-    "font_name": "El Yazım 1",
-    "harf_sayisi": 219,
-    "message": "219 harf başarıyla işlendi!"
-}
-```
-
-## Kurulum (Render)
-
-1. GitHub'a push et
-2. Render'da yeni Web Service oluştur
-3. Environment variables ekle:
-   - FIREBASE_PROJECT_ID
-   - FIREBASE_PRIVATE_KEY_ID
-   - FIREBASE_PRIVATE_KEY
-   - FIREBASE_CLIENT_EMAIL
-   - FIREBASE_CLIENT_ID
-
-## AI sağlayıcı yedekleme
-
-Fontify AI Studio tek bir sağlayıcıya bağlı değildir. Render environment
-variables üzerinden aşağıdaki anahtarlar yapılandırılabilir:
-
-- `GEMINI_API_KEY`: Ana belge planlama sağlayıcısı.
-- `GROQ_API_KEY`: Ücretsiz kotası yüksek, structured JSON destekli Copilot sağlayıcısı.
-- `OPENROUTER_API_KEY`: Son yedek sağlayıcı; varsayılan model `openrouter/free`.
-- `GROQ_MODEL`: Varsayılan `openai/gpt-oss-120b`.
-- `OPENROUTER_MODEL`: Varsayılan `openrouter/free`.
-- `AI_DOCUMENT_PROVIDER_ORDER`: Varsayılan `gemini,groq,openrouter`.
-- `COPILOT_PROVIDER_ORDER`: Varsayılan `groq,gemini,openrouter`.
+- `FIREBASE_CREDENTIALS`: Firebase Admin SDK servis hesabı JSON'u
+- `FRONTEND_ORIGINS`: izin verilen Cloudflare alan adları
+- `DEFAULT_USER_CREDITS`: yeni kullanıcı başlangıç kredisi
+- `GEMINI_API_KEY`: Gemini API anahtarı
+- `GROQ_API_KEY`: Groq API anahtarı
+- `OPENAI_API_KEY`: OpenAI Platform API anahtarı
+- `OPENROUTER_API_KEY`: OpenRouter API anahtarı
+- `GROQ_MODEL`: varsayılan `openai/gpt-oss-120b`
+- `OPENAI_MODEL`: varsayılan `gpt-5.6-luna`
+- `OPENROUTER_MODEL`: varsayılan `openrouter/free`
+- `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `gemini,groq,openai,openrouter`
+- `COPILOT_PROVIDER_ORDER`: varsayılan `groq,gemini,openai,openrouter`
 
 Anahtarlar kaynak koda veya frontend'e yazılmaz. Sağlayıcılar sırayla denenir;
-kota, bağlantı veya servis hatasında bir sonraki sağlayıcıya geçilir.
+kota, bağlantı veya servis hatasında yapılandırılmış sonraki sağlayıcıya geçilir.
+ChatGPT aboneliği OpenAI API kredisi sağlamaz; `OPENAI_API_KEY`, OpenAI Platform
+üzerinden ayrıca oluşturulmalıdır.
+
+## Yerel doğrulama
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Firebase güvenlik kuralları ayrı olarak `firebase_tmp` dizinindeki emülatör testleri
+ile doğrulanır. Canlıya almadan önce Render secret'larını ve Cloudflare origin
+değerlerini panelden kontrol edin.

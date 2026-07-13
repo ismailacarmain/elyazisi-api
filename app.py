@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_file, redirect
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory, redirect
 from flask_cors import CORS
 import cv2
 import numpy as np
@@ -40,14 +40,15 @@ from glyph_normalizer import (
 import ai_document
 import ai_provider
 
-# Logging setup
+# Render already persists stdout/stderr. File logging is opt-in so every worker
+# does not create an ever-growing app.log on ephemeral storage.
+_log_handlers = [logging.StreamHandler()]
+if os.environ.get("FONTIFY_LOG_FILE", "").strip():
+    _log_handlers.append(logging.FileHandler(os.environ["FONTIFY_LOG_FILE"].strip()))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,7 @@ def readiness():
     providers = ai_provider.configured_providers({
         "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
         "groq_key": os.environ.get("GROQ_API_KEY", ""),
+        "openai_key": os.environ.get("OPENAI_API_KEY", ""),
         "openrouter_key": os.environ.get("OPENROUTER_API_KEY", ""),
     })
     ready = firebase_ready and project_ready
@@ -183,19 +185,30 @@ def readiness():
 @app.route('/forms/<path:filename>')
 @app.route('/pdfler/<path:filename>')
 def serve_forms(filename):
+    if not filename or '/' in filename or '\\' in filename or filename in {'.', '..'}:
+        return jsonify({'success': False, 'message': 'Form bulunamadı.'}), 404
     # _ORNEK veya ORNEK taleplerini _DOLU olarak yönlendir (frontend uyumu için)
     if "ORNEK" in filename:
         # Eğer dosya adında 1x, 3x gibi ibareler varsa onları koru
         for v in ["1", "2", "3", "5", "10"]:
             if f"{v}x" in filename:
-                return send_file(os.path.join('static/forms', f"form_{v}x_DOLU.pdf"))
+                return send_from_directory(
+                    os.path.join(app.root_path, 'static', 'forms'),
+                    f"form_{v}x_DOLU.pdf",
+                )
     
     # Normal servis
     try:
-        return send_file(os.path.join('static/forms', filename))
-    except:
+        return send_from_directory(
+            os.path.join(app.root_path, 'static', 'forms'), filename
+        )
+    except HTTPException as exc:
+        if exc.code != 404:
+            raise
         # Fallback: Eğer dosya bulunamazsa ama bir varyasyon isteniyorsa varsayılanı ver
-        return send_file(os.path.join('static/forms', 'form_3x_BOS.pdf'))
+        return send_from_directory(
+            os.path.join(app.root_path, 'static', 'forms'), 'form_3x_BOS.pdf'
+        )
 
 # --- FIREBASE BAĞLANTISI ---
 db = None
@@ -319,7 +332,18 @@ def handle_exception(e):
 def before_request():
     """HTTPS zorunluluğu (production)"""
     if not request.is_secure and not request.headers.get('X-Forwarded-Proto') == 'https':
-        if not app.debug and not request.host.startswith('localhost'):
+        raw_host = request.host.strip().lower()
+        host_name = (
+            raw_host[1:].partition(']')[0]
+            if raw_host.startswith('[')
+            else raw_host.partition(':')[0]
+        )
+        remote_address = str(request.remote_addr or '').strip().lower()
+        is_loopback = (
+            host_name in {'localhost', '127.0.0.1', '::1'}
+            and remote_address in {'127.0.0.1', '::1'}
+        )
+        if not app.debug and not is_loopback:
             from flask import redirect
             return redirect(request.url.replace('http://', 'https://'), code=301)
 
@@ -1176,7 +1200,11 @@ def _finalize_digital_upload(database, owner_id, font_id):
         user_ref = database.collection('users').document(owner_id)
         user_snapshot = user_ref.get(transaction=txn)
         user_data = user_snapshot.to_dict() if user_snapshot.exists else {}
-        current_credits = user_data.get('credits', 1000)
+        try:
+            default_credits = max(0, int(os.environ.get('DEFAULT_USER_CREDITS', '10')))
+        except (TypeError, ValueError):
+            default_credits = 10
+        current_credits = user_data.get('credits', default_credits)
         if not isinstance(current_credits, (int, float)) or current_credits <= 0:
             raise DigitalUploadAPIError('Yetersiz kredi.', 402)
         remaining_credits = current_credits - 1
@@ -1527,10 +1555,18 @@ def get_assets():
 def download():
     try:
         font_id, metin = request.form.get('font_id'), request.form.get('metin', '')
+        if request.content_length and request.content_length > 12 * 1024 * 1024:
+            return jsonify({'success': False, 'message': 'İstek gövdesi çok büyük.'}), 413
+        if not isinstance(metin, str) or len(metin) > ai_document.MAX_DOCUMENT_CHARS:
+            return jsonify({
+                'success': False,
+                'message': f'Metin en fazla {ai_document.MAX_DOCUMENT_CHARS:,} karakter olabilir.',
+            }), 413
         active_harfler = {}
         database = init_firebase()
         if database and font_id:
-            font_snapshot = database.collection('fonts').document(font_id).get()
+            font_ref = database.collection('fonts').document(font_id)
+            font_snapshot = font_ref.get()
             if not font_snapshot.exists:
                 return jsonify({'success': False, 'message': 'Font bulunamadı.'}), 404
             font_data = font_snapshot.to_dict() or {}
@@ -1542,65 +1578,40 @@ def download():
                     return jsonify({'success': False, 'message': 'Özel font için güvenli oturum gerekli.'}), 401
                 if requester != font_data.get('owner_id'):
                     return jsonify({'success': False, 'message': 'Bu özel fonta erişim yetkiniz yok.'}), 403
-            # get_assets mantığıyla aynısını yap (Hibrit)
-            char_docs = database.collection('fonts').document(font_id).collection('chars').stream()
-            has_sub = False
-            for doc in char_docs:
-                has_sub = True
-                key, b64 = doc.id, doc.to_dict().get('data')
-                try:
-                    img = core_generator.Image.open(io.BytesIO(_raw_character_bytes(b64))).convert("RGBA")
-                    parts = key.rsplit('_', 1)
-                    if len(parts) == 2 and parts[1].isdigit():
-                        base_key = parts[0]
-                    else:
-                        base_key = key
-                        
-                    if base_key not in active_harfler: active_harfler[base_key] = []
-                    active_harfler[base_key].append(img)
-                except: continue
-            
-            if not has_sub:
-                doc = database.collection('fonts').document(font_id).get()
-                if doc.exists:
-                    raw = doc.to_dict().get('harfler', {})
-                    for key, val in raw.items():
-                        try:
-                            # Eski sistemde val base64 veya url olabilir
-                            if val.startswith('http'):
-                                if not is_safe_url(val):
-                                    logger.warning(f"Unsafe URL blocked: {val}")
-                                    continue
-                                try:
-                                    resp = requests.get(val, timeout=5)
-                                    resp.raise_for_status()
-                                    img = core_generator.Image.open(io.BytesIO(resp.content)).convert("RGBA")
-                                except Exception as e:
-                                    logger.error(f"URL fetch error: {e}")
-                                    continue
-                            else:
-                                b64 = val.split(",")[1] if "," in val else val
-                                img = core_generator.Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGBA")
-                            parts = key.rsplit('_', 1)
-                            if len(parts) == 2 and parts[1].isdigit():
-                                base_key = parts[0]
-                            else:
-                                base_key = key
-                            if base_key not in active_harfler: active_harfler[base_key] = []
-                            active_harfler[base_key].append(img)
-                        except: continue
+            # Reuse the same bounded, SSRF-safe and decompression-safe loader as
+            # the AI/PDF endpoints instead of maintaining an unsafe legacy copy.
+            active_harfler = _load_font_images(font_ref)
         
         # Renk ayari
         raw_color = request.form.get('murekkep_rengi', 'tukenmez')
         if raw_color == 'tukenmez': ink_rgb = (27, 27, 29)
         elif raw_color == 'bic_mavi': ink_rgb = (15, 82, 186)
         elif raw_color == 'kirmizi': ink_rgb = (220, 20, 60)
-        elif raw_color.startswith('#'):
-            raw_color = raw_color.lstrip('#')
-            ink_rgb = tuple(int(raw_color[i:i+2], 16) for i in (0, 2, 4))
+        elif re.fullmatch(r'#[0-9a-fA-F]{6}', raw_color):
+            hex_color = raw_color.lstrip('#')
+            ink_rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
         else: ink_rgb = (27, 27, 29)
 
-        config = {'page_width': 2480, 'page_height': 3508, 'margin_top': 200, 'margin_left': 150, 'margin_right': 150, 'target_letter_height': int(request.form.get('yazi_boyutu', 140)), 'line_spacing': int(request.form.get('satir_araligi', 220)), 'word_spacing': int(request.form.get('kelime_boslugu', 55)), 'murekkep_rengi': ink_rgb, 'opacity': 0.95, 'jitter': int(request.form.get('jitter', 3)), 'paper_type': request.form.get('paper_type', 'cizgili'), 'line_slope': 5}
+        def bounded_form_int(name, default, minimum, maximum):
+            try:
+                value = int(request.form.get(name, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(minimum, min(maximum, value))
+
+        paper_type = request.form.get('paper_type', 'cizgili')
+        if paper_type not in {'cizgili', 'kareli', 'duz'}:
+            paper_type = 'cizgili'
+        config = {
+            'page_width': 2480, 'page_height': 3508,
+            'margin_top': 200, 'margin_left': 150, 'margin_right': 150,
+            'target_letter_height': bounded_form_int('yazi_boyutu', 140, 35, 500),
+            'line_spacing': bounded_form_int('satir_araligi', 220, 45, 650),
+            'word_spacing': bounded_form_int('kelime_boslugu', 55, 0, 300),
+            'murekkep_rengi': ink_rgb, 'opacity': 0.95,
+            'jitter': bounded_form_int('jitter', 3, 0, 30),
+            'paper_type': paper_type, 'line_slope': 5,
+        }
         sayfalar = list(core_generator.metni_sayfaya_yaz(metin, active_harfler, config))
         
         # Overlay Ekle (Serbest Çizim)
@@ -1608,7 +1619,20 @@ def download():
         if overlay_b64 and sayfalar:
             try:
                 overlay_data = overlay_b64.split(",")[1] if "," in overlay_b64 else overlay_b64
-                overlay_img = core_generator.Image.open(io.BytesIO(base64.b64decode(overlay_data))).convert("RGBA")
+                if len(overlay_data) > 10_000_000:
+                    raise ValueError('Çizim katmanı çok büyük.')
+                overlay_bytes = base64.b64decode(overlay_data, validate=True)
+                if len(overlay_bytes) > 8 * 1024 * 1024:
+                    raise ValueError('Çizim katmanı çok büyük.')
+                with core_generator.Image.open(io.BytesIO(overlay_bytes)) as source_overlay:
+                    if (
+                        source_overlay.width > 5000
+                        or source_overlay.height > 5000
+                        or source_overlay.width * source_overlay.height > 20_000_000
+                    ):
+                        raise ValueError('Çizim katmanı boyut sınırını aşıyor.')
+                    source_overlay.load()
+                    overlay_img = source_overlay.convert("RGBA")
                 # overlay_img boyutunu sayfa boyutuyla aynı yap
                 if overlay_img.size != sayfalar[0].size:
                     overlay_img = overlay_img.resize(sayfalar[0].size, core_generator.Image.Resampling.LANCZOS)
@@ -1669,6 +1693,17 @@ def _gemini_api_key():
     )
 
 
+def _request_ui_language(data=None):
+    """Use explicit JSON preference first, then the standard HTTP language."""
+    explicit = data.get('ui_language') if isinstance(data, dict) else None
+    if str(explicit or '').strip().lower().startswith('en'):
+        return 'en'
+    if explicit is not None:
+        return 'tr'
+    accepted = str(request.headers.get('Accept-Language') or '').lower()
+    return 'en' if accepted.startswith('en') else 'tr'
+
+
 def _ai_provider_config(provider_order=None):
     """Collect optional BYOK/server credentials without exposing them."""
     return {
@@ -1682,6 +1717,10 @@ def _ai_provider_config(provider_order=None):
             or os.environ.get("GROQ_API_KEY", "")
         ).strip(),
         "groq_model": os.environ.get("GROQ_MODEL", ai_provider.DEFAULT_GROQ_MODEL).strip(),
+        "openai_key": os.environ.get("OPENAI_API_KEY", "").strip(),
+        "openai_model": os.environ.get(
+            "OPENAI_MODEL", ai_provider.DEFAULT_OPENAI_MODEL
+        ).strip(),
         "openrouter_key": (
             request.headers.get("X-OpenRouter-Api-Key")
             or os.environ.get("OPENROUTER_API_KEY", "")
@@ -1691,7 +1730,7 @@ def _ai_provider_config(provider_order=None):
         ).strip(),
         "provider_order": str(
             provider_order
-            or os.environ.get("AI_PROVIDER_ORDER", "gemini,groq,openrouter")
+            or os.environ.get("AI_PROVIDER_ORDER", "gemini,groq,openai,openrouter")
         ).strip(),
     }
 
@@ -1718,9 +1757,13 @@ def _load_glyph_value(raw):
     if len(raw_bytes) > 2 * 1024 * 1024:
         raise ValueError('Karakter görseli çok büyük.')
     with PILImage.open(io.BytesIO(raw_bytes)) as image:
-        image.load()
-        if image.width > 2048 or image.height > 2048:
+        if (
+            image.width > 2048
+            or image.height > 2048
+            or image.width * image.height > 4_194_304
+        ):
             raise ValueError('Karakter görseli boyut sınırını aşıyor.')
+        image.load()
         return image.convert('RGBA')
 
 
@@ -1798,6 +1841,7 @@ def ai_status():
     server_config = {
         "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
         "groq_key": os.environ.get("GROQ_API_KEY", ""),
+        "openai_key": os.environ.get("OPENAI_API_KEY", ""),
         "openrouter_key": os.environ.get("OPENROUTER_API_KEY", ""),
     }
     providers = ai_provider.configured_providers(server_config)
@@ -1805,12 +1849,12 @@ def ai_status():
         'success': True,
         'server_key_configured': bool(providers),
         'configured_providers': providers,
-        'provider_order': os.environ.get('AI_PROVIDER_ORDER', 'gemini,groq,openrouter'),
+        'provider_order': os.environ.get('AI_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'),
         'document_provider_order': os.environ.get(
-            'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openrouter'
+            'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'
         ),
         'copilot_provider_order': os.environ.get(
-            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openrouter'
+            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openai,openrouter'
         ),
         'default_model': ai_document.DEFAULT_GEMINI_MODEL,
         'allowed_models': list(ai_document.allowed_models()),
@@ -1851,28 +1895,156 @@ def ai_document_plan():
         secondary_harfler, secondary_font_data = _load_secondary_font(data, request.uid, data.get('font_id'))
         requested_settings = dict(data.get('page_settings') or {}) if isinstance(data.get('page_settings'), dict) else {}
         requested_settings['multi_author'] = bool(requested_settings.get('multi_author') and secondary_harfler)
+        ui_language = _request_ui_language(data)
         source = str(data.get('source', 'ai'))
         if source == 'manual':
-            blocks = ai_document.manual_blocks(
-                ai_document.normalize_text(data.get('text_content', '')),
-                ai_document.normalize_text(data.get('title', ''), maximum=180),
-            )
-            layout = ai_document.build_layout(blocks, harfler, requested_settings, secondary_harfler)
-            result = {
-                'layout': layout,
-                'blocks': blocks,
-                'full_text': '\n'.join(block['text'] for block in blocks),
-                'summary': 'Metin gerçek font ölçüleriyle mizanpajlandı.',
-                'font_profile': ai_document.font_profile(
-                    harfler,
-                    font_data.get('repetition', 1),
-                    layout['settings']['letter_scale'],
-                ),
-                'model': None,
-            }
+            if isinstance(data.get('blocks'), list):
+                try:
+                    blocks = _sanitize_client_copilot_blocks(data['blocks'])
+                except _cop.CopilotError as exc:
+                    raise ai_document.AiDocumentError(str(exc), exc.status_code) from exc
+            else:
+                blocks = ai_document.manual_blocks(
+                    ai_document.normalize_text(data.get('text_content', '')),
+                    ai_document.normalize_text(data.get('title', ''), maximum=180),
+                )
+
+            target_page_count = None
+            try:
+                proposed_target = int(requested_settings.get('target_page_count'))
+                if 1 <= proposed_target <= ai_document.MAX_PAGES:
+                    target_page_count = proposed_target
+            except (TypeError, ValueError):
+                pass
+
+            fit_report = None
+            if target_page_count:
+                fit_result = ai_document.fit_layout_to_page_target(
+                    blocks, harfler, requested_settings, target_page_count, secondary_harfler
+                )
+                fit_report = fit_result['report']
+                if not fit_result['success']:
+                    actual_pages = fit_report.get('actual_pages')
+                    if fit_report.get('constraint') == 'underflow':
+                        if ui_language == 'en':
+                            question = (
+                                f"Even with the most spacious readable layout, the edited text fills {actual_pages or 1} page(s). "
+                                f"How should I spread it naturally across {target_page_count} pages?"
+                            )
+                            options = [
+                                'Expand the text with examples and details (recommended)',
+                                'Use larger letters and a more spacious layout',
+                                f'Keep it at {actual_pages or 1} page(s)',
+                                'I will adjust the measurements myself',
+                            ]
+                        else:
+                            question = (
+                                f"Düzenlediğin metin en ferah okunabilir ölçülerde {actual_pages or 1} sayfa oluyor. "
+                                f"{target_page_count} sayfaya doğal biçimde yaymak için nasıl ilerleyelim?"
+                            )
+                            options = [
+                                'Metni örnekler ve ayrıntılarla genişlet (önerilen)',
+                                'Harfleri büyüt ve daha ferah bir düzen kullan',
+                                f'{actual_pages or 1} sayfada bırak',
+                                'Ölçüleri kendim ayarlayacağım',
+                            ]
+                    else:
+                        if ui_language == 'en':
+                            minimum_text = str(actual_pages) if actual_pages else f"more than {ai_document.MAX_PAGES}"
+                            question = (
+                                f"At the smallest readable size, the edited text needs {minimum_text} page(s). "
+                                f"How should I proceed with the {target_page_count}-page target?"
+                            )
+                            options = [
+                                'Shorten the text intelligently while preserving key information (recommended)',
+                                'Remove the title and repetitions',
+                                f'Increase the target to {actual_pages or min(ai_document.MAX_PAGES, target_page_count + 1)} pages',
+                                'I will adjust the measurements myself',
+                            ]
+                        else:
+                            minimum_text = str(actual_pages) if actual_pages else f"{ai_document.MAX_PAGES}'den fazla"
+                            question = (
+                                f"Düzenlediğin metin okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
+                                f"{target_page_count} sayfa hedefi için nasıl ilerleyelim?"
+                            )
+                            options = [
+                                'Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)',
+                                'Başlığı ve tekrarları kaldır',
+                                f'{actual_pages or min(ai_document.MAX_PAGES, target_page_count + 1)} sayfaya çıkar',
+                                'Ölçüleri kendim ayarlayacağım',
+                            ]
+                    result = {
+                        'needs_clarification': True,
+                        'clarification_question': question,
+                        'clarification_options': options,
+                        'fit_report': fit_report,
+                        'model': None,
+                    }
+                else:
+                    layout = fit_result['layout']
+                    blocks = fit_result['blocks']
+                    requested_settings = fit_result['settings']
+            else:
+                layout = ai_document.build_layout(blocks, harfler, requested_settings, secondary_harfler)
+
+            if not (target_page_count and fit_report and not fit_report.get('fits')):
+                normalized_settings = ai_document.normalize_page_settings(requested_settings)
+                updated_settings = {
+                    'paper_type': normalized_settings['paper_type'],
+                    'ink_color': normalized_settings['ink_color'],
+                    'horizontal_align': normalized_settings['horizontal_align'],
+                    'vertical_align': normalized_settings['vertical_align'],
+                    'jitter': normalized_settings['jitter'],
+                    'line_slope': normalized_settings['line_slope'],
+                    'opacity': normalized_settings['opacity'],
+                    'kalinlik': normalized_settings['kalinlik'],
+                    'pen_dying_effect': normalized_settings['pen_dying_effect'],
+                    'paper_age': normalized_settings['paper_age'],
+                    'coffee_stains': normalized_settings['coffee_stains'],
+                    'crease_effect': normalized_settings['crease_effect'],
+                    'scale_jitter': normalized_settings['scale_jitter'],
+                    'multi_author': normalized_settings['multi_author'] and bool(secondary_harfler),
+                    'target_page_count': target_page_count,
+                    **normalized_settings['units'],
+                }
+                summary = (
+                    'The text was laid out using real font metrics.'
+                    if ui_language == 'en' else
+                    'Metin gerçek font ölçüleriyle mizanpajlandı.'
+                )
+                if fit_report:
+                    units = fit_report['settings_after']
+                    summary = (
+                        (
+                            f"The text was fitted to {fit_report['actual_pages']} page(s): "
+                            f"letter height {units['letter_height_mm']:.2f} mm, "
+                            f"line spacing {units['line_spacing_mm']:.2f} mm."
+                        )
+                        if ui_language == 'en' else
+                        (
+                            f"Metin {fit_report['actual_pages']} sayfaya sığdırıldı: "
+                            f"harf {units['letter_height_mm']:.2f} mm, "
+                            f"satır {units['line_spacing_mm']:.2f} mm."
+                        )
+                    )
+                result = {
+                    'needs_clarification': False,
+                    'layout': layout,
+                    'blocks': blocks,
+                    'full_text': '\n\n'.join(block['text'] for block in blocks),
+                    'summary': summary,
+                    'font_profile': ai_document.font_profile(
+                        harfler,
+                        font_data.get('repetition', 1),
+                        layout['settings']['letter_scale'],
+                    ),
+                    'model': None,
+                    'updated_settings': updated_settings,
+                    'fit_report': fit_report,
+                }
         elif source == 'ai':
             provider_config = _ai_provider_config(os.environ.get(
-                'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openrouter'
+                'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'
             ))
             result = ai_document.create_ai_layout(
                 api_key=provider_config.get('gemini_key'),
@@ -1886,6 +2058,7 @@ def ai_document_plan():
                 secondary_harfler=secondary_harfler,
                 secondary_repetition=(secondary_font_data or {}).get('repetition', 1),
                 provider_config=provider_config,
+                output_language=ui_language,
             )
         else:
             raise ai_document.AiDocumentError("source yalnızca 'ai' veya 'manual' olabilir.")
@@ -2148,6 +2321,9 @@ def _sanitize_client_copilot_blocks(value: Any) -> list[dict]:
         candidate_id = str(raw_block.get("id") or "").strip()
         if _cop.DOCUMENT_ID_RE.fullmatch(candidate_id):
             normalized["id"] = candidate_id
+        target_page_id = str(raw_block.get("target_page_id") or "").strip()
+        if normalized.get("is_margin_note") and _cop.DOCUMENT_ID_RE.fullmatch(target_page_id):
+            normalized["target_page_id"] = target_page_id
         style_patch = _cop._sanitize_patch(
             raw_block,
             _cop.ALLOWED_BLOCK_STYLE_FIELDS,
@@ -2452,6 +2628,21 @@ def _copilot_reflow_state(
         if key in patched_settings:
             raw_settings[key] = patched_settings[key]
 
+    # A document-level Copilot operation updates layout.settings immediately,
+    # while the existing page objects still contain the pre-edit values. Do not
+    # let that stale first-page snapshot overwrite the requested global edit
+    # during the rebuild (this previously made slope/margins/typography appear
+    # to succeed in chat but disappear from the PDF).
+    global_setting_fields = {
+        key
+        for operation in (operations or [])
+        if isinstance(operation, dict)
+        and operation.get("operation") == "update_document_settings"
+        and isinstance(operation.get("patch"), dict)
+        for key in operation["patch"]
+        if key in _cop.ALLOWED_DOC_SETTINGS_FIELDS
+    }
+
     patched_pages = layout.get("pages") if isinstance(layout.get("pages"), list) else []
     if patched_pages:
         first_page = patched_pages[0]
@@ -2462,13 +2653,13 @@ def _copilot_reflow_state(
             ("margin_right", "margin_right_mm"),
             ("line_spacing", "line_spacing_mm"),
         ):
-            if px_key in first_page:
+            if px_key in first_page and mm_key not in global_setting_fields:
                 raw_settings[mm_key] = ai_document.px_to_mm(first_page[px_key])
         for key in (
             "paper_type", "paper_age", "coffee_stains", "crease_effect",
             "pen_dying_effect", "opacity", "kalinlik", "scale_jitter", "multi_author",
         ):
-            if key in first_page:
+            if key in first_page and key not in global_setting_fields:
                 raw_settings[key] = first_page[key]
 
     fit_result = None
@@ -2526,6 +2717,7 @@ def _finalize_copilot_result(
     doc: dict,
     result: dict,
     source_layout: dict | None = None,
+    ui_language: str = "tr",
 ) -> dict:
     """Ensure edited block text is actually rewrapped before state is committed."""
     if result.get("needs_clarification"):
@@ -2566,34 +2758,65 @@ def _finalize_copilot_result(
         if fit_result and not fit_result.get("success"):
             report = fit_result["report"]
             actual_pages = report.get("actual_pages")
+            english = ui_language == "en"
             if report.get("constraint") == "underflow":
-                question = (
-                    f"Bu metin en ferah okunabilir düzende bile {actual_pages or 1} sayfa oluyor. "
-                    f"{target_pages} sayfaya doğal biçimde yaymak için nasıl ilerleyeyim?"
-                )
-                options = [
-                    "Metni örnekler ve ayrıntılarla genişlet (önerilen)",
-                    "Harfleri büyüt ve daha ferah bir düzen kullan",
-                    f"{actual_pages or 1} sayfada bırak",
-                    "Ölçüleri kendim ayarlayacağım",
-                ]
+                if english:
+                    question = (
+                        f"Even with the most spacious readable layout, this text fills "
+                        f"{actual_pages or 1} page(s). How should I spread it naturally "
+                        f"across {target_pages} pages?"
+                    )
+                    options = [
+                        "Expand the text with examples and details (recommended)",
+                        "Use larger letters and a more spacious layout",
+                        f"Keep it at {actual_pages or 1} page(s)",
+                        "I will adjust the measurements myself",
+                    ]
+                else:
+                    question = (
+                        f"Bu metin en ferah okunabilir düzende bile {actual_pages or 1} sayfa oluyor. "
+                        f"{target_pages} sayfaya doğal biçimde yaymak için nasıl ilerleyeyim?"
+                    )
+                    options = [
+                        "Metni örnekler ve ayrıntılarla genişlet (önerilen)",
+                        "Harfleri büyüt ve daha ferah bir düzen kullan",
+                        f"{actual_pages or 1} sayfada bırak",
+                        "Ölçüleri kendim ayarlayacağım",
+                    ]
             else:
-                minimum_text = str(actual_pages) if actual_pages else f"{ai_document.MAX_PAGES}'den fazla"
-                question = (
-                    f"Bu metin okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
-                    f"{target_pages} sayfa hedefi için nasıl ilerleyeyim?"
-                )
-                options = [
-                    "Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)",
-                    "Başlığı ve tekrarları kaldır",
-                    f"{actual_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} sayfaya çıkar",
-                    "Ölçüleri kendim ayarlayacağım",
-                ]
+                if english:
+                    minimum_text = str(actual_pages) if actual_pages else f"more than {ai_document.MAX_PAGES}"
+                    question = (
+                        f"At the smallest readable size, this text needs {minimum_text} page(s). "
+                        f"How should I proceed with the {target_pages}-page target?"
+                    )
+                    options = [
+                        "Shorten the text intelligently while preserving key information (recommended)",
+                        "Remove the title and repetitions",
+                        f"Increase the target to {actual_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} pages",
+                        "I will adjust the measurements myself",
+                    ]
+                else:
+                    minimum_text = str(actual_pages) if actual_pages else f"{ai_document.MAX_PAGES}'den fazla"
+                    question = (
+                        f"Bu metin okunabilir en küçük ölçülerde {minimum_text} sayfa tutuyor. "
+                        f"{target_pages} sayfa hedefi için nasıl ilerleyeyim?"
+                    )
+                    options = [
+                        "Metni ana bilgileri koruyarak akıllıca kısalt (önerilen)",
+                        "Başlığı ve tekrarları kaldır",
+                        f"{actual_pages or min(ai_document.MAX_PAGES, int(target_pages) + 1)} sayfaya çıkar",
+                        "Ölçüleri kendim ayarlayacağım",
+                    ]
             result.update({
                 "needs_clarification": True,
                 "clarification_question": question,
                 "clarification_options": options,
-                "assistant_message": "Hedefi ölçtüm; okunabilirliği bozmadan kararını bekliyorum.",
+                "assistant_message": (
+                    "I measured the target and am waiting for your choice without sacrificing readability."
+                    if english else
+                    "Hedefi ölçtüm; okunabilirliği bozmadan kararını bekliyorum."
+                ),
                 "fit_report": report,
                 "operations": [],
                 "inverse_operations": [],
@@ -2663,9 +2886,17 @@ def _finalize_copilot_result(
             layout.setdefault("settings", {})["target_page_count"] = target_pages
             result["reflow_needed"] = True
             result["assistant_message"] = (
-                f"Belgeyi {report['actual_pages']} sayfaya gerçek font ölçüleriyle sığdırdım: "
-                f"harf {after['letter_height_mm']:.2f} mm, satır {after['line_spacing_mm']:.2f} mm, "
-                f"kelime aralığı {after['word_spacing_mm']:.2f} mm."
+                (
+                    f"I fit the document to {report['actual_pages']} page(s) using real font metrics: "
+                    f"letters {after['letter_height_mm']:.2f} mm, lines {after['line_spacing_mm']:.2f} mm, "
+                    f"word spacing {after['word_spacing_mm']:.2f} mm."
+                )
+                if ui_language == "en" else
+                (
+                    f"Belgeyi {report['actual_pages']} sayfaya gerçek font ölçüleriyle sığdırdım: "
+                    f"harf {after['letter_height_mm']:.2f} mm, satır {after['line_spacing_mm']:.2f} mm, "
+                    f"kelime aralığı {after['word_spacing_mm']:.2f} mm."
+                )
             )
         result["new_layout"] = layout
         result["new_blocks"] = blocks
@@ -2868,6 +3099,7 @@ def copilot_edit_document(document_id: str):
         return '', 204
     try:
         data = request.get_json(silent=True) or {}
+        ui_language = _request_ui_language(data)
         instruction = str(data.get("instruction", "")).strip()
         if len(instruction) > _cop.MAX_INSTRUCTION_CHARS:
             raise _cop.CopilotError(f"Talimat en fazla {_cop.MAX_INSTRUCTION_CHARS} karakter.")
@@ -2940,7 +3172,10 @@ def copilot_edit_document(document_id: str):
                         "success": True,
                         "cached": True,
                         "version": doc["version"],
-                        "assistant_message": h.get("assistant_message") or "Önceki istek zaten uygulandı.",
+                        "assistant_message": h.get("assistant_message") or (
+                            "The previous request has already been applied."
+                            if ui_language == "en" else "Önceki istek zaten uygulandı."
+                        ),
                         "operations": h.get("operations", []),
                         "new_layout": doc["layout"],
                         "new_blocks": doc["blocks"],
@@ -2959,7 +3194,7 @@ def copilot_edit_document(document_id: str):
         configured_model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
         model = ai_document.validate_model(data.get("model") or configured_model)
         provider_config = _ai_provider_config(os.environ.get(
-            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openrouter'
+            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openai,openrouter'
         ))
         req_api_key = provider_config.get("gemini_key", "")
 
@@ -2975,17 +3210,23 @@ def copilot_edit_document(document_id: str):
                 secondary_font_available=secondary_available,
                 current_version=base_version,
                 provider_config=provider_config,
+                ui_language=ui_language,
             )
             requested_target, manual_target = ai_document.page_target_intent(instruction)
             result["target_page_count"] = requested_target
             result["page_target_intent"] = (
                 "manual" if manual_target else "exact" if requested_target else ""
             )
-            return _finalize_copilot_result(doc, result, source_layout=base_layout)
+            return _finalize_copilot_result(
+                doc, result, source_layout=base_layout, ui_language=ui_language
+            )
 
         if use_streaming:
             def generate():
-                yield _sse_event("status", {"message": "İstek yorumlanıyor…"})
+                yield _sse_event("status", {"message": (
+                    "Interpreting your request…"
+                    if ui_language == "en" else "İstek yorumlanıyor…"
+                )})
                 try:
                     result = _run_edit()
                     if result["needs_clarification"]:
@@ -3058,7 +3299,10 @@ def copilot_edit_document(document_id: str):
                     yield _sse_event("error", {"message": str(e), "status": e.status_code})
                 except Exception as e:
                     logger.error("Copilot stream error: %s", type(e).__name__, exc_info=True)
-                    yield _sse_event("error", {"message": "Copilot işlemi tamamlanamadı."})
+                    yield _sse_event("error", {"message": (
+                        "The Copilot operation could not be completed."
+                        if ui_language == "en" else "Copilot işlemi tamamlanamadı."
+                    )})
 
             return Response(
                 stream_with_context(generate()),
@@ -3141,16 +3385,23 @@ def copilot_undo(document_id: str):
     if request.method == 'OPTIONS':
         return '', 204
     try:
+        ui_language = _request_ui_language()
         doc = _get_copilot_doc(document_id, request.uid)
         if not doc["history"]:
-            raise _cop.CopilotError("Geri alınacak işlem yok.", 400)
+            raise _cop.CopilotError(
+                "There is no operation to undo." if ui_language == "en" else "Geri alınacak işlem yok.",
+                400,
+            )
 
         record = doc["history"][-1]
         inverse_ops = _remap_line_operation_targets(
             doc["layout"], record.get("inverse_operations", [])
         )
         if not inverse_ops:
-            raise _cop.CopilotError("Bu işlem geri alınamıyor.", 400)
+            raise _cop.CopilotError(
+                "This operation cannot be undone." if ui_language == "en" else "Bu işlem geri alınamıyor.",
+                400,
+            )
 
         clean_inv = _cop.validate_and_sanitize_operations(
             inverse_ops, doc["layout"], doc["blocks"],
@@ -3200,7 +3451,11 @@ def copilot_undo(document_id: str):
             "page_hashes": page_hashes,
             "can_undo": len(doc["history"]) > 0,
             "can_redo": True,
-            "message": f"'{record.get('instruction', '...')}' geri alındı.",
+            "message": (
+                f"Undid '{record.get('instruction', '...')}'."
+                if ui_language == "en" else
+                f"'{record.get('instruction', '...')}' geri alındı."
+            ),
         })
     except Exception as exc:
         return _copilot_error_response(exc)
@@ -3211,16 +3466,23 @@ def copilot_redo(document_id: str):
     if request.method == 'OPTIONS':
         return '', 204
     try:
+        ui_language = _request_ui_language()
         doc = _get_copilot_doc(document_id, request.uid)
         if not doc["redo_stack"]:
-            raise _cop.CopilotError("İleri alınacak işlem yok.", 400)
+            raise _cop.CopilotError(
+                "There is no operation to redo." if ui_language == "en" else "İleri alınacak işlem yok.",
+                400,
+            )
 
         record = doc["redo_stack"][-1]
         redo_ops = _remap_line_operation_targets(
             doc["layout"], record.get("operations", [])
         )
         if not redo_ops:
-            raise _cop.CopilotError("Bu işlem ileri alınamıyor.", 400)
+            raise _cop.CopilotError(
+                "This operation cannot be redone." if ui_language == "en" else "Bu işlem ileri alınamıyor.",
+                400,
+            )
 
         clean_ops = _cop.validate_and_sanitize_operations(
             redo_ops, doc["layout"], doc["blocks"],
@@ -3267,7 +3529,11 @@ def copilot_redo(document_id: str):
             "page_hashes": page_hashes,
             "can_undo": True,
             "can_redo": len(doc["redo_stack"]) > 0,
-            "message": f"'{record.get('instruction', '...')}' yeniden uygulandı.",
+            "message": (
+                f"Redid '{record.get('instruction', '...')}'."
+                if ui_language == "en" else
+                f"'{record.get('instruction', '...')}' yeniden uygulandı."
+            ),
         })
     except Exception as exc:
         return _copilot_error_response(exc)

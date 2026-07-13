@@ -114,12 +114,18 @@ FONT_SLOTS = frozenset({"primary", "secondary"})
 TEXT_EFFECTS = frozenset({"highlight", "underline", "strikethrough"})
 PAGE_PHYSICAL_REQUEST_RE = re.compile(
     r"\b(?:kenar|marj|harf\s*(?:boyutu|yüksekliği)|yazı\s*boyutu|fontu?\s*(?:küçült|büyüt)|"
-    r"satır\s*aralığı|harf\s*aralığı|kelime\s*(?:aralığı|boşluğu))\b",
+    r"satır\s*aralığı|harf\s*aralığı|kelime\s*(?:aralığı|boşluğu)|"
+    r"margins?|letter\s*(?:size|height|spacing)|font\s*size|line\s*spacing|word\s*spacing)\b",
     re.IGNORECASE,
 )
-DOCUMENT_SCOPE_RE = re.compile(r"\b(?:tüm|bütün)\s+(?:belge(?:ye|de)?|yazı(?:ya|da)?|sayfalar(?:a|da)?)\b", re.IGNORECASE)
+DOCUMENT_SCOPE_RE = re.compile(
+    r"\b(?:(?:tüm|bütün)\s+(?:belge(?:ye|de)?|yazı(?:ya|da)?|sayfalar(?:a|da)?)|"
+    r"(?:whole|entire)\s+(?:document|text)|all\s+pages)\b",
+    re.IGNORECASE,
+)
 EXACT_PAGE_REFLOW_RE = re.compile(
-    r"\b(?:\d{1,2}|tek|bir|iki|uc|üç|dort|dört|bes|beş|alti|altı|yedi|sekiz|dokuz|on)"
+    r"\b(?:\d{1,2}|tek|bir|iki|uc|üç|dort|dört|bes|beş|alti|altı|yedi|sekiz|dokuz|on|"
+    r"one|single|two|three|four|five|six|seven|eight|nine|ten)"
     r"\s*(?:adet\s*)?(?:a4|sayfa|pages?)",
     re.IGNORECASE,
 )
@@ -218,7 +224,7 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
             if vertical in {"top", "center", "bottom"}:
                 clean[field] = vertical
         elif field == "scale_multiplier":
-            clean[field] = round(_clamp(value, 0.65, 1.8, 1.0), 3)
+            clean[field] = round(_clamp(value, 0.65, 1.6, 1.0), 3)
         elif field in {"opacity"}:
             clean[field] = round(_clamp(value, 0.40, 1.0, 0.95), 3)
         elif field == "jitter":
@@ -247,7 +253,7 @@ def _sanitize_patch(patch: Any, allowed_fields: frozenset[str]) -> dict[str, Any
         elif field == "word_spacing":
             clean[field] = int(_clamp(value, 10, 180, 55))
         elif field in {"margin_top", "margin_bottom", "margin_left", "margin_right"}:
-            clean[field] = int(_clamp(value, 36, 400, 118))
+            clean[field] = int(_clamp(value, 36, 600, 118))
         elif field == "line_spacing":
             clean[field] = int(_clamp(value, 60, 550, 200))
         elif field == "letter_height_mm":
@@ -382,6 +388,8 @@ def validate_and_sanitize_operations(
     *,
     secondary_font_available: bool = False,
     trusted_internal: bool = False,
+    selection: dict | None = None,
+    ui_language: str = "tr",
 ) -> list[dict]:
     """Her operasyonu whitelist + alan + hedef doğrulamasından geçir."""
     if not isinstance(operations, list):
@@ -390,12 +398,37 @@ def validate_and_sanitize_operations(
     if len(operations) > operation_limit:
         raise CopilotError(f"Tek istekte en fazla {operation_limit} operasyon uygulanabilir.")
 
+    selected_type = ""
+    selected_id = ""
+    if not trusted_internal and isinstance(selection, dict):
+        candidate_type = str(selection.get("type") or "").strip().lower()
+        candidate_id = str(selection.get("id") or "").strip()
+        exists = (
+            candidate_type == "line" and _get_line_by_id(layout, candidate_id) is not None
+        ) or (
+            candidate_type == "block" and _get_block_by_id(blocks, candidate_id) is not None
+        ) or (
+            candidate_type == "page" and _find_page(layout, candidate_id) is not None
+        )
+        if exists:
+            selected_type, selected_id = candidate_type, candidate_id
+
+    block_scope_operations = {
+        "replace_block_text", "rewrite_block", "update_block_style",
+        "switch_block_author", "remove_block", "apply_text_effect",
+        "remove_text_effect",
+    }
+    line_scope_operations = {"update_line_style", "move_line", "switch_line_author"}
+    page_scope_operations = {"update_page_settings", "add_margin_note"}
+
     clean_ops: list[dict] = []
     for i, op in enumerate(operations):
         if not isinstance(op, dict):
             raise CopilotError(f"Operasyon {i} geçerli bir nesne değil.")
 
         name = op.get("operation", "")
+        if not isinstance(name, str):
+            raise CopilotError(f"Operasyon {i} adı metin olmalı.")
         if name not in ALLOWED_OPERATIONS:
             raise CopilotError(f"Bilinmeyen operasyon: '{name}'")
         if name in INTERNAL_OPERATIONS and not trusted_internal:
@@ -403,18 +436,14 @@ def validate_and_sanitize_operations(
 
         target_id = op.get("target_id")
 
-        # Font slot değiştirme operasyonlarında secondary font var mı kontrol et
-        if name in {"switch_block_author", "switch_line_author"}:
-            new_slot = (op.get("patch") or {}).get("author_slot") or op.get("slot", "")
-            if new_slot == "secondary" and not secondary_font_available:
-                raise CopilotError("İkinci yazar için ikinci font seçilmemiş.")
-
         clean_op: dict[str, Any] = {"operation": name}
         if target_id is not None:
             clean_op["target_id"] = str(target_id)
 
         patch = op.get("patch")
         if patch is not None:
+            if not isinstance(patch, dict):
+                raise CopilotError(f"Operasyon {i} 'patch' alanı bir nesne olmalı.")
             if name in {"update_block_style", "switch_block_author"}:
                 clean_op["patch"] = _sanitize_patch(patch, ALLOWED_BLOCK_STYLE_FIELDS)
             elif name in {"apply_text_effect", "remove_text_effect"}:
@@ -439,6 +468,19 @@ def validate_and_sanitize_operations(
                 clean_op["patch"] = _sanitize_patch(patch, ALLOWED_DOC_SETTINGS_FIELDS)
             else:
                 clean_op["patch"] = patch  # diğerleri daha hafif
+
+        # Secondary font zorunluluğu operasyon adına değil, gerçekte
+        # uygulanacak sanitize edilmiş slota bağlıdır. Aksi halde
+        # update_* yolları veya switch_line_author.font_slot bu kontrolü
+        # atlayıp PDF'de sessizce primary fonta düşebilir.
+        clean_patch = clean_op.get("patch") or {}
+        requested_slot = None
+        if name in {"update_block_style", "switch_block_author"}:
+            requested_slot = clean_patch.get("author_slot")
+        elif name in {"update_line_style", "switch_line_author"}:
+            requested_slot = clean_patch.get("font_slot")
+        if requested_slot == "secondary" and not secondary_font_available:
+            raise CopilotError("İkinci yazar için ikinci font seçilmemiş.")
 
         # replace_block_text
         if name == "replace_block_text":
@@ -555,6 +597,32 @@ def validate_and_sanitize_operations(
         } and not clean_op.get("patch"):
             raise CopilotError("Copilot uygulanabilir bir ayar değişikliği üretmedi.", 422)
 
+        if selected_type:
+            scope_matches = False
+            if selected_type == "line" and name in line_scope_operations:
+                scope_matches = clean_op.get("target_id") == selected_id
+            elif selected_type == "block" and name in block_scope_operations:
+                scope_matches = clean_op.get("target_id") == selected_id
+            elif selected_type == "page" and name in page_scope_operations:
+                scope_target = (
+                    clean_op.get("target_page_id")
+                    if name == "add_margin_note"
+                    else clean_op.get("target_id")
+                )
+                scope_matches = scope_target == selected_id
+            if not scope_matches:
+                raise CopilotError(
+                    (
+                        "Copilot produced a change outside the selected item. "
+                        "Clear the selection before changing the entire document."
+                        if ui_language == "en"
+                        else
+                        "Copilot seçili öğenin dışına çıkan bir değişiklik üretti. "
+                        "Tüm belgeyi değiştirmek için seçimi temizleyip yeniden deneyin."
+                    ),
+                    422,
+                )
+
         clean_ops.append(clean_op)
     return clean_ops
 
@@ -584,10 +652,15 @@ def apply_operations(
             block = _get_block_by_id(new_blocks, target_id)
             if block is None:
                 raise CopilotError(f"Blok bulunamadı: {target_id}")
-            changed_patch = {
-                key: value for key, value in patch.items()
-                if block.get(key) != value
-            }
+            changed_patch = {}
+            for key, value in patch.items():
+                # author_slot bulunmadığında renderer zaten primary kullanır.
+                # Eksik alana tekrar primary yazmak görsel bir değişiklik
+                # değildir ve sahte başarı/sürüm oluşturmamalıdır.
+                if key == "author_slot" and key not in block and value == "primary":
+                    continue
+                if block.get(key) != value:
+                    changed_patch[key] = value
             old_style = {k: block.get(k) for k in changed_patch}
             _apply_dict_patch(block, changed_patch)
             # Layout satırlarını yalnızca gerçek blok değişiklikleri için
@@ -597,11 +670,12 @@ def apply_operations(
                 _patch_layout_lines_for_block(
                     new_layout, new_blocks, block, changed_patch, old_style
                 )
-            inverses.append({
-                "operation": "update_block_style",
-                "target_id": target_id,
-                "patch": old_style,
-            })
+            if changed_patch:
+                inverses.append({
+                    "operation": "update_block_style",
+                    "target_id": target_id,
+                    "patch": old_style,
+                })
 
         elif name == "replace_block_text" or name == "rewrite_block":
             block = _get_block_by_id(new_blocks, target_id)
@@ -620,13 +694,20 @@ def apply_operations(
             if line is None:
                 raise CopilotError(f"Satır bulunamadı: {target_id}")
             patch = op.get("patch", {})
-            old_vals = {k: line.get(k) for k in patch}
-            _apply_dict_patch(line, patch)
-            inverses.append({
-                "operation": "update_line_style",
-                "target_id": target_id,
-                "patch": old_vals,
-            })
+            changed_patch = {}
+            for key, value in patch.items():
+                if key == "font_slot" and key not in line and value == "primary":
+                    continue
+                if line.get(key) != value:
+                    changed_patch[key] = value
+            old_vals = {k: line.get(k) for k in changed_patch}
+            _apply_dict_patch(line, changed_patch)
+            if changed_patch:
+                inverses.append({
+                    "operation": "update_line_style",
+                    "target_id": target_id,
+                    "patch": old_vals,
+                })
 
         elif name == "update_page_settings":
             page = _get_page_by_id(new_layout, target_id)
@@ -683,34 +764,53 @@ def apply_operations(
             block = _get_block_by_id(new_blocks, target_id)
             if block is None:
                 raise CopilotError(f"Blok bulunamadı: {target_id}")
-            old_slot = block.get("author_slot", "primary")
-            new_slot = (op.get("patch") or {}).get("author_slot", "secondary")
-            block["author_slot"] = new_slot
-            _patch_layout_lines_for_block(
-                new_layout,
-                new_blocks,
-                block,
-                {"author_slot": new_slot},
-                {"author_slot": old_slot},
-            )
-            inverses.append({
-                "operation": "switch_block_author",
-                "target_id": target_id,
-                "patch": {"author_slot": old_slot},
-            })
+            had_slot = "author_slot" in block
+            old_value = block.get("author_slot")
+            old_slot = "secondary" if old_value == "secondary" else "primary"
+            requested_value = (op.get("patch") or {}).get("author_slot")
+            new_slot = "secondary" if requested_value == "secondary" else "primary"
+            structural_removal = requested_value is None and had_slot
+            author_changed = new_slot != old_slot or structural_removal
+            if author_changed:
+                if requested_value is None:
+                    block.pop("author_slot", None)
+                else:
+                    block["author_slot"] = new_slot
+                if new_slot != old_slot:
+                    _patch_layout_lines_for_block(
+                        new_layout,
+                        new_blocks,
+                        block,
+                        {"author_slot": new_slot},
+                        {"author_slot": old_slot},
+                    )
+                inverses.append({
+                    "operation": "switch_block_author",
+                    "target_id": target_id,
+                    "patch": {"author_slot": old_value if had_slot else None},
+                })
 
         elif name == "switch_line_author":
             line = _get_line_by_id(new_layout, target_id)
             if line is None:
                 raise CopilotError(f"Satır bulunamadı: {target_id}")
-            old_slot = line.get("font_slot", "primary")
-            new_slot = (op.get("patch") or {}).get("font_slot", "secondary")
-            line["font_slot"] = new_slot
-            inverses.append({
-                "operation": "switch_line_author",
-                "target_id": target_id,
-                "patch": {"font_slot": old_slot},
-            })
+            had_slot = "font_slot" in line
+            old_value = line.get("font_slot")
+            old_slot = "secondary" if old_value == "secondary" else "primary"
+            requested_value = (op.get("patch") or {}).get("font_slot")
+            new_slot = "secondary" if requested_value == "secondary" else "primary"
+            structural_removal = requested_value is None and had_slot
+            author_changed = new_slot != old_slot or structural_removal
+            if author_changed:
+                if requested_value is None:
+                    line.pop("font_slot", None)
+                else:
+                    line["font_slot"] = new_slot
+                inverses.append({
+                    "operation": "switch_line_author",
+                    "target_id": target_id,
+                    "patch": {"font_slot": old_value if had_slot else None},
+                })
 
         elif name == "update_document_settings":
             patch = op.get("patch", {})
@@ -903,9 +1003,17 @@ def _get_block_by_id(blocks: list[dict], target_id: str | None) -> dict | None:
 def _find_block_index(blocks: list[dict], target_id: str | None) -> int | None:
     if target_id is None:
         return None
+    # Stable document IDs are authoritative. Only after a full exact-ID scan
+    # may a numeric target be interpreted as a legacy zero-based index.
     for i, b in enumerate(blocks):
-        if b.get("id") == target_id or str(i) == str(target_id):
+        if b.get("id") == target_id:
             return i
+    try:
+        index = int(str(target_id))
+    except (TypeError, ValueError):
+        return None
+    if str(index) == str(target_id) and 0 <= index < len(blocks):
+        return index
     return None
 
 
@@ -970,7 +1078,9 @@ def _patch_layout_lines_for_block(
                 if "line_slope" in patch:
                     line["line_slope"] = patch["line_slope"] if patch["line_slope"] is not None else layout.get("settings", {}).get("line_slope", 3)
                 if "font_slot" in patch or "author_slot" in patch:
-                    line["font_slot"] = patch.get("font_slot") or patch.get("author_slot")
+                    line["font_slot"] = (
+                        patch.get("font_slot") or patch.get("author_slot") or "primary"
+                    )
                 if "scale_multiplier" in patch:
                     old_multiplier = _clamp(previous_values.get("scale_multiplier"), 0.65, 1.8, 1.0)
                     new_multiplier = _clamp(patch.get("scale_multiplier"), 0.65, 1.8, 1.0)
@@ -1000,8 +1110,35 @@ def build_document_snapshot(
     """Gemini'ye gönderilecek kompakt belge özeti."""
     pages_summary = []
     selection_context: dict[str, Any] = {}
-    selection_type = str((selection or {}).get("type") or "")
-    selection_id = str((selection or {}).get("id") or "")
+    raw_selection = selection if isinstance(selection, dict) else {}
+    selection_type = str(raw_selection.get("type") or "").strip().lower()
+    selection_value = raw_selection.get("id")
+    legacy_selection_key = ""
+    if not selection_type or selection_value is None or selection_value == "":
+        for candidate_type, candidate_key in (
+            ("page", "page_id"), ("block", "block_id"), ("line", "line_id")
+        ):
+            candidate_value = raw_selection.get(candidate_key)
+            if candidate_value is not None and candidate_value != "":
+                selection_type = candidate_type
+                selection_value = candidate_value
+                legacy_selection_key = candidate_key
+                break
+    raw_selection_id = str(selection_value or "").strip()
+    selection_id = raw_selection_id if len(raw_selection_id) <= 80 else ""
+    if (
+        selection_type not in {"page", "block", "line"}
+        or not DOCUMENT_ID_RE.fullmatch(selection_id)
+    ):
+        selection_type = ""
+        selection_id = ""
+    safe_selection = {}
+    if selection_type and selection_id:
+        safe_selection = (
+            {legacy_selection_key: selection_id}
+            if legacy_selection_key
+            else {"type": selection_type, "id": selection_id}
+        )
     for page_idx, page in enumerate(layout.get("pages", [])):
         page_blocks: list[dict] = []
         page_lines: list[dict] = []
@@ -1100,7 +1237,7 @@ def build_document_snapshot(
         "document_summary": f"{len(blocks)} blok, {len(layout.get('pages',[]))} sayfa",
         "global_settings": layout.get("settings", {}),
         "pages": pages_summary,
-        "selection": selection or {},
+        "selection": safe_selection,
         "selection_context": selection_context,
     }
 
@@ -1150,6 +1287,17 @@ HIZALAMA: "left", "center", "right"
 YAZAR SLOTU: "primary", "secondary"
 KAĞIT: "cizgili", "kareli", "duz"
 """
+
+
+def _copilot_system_prompt(ui_language: str = "tr") -> str:
+    if str(ui_language).lower() == "en":
+        return (
+            _COPILOT_SYSTEM_PROMPT
+            + "\nIMPORTANT UI LANGUAGE RULE: Return assistant_message, clarification_question and every "
+              "clarification option exclusively in English. Keep document content in the language requested "
+              "by the user; if no content language is specified, use English.\n"
+        )
+    return _COPILOT_SYSTEM_PROMPT
 
 
 def _copilot_response_schema() -> dict:
@@ -1238,6 +1386,7 @@ def call_copilot_gemini(
     instruction: str,
     document_snapshot: dict,
     chat_history: list[dict] | None = None,
+    ui_language: str = "tr",
 ) -> dict:
     """Gemini'yi copilot modu için çağır ve response'u parse et."""
     import requests as req
@@ -1273,7 +1422,7 @@ def call_copilot_gemini(
     contents.append({"role": "user", "parts": [{"text": user_content}]})
 
     payload = {
-        "systemInstruction": {"parts": [{"text": _COPILOT_SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": _copilot_system_prompt(ui_language)}]},
         "contents": contents,
         "generationConfig": {
             "responseMimeType": "application/json",
@@ -1330,6 +1479,8 @@ def _validate_copilot_provider_result(
     *,
     secondary_font_available: bool,
     exact_page_reflow_intent: bool = False,
+    selection: dict | None = None,
+    ui_language: str = "tr",
 ) -> None:
     """Reject structurally valid provider output that cannot change the document."""
     if raw.get("needs_clarification") is True:
@@ -1344,6 +1495,8 @@ def _validate_copilot_provider_result(
         layout,
         blocks,
         secondary_font_available=secondary_font_available,
+        selection=selection,
+        ui_language=ui_language,
     )
     trial_layout, trial_blocks, _ = apply_operations(clean, layout, blocks)
     has_delta = trial_layout != layout or trial_blocks != blocks
@@ -1366,6 +1519,7 @@ def process_copilot_edit(
     secondary_font_available: bool = False,
     current_version: int = 0,
     provider_config: dict[str, Any] | None = None,
+    ui_language: str = "tr",
 ) -> dict:
     """
     Kullanıcının talebini işleyip yeni layout ve inverse operations döndür.
@@ -1382,6 +1536,7 @@ def process_copilot_edit(
         reflow_scope: str,
     }
     """
+    ui_language = "en" if str(ui_language).lower() == "en" else "tr"
     if not isinstance(instruction, str) or not instruction.strip():
         raise CopilotError("Talimat boş olamaz.")
     if len(instruction) > MAX_INSTRUCTION_CHARS:
@@ -1396,18 +1551,31 @@ def process_copilot_edit(
         and PAGE_PHYSICAL_REQUEST_RE.search(instruction)
         and not DOCUMENT_SCOPE_RE.search(instruction)
     ):
+        english = ui_language == "en"
         return {
             "needs_clarification": True,
             "clarification_question": (
-                "Harf boyutu, aralıklar ve kenar boşlukları metni yeniden akıtır. "
-                "Bu fiziksel mizanpajı tüm belgeye uygulayayım mı?"
+                "Letter size, spacing and margins reflow the text. Should I apply this physical layout to the entire document?"
+                if english else
+                "Harf boyutu, aralıklar ve kenar boşlukları metni yeniden akıtır. Bu fiziksel mizanpajı tüm belgeye uygulayayım mı?"
             ),
-            "clarification_options": [
-                "Tüm belgeye uygula (önerilen)",
-                "Yalnız bu sayfanın görsel ayarlarını değiştir",
-                "Vazgeç",
-            ],
-            "assistant_message": "Fiziksel sayfa düzeni için kapsam onayı gerekiyor.",
+            "clarification_options": (
+                [
+                    "Apply to the entire document (recommended)",
+                    "Change only this page's visual settings",
+                    "Cancel",
+                ]
+                if english else
+                [
+                    "Tüm belgeye uygula (önerilen)",
+                    "Yalnız bu sayfanın görsel ayarlarını değiştir",
+                    "Vazgeç",
+                ]
+            ),
+            "assistant_message": (
+                "Scope confirmation is required for the physical page layout."
+                if english else "Fiziksel sayfa düzeni için kapsam onayı gerekiyor."
+            ),
             "operations": [],
             "inverse_operations": [],
             "new_layout": layout,
@@ -1424,7 +1592,7 @@ def process_copilot_edit(
             f"BELGE DURUMU:\n{json.dumps(snapshot, ensure_ascii=False, indent=2)}\n\n"
             f"KULLANICI TALİMATI: {instruction}"
         )
-        messages = [{"role": "system", "content": _COPILOT_SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": _copilot_system_prompt(ui_language)}]
         for item in (chat_history or [])[-10:]:
             if not isinstance(item, dict) or item.get("role") not in {"user", "model"}:
                 continue
@@ -1439,7 +1607,7 @@ def process_copilot_edit(
             raw, provider, actual_model = ai_provider.call_structured_with_fallback(
                 config=config,
                 gemini_call=lambda key: call_copilot_gemini(
-                    key, model, instruction, snapshot, chat_history
+                    key, model, instruction, snapshot, chat_history, ui_language
                 ),
                 messages=messages,
                 schema=_copilot_response_schema(),
@@ -1451,12 +1619,14 @@ def process_copilot_edit(
                     blocks,
                     secondary_font_available=secondary_font_available,
                     exact_page_reflow_intent=exact_page_reflow_intent,
+                    selection=selection,
+                    ui_language=ui_language,
                 ),
             )
         except ai_provider.AiProviderError as exc:
             raise CopilotError(str(exc), exc.status_code) from exc
     else:
-        raw = call_copilot_gemini(api_key, model, instruction, snapshot, chat_history)
+        raw = call_copilot_gemini(api_key, model, instruction, snapshot, chat_history, ui_language)
         provider, actual_model = "gemini", model
 
     _validate_copilot_provider_result(
@@ -1465,12 +1635,17 @@ def process_copilot_edit(
         blocks,
         secondary_font_available=secondary_font_available,
         exact_page_reflow_intent=exact_page_reflow_intent,
+        selection=selection,
+        ui_language=ui_language,
     )
 
     if raw.get("needs_clarification"):
         return {
             "needs_clarification": True,
-            "clarification_question": str(raw.get("clarification_question", "Lütfen detaylandırın:")),
+            "clarification_question": str(raw.get(
+                "clarification_question",
+                "Please provide more detail:" if ui_language == "en" else "Lütfen detaylandırın:",
+            )),
             "clarification_options": [
                 str(o) for o in (raw.get("clarification_options") or [])[:6]
             ],
@@ -1489,6 +1664,8 @@ def process_copilot_edit(
     clean_ops = validate_and_sanitize_operations(
         raw_ops, layout, blocks,
         secondary_font_available=secondary_font_available,
+        selection=selection,
+        ui_language=ui_language,
     )
 
     new_layout, new_blocks, inverse_ops = apply_operations(clean_ops, layout, blocks)
@@ -1506,7 +1683,10 @@ def process_copilot_edit(
         "needs_clarification": False,
         "clarification_question": "",
         "clarification_options": [],
-        "assistant_message": str(raw.get("assistant_message", "Değişiklik uygulandı.")),
+        "assistant_message": str(raw.get(
+            "assistant_message",
+            "The change was applied." if ui_language == "en" else "Değişiklik uygulandı.",
+        )),
         "operations": clean_ops,
         "inverse_operations": inverse_ops,
         "new_layout": new_layout,
@@ -1532,6 +1712,7 @@ def operations_require_reflow(operations: list[dict]) -> bool:
             return True
         if name == "update_block_style" and set((operation.get("patch") or {})) & {
             "align", "scale_multiplier", "is_margin_note", "page_break_before",
+            "author_slot",
         }:
             return True
         if name == "update_page_settings" and set((operation.get("patch") or {})) & {

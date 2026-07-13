@@ -83,10 +83,42 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual("openrouter", provider)
         self.assertEqual("openrouter/free", model)
         self.assertEqual(2, post.call_count)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual("json_schema", payload["response_format"]["type"])
         self.assertEqual(
-            {"type": "json_object"},
-            post.call_args.kwargs["json"]["response_format"],
+            "object",
+            payload["response_format"]["json_schema"]["schema"]["type"],
         )
+        self.assertEqual({"require_parameters": True}, payload["provider"])
+
+    def test_openai_uses_structured_chat_completion_without_sampling_controls(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            parsed, provider, model = ai_provider.call_structured_with_fallback(
+                config={
+                    "provider_order": "openai",
+                    "openai_key": "sk-" + "o" * 40,
+                },
+                gemini_call=lambda _key: {},
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+
+        self.assertEqual({"status": "OK"}, parsed)
+        self.assertEqual("openai", provider)
+        self.assertEqual("gpt-5.6-luna", model)
+        self.assertEqual(
+            "https://api.openai.com/v1/chat/completions",
+            post.call_args.args[0],
+        )
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual("json_schema", payload["response_format"]["type"])
+        self.assertEqual(128, payload["max_completion_tokens"])
+        self.assertNotIn("temperature", payload)
 
     def test_provider_order_can_preserve_gemini_quota(self):
         success = self.response({
@@ -195,6 +227,7 @@ class ProviderFallbackTests(unittest.TestCase):
             )
         self.assertEqual(503, ctx.exception.status_code)
         self.assertIn("GROQ_API_KEY", str(ctx.exception))
+        self.assertIn("OPENAI_API_KEY", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -61,6 +61,48 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
 
     @patch("app._load_font_images", return_value=fake_font())
     @patch("app._font_access_for_user", return_value=(object(), {}))
+    def test_english_page_fit_clarification_contains_no_turkish_fallback(self, _access, _load):
+        doc, result = self._state(
+            3000,
+            settings={"letter_height_mm": 8, "line_spacing_mm": 10},
+        )
+        finalized = app._finalize_copilot_result(doc, result, ui_language="en")
+        self.assertTrue(finalized["needs_clarification"])
+        self.assertIn("smallest readable size", finalized["clarification_question"])
+        self.assertIn("Shorten the text intelligently", finalized["clarification_options"][0])
+        self.assertNotIn("sayfa", finalized["clarification_question"].lower())
+
+    @patch("app._load_font_images", return_value=fake_font())
+    @patch("app._font_access_for_user", return_value=(object(), {}))
+    def test_global_document_settings_survive_reflow_instead_of_stale_first_page(self, _access, _load):
+        doc, result = self._state(120, target_pages=1, settings={
+            "letter_height_mm": 10,
+            "line_spacing_mm": 14,
+            "margin_left_mm": 20,
+            "line_slope": 0,
+        })
+        doc["layout"] = copy.deepcopy(result["new_layout"])
+        doc["blocks"] = copy.deepcopy(result["new_blocks"])
+        operations = [{
+            "operation": "update_document_settings",
+            "patch": {"margin_left_mm": 8, "line_slope": 13},
+        }]
+        clean = ai_copilot.validate_and_sanitize_operations(
+            operations, result["new_layout"], result["new_blocks"]
+        )
+        patched_layout, patched_blocks, _ = ai_copilot.apply_operations(
+            clean, result["new_layout"], result["new_blocks"]
+        )
+        rebuilt, _, _ = app._copilot_reflow_state(
+            doc, patched_layout, patched_blocks, 2, operations=clean
+        )
+        self.assertAlmostEqual(
+            8.0, ai_document.px_to_mm(rebuilt["settings"]["margin_left"]), places=1
+        )
+        self.assertEqual(13, rebuilt["settings"]["line_slope"])
+
+    @patch("app._load_font_images", return_value=fake_font())
+    @patch("app._font_access_for_user", return_value=(object(), {}))
     def test_copilot_asks_to_expand_content_for_an_underfilled_target(self, _access, _load):
         doc, result = self._state(1, target_pages=2)
         finalized = app._finalize_copilot_result(doc, result)
@@ -341,6 +383,25 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertEqual(204, response.status_code)
         self.assertIn("PATCH", response.headers.get("Access-Control-Allow-Methods", ""))
 
+    def test_loopback_http_health_is_not_forced_to_unsupported_tls(self):
+        with patch.dict(app.app.config, {"DEBUG": False}):
+            response = app.app.test_client().get(
+                "/health",
+                base_url="http://127.0.0.1:5055",
+                environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            )
+        self.assertEqual(200, response.status_code)
+
+    def test_non_loopback_http_still_redirects_to_https(self):
+        with patch.dict(app.app.config, {"DEBUG": False}):
+            response = app.app.test_client().get(
+                "/health",
+                base_url="http://example.test",
+                environ_base={"REMOTE_ADDR": "203.0.113.10"},
+            )
+        self.assertEqual(301, response.status_code)
+        self.assertTrue(response.headers["Location"].startswith("https://"))
+
     def test_readiness_reports_firebase_without_exposing_secrets(self):
         with patch.object(app, "db", object()), \
              patch.object(app, "connected_project_id", "elyazisiapp"), \
@@ -434,6 +495,66 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertEqual(12, persisted["letter_height_mm"])
         self.assertEqual(1, persisted["target_page_count"])
         self.assertNotIn("units", persisted)
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
+    def test_manual_reflow_preserves_block_semantics_and_exact_page_target(self, _auth):
+        blocks = [
+            {
+                "id": "title-1",
+                "type": "title",
+                "text": "Korunan başlık",
+                "color": "#123456",
+                "align": "center",
+                "scale_multiplier": 1.2,
+                "page_break_before": False,
+            },
+            {
+                "id": "paragraph-1",
+                "type": "paragraph",
+                "text": "abc " * 400,
+                "page_break_before": False,
+            },
+        ]
+        with patch("app._font_access_for_user", return_value=(object(), {"repetition": 1})), \
+             patch("app._load_font_images", return_value=fake_font()), \
+             patch("app._load_secondary_font", return_value=(None, None)):
+            response = app.app.test_client().post(
+                "/api/ai/plan",
+                headers={"Authorization": "Bearer test-token"},
+                json={
+                    "source": "manual",
+                    "font_id": "font-a",
+                    "text_content": "edited document",
+                    "blocks": blocks,
+                    "page_settings": {
+                        "letter_height_mm": 14,
+                        "line_spacing_mm": 20,
+                        "target_page_count": 1,
+                    },
+                },
+            )
+        self.assertEqual(200, response.status_code, response.get_json())
+        payload = response.get_json()
+        self.assertFalse(payload["needs_clarification"])
+        self.assertEqual(1, len(payload["layout"]["pages"]))
+        self.assertTrue(payload["fit_report"]["fits"])
+        self.assertEqual(1, payload["updated_settings"]["target_page_count"])
+        self.assertEqual("title", payload["blocks"][0]["type"])
+        self.assertEqual("#123456", payload["blocks"][0]["color"])
+        self.assertEqual("center", payload["blocks"][0]["align"])
+        self.assertEqual("title-1", payload["blocks"][0]["id"])
+
+    def test_client_margin_note_target_survives_block_sanitization(self):
+        blocks = app._sanitize_client_copilot_blocks([{
+            "id": "note-1",
+            "type": "paragraph",
+            "text": "Kısa kenar notu",
+            "is_margin_note": True,
+            "target_page_id": "page-2",
+            "page_break_before": False,
+        }])
+        self.assertEqual("note-1", blocks[0]["id"])
+        self.assertEqual("page-2", blocks[0]["target_page_id"])
 
 
 if __name__ == "__main__":
