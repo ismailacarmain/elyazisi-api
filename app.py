@@ -153,7 +153,7 @@ CORS(app, resources={
     r"/download": {"origins": _configured_frontend_origins()}
 }, supports_credentials=False, allow_headers=[
     'Authorization', 'Content-Type', 'X-Gemini-Api-Key',
-    'X-OpenRouter-Api-Key'
+    'X-OpenRouter-Api-Key', 'X-Groq-Api-Key'
 ], methods=['GET', 'POST', 'PATCH', 'OPTIONS'])
 
 @app.route('/health')
