@@ -1952,16 +1952,20 @@ def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
         model = data.get('model', ai_document.DEFAULT_GEMINI_MODEL)
-        if request.headers.get('X-Gemini-Api-Key'):
-            ai_document.test_gemini_connection(_gemini_api_key(), model)
-            provider, actual_model = 'gemini', ai_document.validate_model(model)
-        else:
-            config = _ai_provider_config()
-            config['gemini_model'] = ai_document.validate_model(model)
-            provider, actual_model = ai_provider.test_provider_chain(
-                config=config,
-                gemini_test=lambda key: ai_document.test_gemini_connection(key, model),
-            )
+        config = _ai_provider_config()
+        config['gemini_model'] = ai_document.validate_model(model)
+        
+        m_lower = model.lower()
+        if "llama" in m_lower or "mixtral" in m_lower or "gemma" in m_lower:
+            config["provider_order"] = "groq"
+            if "gemini_key" in config: del config["gemini_key"]
+        elif "gemini" in m_lower:
+            config["provider_order"] = "gemini"
+            
+        provider, actual_model = ai_provider.test_provider_chain(
+            config=config,
+            gemini_test=lambda key: ai_document.test_gemini_connection(key, model),
+        )
         return jsonify({'success': True, 'provider': provider, 'model': actual_model})
     except Exception as exc:
         return _ai_error_response(exc)

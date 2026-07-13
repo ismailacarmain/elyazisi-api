@@ -54,11 +54,15 @@ DEFAULT_MODELS = (
     "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 )
 ALLOWED_BLOCK_TYPES = {"title", "heading", "paragraph", "list_item", "quote"}
 ALLOWED_PAPER_TYPES = {"cizgili", "kareli", "duz"}
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-MODEL_RE = re.compile(r"^gemini-[a-z0-9][a-z0-9._-]{2,80}$")
+MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,80}$")
 
 
 class AiDocumentError(ValueError):
@@ -189,7 +193,7 @@ def allowed_models() -> tuple[str, ...]:
 def validate_model(value: Any) -> str:
     model = str(value or DEFAULT_GEMINI_MODEL).strip().lower()
     if not MODEL_RE.fullmatch(model) or model not in allowed_models():
-        raise AiDocumentError("Bu Gemini modeli sunucuda izinli değil.")
+        raise AiDocumentError("Bu AI modeli sunucuda izinli değil.")
     return model
 
 
