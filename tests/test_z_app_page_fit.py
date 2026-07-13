@@ -9,6 +9,19 @@ from tests.test_ai_document import fake_font
 
 
 class CopilotPageFitIntegrationTests(unittest.TestCase):
+    @patch.dict(
+        app.os.environ,
+        {"GROQ_API_KEY": "gsk_server_only_key_1234567890"},
+        clear=False,
+    )
+    def test_groq_key_is_read_only_from_server_environment(self):
+        with app.app.test_request_context(headers={
+            "X-Groq-Api-Key": "gsk_client_key_that_must_be_ignored",
+        }):
+            config = app._ai_provider_config(app.DEFAULT_AI_DOCUMENT_PROVIDER_ORDER)
+        self.assertEqual("gsk_server_only_key_1234567890", config["groq_key"])
+        self.assertEqual("groq", config["provider_order"].split(",", 1)[0])
+
     def _state(self, word_count: int, target_pages: int = 1, settings: dict | None = None):
         blocks = [{"type": "paragraph", "text": "abc " * word_count, "page_break_before": False}]
         settings = settings or {"letter_height_mm": 14, "line_spacing_mm": 20}

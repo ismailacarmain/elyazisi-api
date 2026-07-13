@@ -36,6 +36,6 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5.6-luna
       - key: AI_DOCUMENT_PROVIDER_ORDER
-        value: gemini,groq,openai,openrouter
+        value: groq,gemini,openai,openrouter
       - key: COPILOT_PROVIDER_ORDER
         value: groq,gemini,openai,openrouter

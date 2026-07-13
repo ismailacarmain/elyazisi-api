@@ -31,7 +31,7 @@ zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul 
 - `MAX_FORM_UPLOAD_SIZE_MB`: PDF form yükleme limiti; 10x dokuz sayfalı form için varsayılan `25`, en fazla `30`
 - `OPENAI_MODEL`: varsayılan `gpt-5.6-luna`
 - `OPENROUTER_MODEL`: varsayılan `openrouter/free`
-- `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `gemini,groq,openai,openrouter`
+- `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `groq,gemini,openai,openrouter`
 - `COPILOT_PROVIDER_ORDER`: varsayılan `groq,gemini,openai,openrouter`
 
 Anahtarlar kaynak koda veya frontend'e yazılmaz. Sağlayıcılar sırayla denenir;

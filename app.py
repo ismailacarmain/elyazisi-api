@@ -132,6 +132,10 @@ def validate_base64_image(b64_string, max_size_mb=5):
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
+DEFAULT_AI_PROVIDER_ORDER = 'gemini,groq,openai,openrouter'
+DEFAULT_AI_DOCUMENT_PROVIDER_ORDER = 'groq,gemini,openai,openrouter'
+DEFAULT_COPILOT_PROVIDER_ORDER = 'groq,gemini,openai,openrouter'
+
 def _configured_frontend_origins():
     configured = os.environ.get('FRONTEND_ORIGINS', '')
     origins = [item.strip().rstrip('/') for item in configured.split(',') if item.strip()]
@@ -149,7 +153,7 @@ CORS(app, resources={
     r"/download": {"origins": _configured_frontend_origins()}
 }, supports_credentials=False, allow_headers=[
     'Authorization', 'Content-Type', 'X-Gemini-Api-Key',
-    'X-Groq-Api-Key', 'X-OpenRouter-Api-Key'
+    'X-OpenRouter-Api-Key'
 ], methods=['GET', 'POST', 'PATCH', 'OPTIONS'])
 
 @app.route('/health')
@@ -1792,10 +1796,9 @@ def _ai_provider_config(provider_order=None):
             or os.environ.get("GEMINI_API_KEY", "")
         ).strip(),
         "gemini_model": os.environ.get("GEMINI_MODEL", ai_document.DEFAULT_GEMINI_MODEL),
-        "groq_key": (
-            request.headers.get("X-Groq-Api-Key")
-            or os.environ.get("GROQ_API_KEY", "")
-        ).strip(),
+        # Groq is server-managed only. Never accept or expose this secret via
+        # browser headers; Render's environment is the sole source of truth.
+        "groq_key": os.environ.get("GROQ_API_KEY", "").strip(),
         "groq_model_timeout_ms": os.environ.get("GROQ_MODEL_TIMEOUT_MS", "30000").strip(),
         "openai_key": os.environ.get("OPENAI_API_KEY", "").strip(),
         "openai_model": os.environ.get(
@@ -1810,7 +1813,7 @@ def _ai_provider_config(provider_order=None):
         ).strip(),
         "provider_order": str(
             provider_order
-            or os.environ.get("AI_PROVIDER_ORDER", "gemini,groq,openai,openrouter")
+            or os.environ.get("AI_PROVIDER_ORDER", DEFAULT_AI_PROVIDER_ORDER)
         ).strip(),
     }
 
@@ -1929,12 +1932,12 @@ def ai_status():
         'success': True,
         'server_key_configured': bool(providers),
         'configured_providers': providers,
-        'provider_order': os.environ.get('AI_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'),
+        'provider_order': os.environ.get('AI_PROVIDER_ORDER', DEFAULT_AI_PROVIDER_ORDER),
         'document_provider_order': os.environ.get(
-            'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'
+            'AI_DOCUMENT_PROVIDER_ORDER', DEFAULT_AI_DOCUMENT_PROVIDER_ORDER
         ),
         'copilot_provider_order': os.environ.get(
-            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openai,openrouter'
+            'COPILOT_PROVIDER_ORDER', DEFAULT_COPILOT_PROVIDER_ORDER
         ),
         'default_model': ai_document.DEFAULT_GEMINI_MODEL,
         'allowed_models': list(ai_document.allowed_models()),
@@ -2124,7 +2127,7 @@ def ai_document_plan():
                 }
         elif source == 'ai':
             provider_config = _ai_provider_config(os.environ.get(
-                'AI_DOCUMENT_PROVIDER_ORDER', 'gemini,groq,openai,openrouter'
+                'AI_DOCUMENT_PROVIDER_ORDER', DEFAULT_AI_DOCUMENT_PROVIDER_ORDER
             ))
             result = ai_document.create_ai_layout(
                 api_key=provider_config.get('gemini_key'),
@@ -3274,7 +3277,7 @@ def copilot_edit_document(document_id: str):
         configured_model = os.environ.get(_cop.COPILOT_MODEL_ENV, _cop.DEFAULT_COPILOT_MODEL)
         model = ai_document.validate_model(data.get("model") or configured_model)
         provider_config = _ai_provider_config(os.environ.get(
-            'COPILOT_PROVIDER_ORDER', 'groq,gemini,openai,openrouter'
+            'COPILOT_PROVIDER_ORDER', DEFAULT_COPILOT_PROVIDER_ORDER
         ))
         req_api_key = provider_config.get("gemini_key", "")
 

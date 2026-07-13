@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 import requests
@@ -193,11 +194,18 @@ def _validate_provider_result(
 
 def _retry_after_seconds(response: requests.Response) -> float | None:
     try:
-        value = response.headers.get("retry-after")
+        value = response.headers.get("retry-after") or response.headers.get(
+            "Retry-After"
+        )
         if value is None:
             return None
-        return max(1.0, min(float(value), 3600.0))
-    except (AttributeError, TypeError, ValueError):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            retry_at = parsedate_to_datetime(str(value))
+            seconds = retry_at.timestamp() - time.time()
+        return max(1.0, min(seconds, 3600.0))
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return None
 
 

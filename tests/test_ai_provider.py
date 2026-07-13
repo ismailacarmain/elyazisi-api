@@ -1,5 +1,6 @@
 import json
 import unittest
+from email.utils import formatdate
 from unittest.mock import MagicMock, patch
 
 import ai_provider
@@ -129,6 +130,10 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual(list(ai_provider.GROQ_MODELS[:2]), result["attemptedModels"])
         self.assertTrue(ai_provider._groq_model_is_cooling_down(ai_provider.GROQ_MODELS[0]))
         self.assertEqual(2, post.call_count)
+        first_payload = post.call_args_list[0].kwargs["json"]
+        second_payload = post.call_args_list[1].kwargs["json"]
+        for field in ("messages", "temperature", "max_completion_tokens"):
+            self.assertEqual(first_payload[field], second_payload[field])
 
     def test_groq_two_timeouts_use_third_model(self):
         success = self.response({
@@ -173,6 +178,22 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual(401, ctx.exception.status_code)
         self.assertEqual(1, post.call_count)
 
+    def test_groq_403_and_regular_400_stop_without_fallback(self):
+        for status, message in ((403, "forbidden"), (400, "invalid request body")):
+            with self.subTest(status=status):
+                denied = self.response(
+                    {"error": {"message": message}}, ok=False, status=status
+                )
+                with patch("ai_provider.requests.post", return_value=denied) as post:
+                    with self.assertRaises(ai_provider.AiProviderError) as ctx:
+                        ai_provider.generate_with_groq_fallback(
+                            config={}, api_key="gsk_" + "y" * 32,
+                            messages=self.messages, schema=self.schema,
+                            schema_name="test_schema", max_tokens=128,
+                        )
+                self.assertEqual(status, ctx.exception.status_code)
+                self.assertEqual(1, post.call_count)
+
     def test_groq_missing_model_400_uses_next_model(self):
         missing = self.response(
             {"error": {"message": "The requested model does not exist or is no longer supported."}},
@@ -202,6 +223,40 @@ class ProviderFallbackTests(unittest.TestCase):
                 )
         self.assertEqual(5, post.call_count)
         self.assertIn("şu anda yoğun", str(ctx.exception))
+
+    def test_empty_success_payload_uses_next_model(self):
+        empty = self.response({"choices": [{"message": {"content": ""}}]})
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", side_effect=[empty, success]) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual("openai/gpt-oss-20b", result["model"])
+        self.assertEqual(2, post.call_count)
+
+    def test_groq_timeout_setting_is_applied_per_model(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            ai_provider.generate_with_groq_fallback(
+                config={"groq_model_timeout_ms": "12345"},
+                api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual((6.0, 12.345), post.call_args.kwargs["timeout"])
+
+    def test_retry_after_supports_http_date_and_missing_header_defaults_to_60(self):
+        response = self.response(
+            {}, headers={"Retry-After": formatdate(1090, usegmt=True)}
+        )
+        with patch("ai_provider.time.time", return_value=1000):
+            self.assertEqual(90, ai_provider._retry_after_seconds(response))
+            ai_provider._set_groq_cooldown(ai_provider.GROQ_MODELS[0], None)
+        self.assertEqual(1060, ai_provider._GROQ_COOLDOWNS[ai_provider.GROQ_MODELS[0]])
 
     def test_openai_uses_structured_chat_completion_without_sampling_controls(self):
         success = self.response({
