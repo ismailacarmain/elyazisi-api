@@ -1796,9 +1796,10 @@ def _ai_provider_config(provider_order=None):
             or os.environ.get("GEMINI_API_KEY", "")
         ).strip(),
         "gemini_model": os.environ.get("GEMINI_MODEL", ai_document.DEFAULT_GEMINI_MODEL),
-        # Groq is server-managed only. Never accept or expose this secret via
-        # browser headers; Render's environment is the sole source of truth.
-        "groq_key": os.environ.get("GROQ_API_KEY", "").strip(),
+        "groq_key": (
+            request.headers.get("X-Groq-Api-Key")
+            or os.environ.get("GROQ_API_KEY", "")
+        ).strip(),
         "groq_model_timeout_ms": os.environ.get("GROQ_MODEL_TIMEOUT_MS", "30000").strip(),
         "openai_key": os.environ.get("OPENAI_API_KEY", "").strip(),
         "openai_model": os.environ.get(
