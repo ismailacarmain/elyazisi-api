@@ -219,27 +219,44 @@ init_error = None
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 def verify_recaptcha(token):
+    required = os.environ.get('RECAPTCHA_REQUIRED', 'false').strip().lower() == 'true'
+    development_bypass = app.debug or os.environ.get(
+        'ALLOW_INSECURE_RECAPTCHA', ''
+    ).strip().lower() == 'true'
+    if development_bypass:
+        logger.warning("reCAPTCHA development bypass is active.")
+        return True
+
     if not RECAPTCHA_SECRET_KEY:
-        allow_insecure = app.debug or os.environ.get('ALLOW_INSECURE_RECAPTCHA', '').lower() == 'true'
-        if allow_insecure:
-            logger.warning("reCAPTCHA secret is missing; insecure development bypass is active.")
-            return True
-        logger.error("RECAPTCHA_SECRET_KEY is required in production.")
-        return False
+        logger.warning(
+            "RECAPTCHA_SECRET_KEY is missing; required=%s. Auth and credit controls remain active.",
+            required,
+        )
+        return not required
     
-    if not token: 
-        logger.warning(f"reCAPTCHA Token missing - IP: {request.remote_addr}")
-        return False
+    if not token:
+        logger.warning("reCAPTCHA token missing; required=%s", required)
+        return not required
         
     try:
         url = "https://www.google.com/recaptcha/api/siteverify"
         data = {'secret': RECAPTCHA_SECRET_KEY, 'response': token}
         res = requests.post(url, data=data, timeout=5)
         result = res.json()
-        return result.get("success", False)
+        success = bool(result.get("success", False))
+        if not success:
+            logger.warning(
+                "reCAPTCHA rejected required=%s errors=%s hostname=%s action=%s score=%s",
+                required,
+                result.get('error-codes', []),
+                result.get('hostname', ''),
+                result.get('action', ''),
+                result.get('score', ''),
+            )
+        return success or not required
     except Exception as e:
-        logger.error(f"reCAPTCHA Error: {e}")
-        return False
+        logger.warning("reCAPTCHA verification unavailable; required=%s error=%s", required, type(e).__name__)
+        return not required
 
 def init_firebase():
     global db, init_error, connected_project_id
@@ -1716,7 +1733,7 @@ def _ai_provider_config(provider_order=None):
             request.headers.get("X-Groq-Api-Key")
             or os.environ.get("GROQ_API_KEY", "")
         ).strip(),
-        "groq_model": os.environ.get("GROQ_MODEL", ai_provider.DEFAULT_GROQ_MODEL).strip(),
+        "groq_model_timeout_ms": os.environ.get("GROQ_MODEL_TIMEOUT_MS", "30000").strip(),
         "openai_key": os.environ.get("OPENAI_API_KEY", "").strip(),
         "openai_model": os.environ.get(
             "OPENAI_MODEL", ai_provider.DEFAULT_OPENAI_MODEL

@@ -26,7 +26,8 @@ zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul 
 - `GROQ_API_KEY`: Groq API anahtarı
 - `OPENAI_API_KEY`: OpenAI Platform API anahtarı
 - `OPENROUTER_API_KEY`: OpenRouter API anahtarı
-- `GROQ_MODEL`: varsayılan `openai/gpt-oss-120b`
+- `GROQ_MODEL_TIMEOUT_MS`: her Groq modeli için zaman aşımı; varsayılan `30000`
+- `RECAPTCHA_REQUIRED`: `true` ise reCAPTCHA hataları yüklemeyi durdurur; varsayılan `false`
 - `OPENAI_MODEL`: varsayılan `gpt-5.6-luna`
 - `OPENROUTER_MODEL`: varsayılan `openrouter/free`
 - `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `gemini,groq,openai,openrouter`
@@ -34,6 +35,10 @@ zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul 
 
 Anahtarlar kaynak koda veya frontend'e yazılmaz. Sağlayıcılar sırayla denenir;
 kota, bağlantı veya servis hatasında yapılandırılmış sonraki sağlayıcıya geçilir.
+Groq içinde modeller `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
+`llama-3.3-70b-versatile`, `llama-3.1-8b-instant` ve
+`meta-llama/llama-4-scout-17b-16e-instruct` sırasıyla denenir. 429 alan model
+`retry-after` süresince atlanır; 401/403 ve normal 400 hataları zinciri durdurur.
 ChatGPT aboneliği OpenAI API kredisi sağlamaz; `OPENAI_API_KEY`, OpenAI Platform
 üzerinden ayrıca oluşturulmalıdır.
 

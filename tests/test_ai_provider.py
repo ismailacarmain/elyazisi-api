@@ -7,6 +7,7 @@ import ai_provider
 
 class ProviderFallbackTests(unittest.TestCase):
     def setUp(self):
+        ai_provider._GROQ_COOLDOWNS.clear()
         self.schema = {
             "type": "OBJECT",
             "properties": {"status": {"type": "STRING"}},
@@ -15,10 +16,11 @@ class ProviderFallbackTests(unittest.TestCase):
         self.messages = [{"role": "user", "content": "JSON döndür"}]
 
     @staticmethod
-    def response(payload, *, ok=True, status=200):
+    def response(payload, *, ok=True, status=200, headers=None):
         result = MagicMock()
         result.ok = ok
         result.status_code = status
+        result.headers = headers or {}
         result.json.return_value = payload
         return result
 
@@ -67,7 +69,7 @@ class ProviderFallbackTests(unittest.TestCase):
         success = self.response({
             "choices": [{"message": {"content": '{"status":"OK"}'}}]
         })
-        with patch("ai_provider.requests.post", side_effect=[denied, success]) as post:
+        with patch("ai_provider.requests.post", side_effect=([denied] * 5) + [success]) as post:
             parsed, provider, model = ai_provider.call_structured_with_fallback(
                 config={
                     "groq_key": "gsk_" + "y" * 32,
@@ -82,7 +84,7 @@ class ProviderFallbackTests(unittest.TestCase):
         self.assertEqual("OK", parsed["status"])
         self.assertEqual("openrouter", provider)
         self.assertEqual("openrouter/free", model)
-        self.assertEqual(2, post.call_count)
+        self.assertEqual(6, post.call_count)
         payload = post.call_args.kwargs["json"]
         self.assertEqual("json_schema", payload["response_format"]["type"])
         self.assertEqual(
@@ -90,6 +92,116 @@ class ProviderFallbackTests(unittest.TestCase):
             payload["response_format"]["json_schema"]["schema"]["type"],
         )
         self.assertEqual({"require_parameters": True}, payload["provider"])
+
+    def test_groq_first_success_stops_model_chain(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={},
+                api_key="gsk_" + "y" * 32,
+                messages=self.messages,
+                schema=self.schema,
+                schema_name="test_schema",
+                max_tokens=128,
+            )
+        self.assertEqual("openai/gpt-oss-120b", result["model"])
+        self.assertEqual(["openai/gpt-oss-120b"], result["attemptedModels"])
+        self.assertEqual(1, post.call_count)
+
+    def test_groq_429_cools_first_model_and_uses_second(self):
+        limited = self.response(
+            {"error": {"message": "rate limited"}},
+            ok=False,
+            status=429,
+            headers={"retry-after": "90"},
+        )
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", side_effect=[limited, success]) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual("openai/gpt-oss-20b", result["model"])
+        self.assertEqual(list(ai_provider.GROQ_MODELS[:2]), result["attemptedModels"])
+        self.assertTrue(ai_provider._groq_model_is_cooling_down(ai_provider.GROQ_MODELS[0]))
+        self.assertEqual(2, post.call_count)
+
+    def test_groq_two_timeouts_use_third_model(self):
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch(
+            "ai_provider.requests.post",
+            side_effect=[ai_provider.requests.Timeout(), ai_provider.requests.Timeout(), success],
+        ) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual("llama-3.3-70b-versatile", result["model"])
+        self.assertEqual(3, post.call_count)
+        third_payload = post.call_args.kwargs["json"]
+        self.assertEqual("json_object", third_payload["response_format"]["type"])
+        self.assertNotIn("reasoning_effort", third_payload)
+
+    def test_groq_cooldown_model_is_skipped(self):
+        ai_provider._set_groq_cooldown(ai_provider.GROQ_MODELS[0], 60)
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", return_value=success) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual("openai/gpt-oss-20b", result["model"])
+        self.assertEqual(["openai/gpt-oss-20b"], result["attemptedModels"])
+        self.assertEqual(1, post.call_count)
+
+    def test_groq_401_stops_without_trying_another_model(self):
+        denied = self.response({"error": {"message": "invalid key"}}, ok=False, status=401)
+        with patch("ai_provider.requests.post", return_value=denied) as post:
+            with self.assertRaises(ai_provider.AiProviderError) as ctx:
+                ai_provider.generate_with_groq_fallback(
+                    config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                    schema=self.schema, schema_name="test_schema", max_tokens=128,
+                )
+        self.assertEqual(401, ctx.exception.status_code)
+        self.assertEqual(1, post.call_count)
+
+    def test_groq_missing_model_400_uses_next_model(self):
+        missing = self.response(
+            {"error": {"message": "The requested model does not exist or is no longer supported."}},
+            ok=False,
+            status=400,
+        )
+        success = self.response({
+            "choices": [{"message": {"content": '{"status":"OK"}'}}]
+        })
+        with patch("ai_provider.requests.post", side_effect=[missing, success]) as post:
+            result = ai_provider.generate_with_groq_fallback(
+                config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                schema=self.schema, schema_name="test_schema", max_tokens=128,
+            )
+        self.assertEqual("openai/gpt-oss-20b", result["model"])
+        self.assertEqual(2, post.call_count)
+
+    def test_all_groq_models_failed_returns_friendly_error(self):
+        unavailable = self.response(
+            {"error": {"message": "temporarily unavailable"}}, ok=False, status=503
+        )
+        with patch("ai_provider.requests.post", return_value=unavailable) as post:
+            with self.assertRaises(ai_provider.AiProviderError) as ctx:
+                ai_provider.generate_with_groq_fallback(
+                    config={}, api_key="gsk_" + "y" * 32, messages=self.messages,
+                    schema=self.schema, schema_name="test_schema", max_tokens=128,
+                )
+        self.assertEqual(5, post.call_count)
+        self.assertIn("şu anda yoğun", str(ctx.exception))
 
     def test_openai_uses_structured_chat_completion_without_sampling_controls(self):
         success = self.response({

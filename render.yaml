@@ -13,6 +13,8 @@ services:
         value: "false"
       - key: ALLOW_INSECURE_RECAPTCHA
         value: "false"
+      - key: RECAPTCHA_REQUIRED
+        value: "false"
       - key: FIREBASE_CREDENTIALS
         sync: false
       - key: RECAPTCHA_SECRET_KEY
@@ -25,8 +27,8 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: GROQ_MODEL
-        value: openai/gpt-oss-120b
+      - key: GROQ_MODEL_TIMEOUT_MS
+        value: "30000"
       - key: OPENROUTER_MODEL
         value: openrouter/free
       - key: OPENAI_MODEL

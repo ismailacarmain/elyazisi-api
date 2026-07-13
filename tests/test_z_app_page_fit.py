@@ -556,6 +556,18 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         self.assertEqual("note-1", blocks[0]["id"])
         self.assertEqual("page-2", blocks[0]["target_page_id"])
 
+    @patch.dict(app.os.environ, {"RECAPTCHA_REQUIRED": "false"}, clear=False)
+    @patch.object(app, "RECAPTCHA_SECRET_KEY", None)
+    def test_optional_recaptcha_does_not_block_authenticated_upload_flow(self):
+        with app.app.test_request_context("/api/upload_form", method="POST"):
+            self.assertTrue(app.verify_recaptcha(""))
+
+    @patch.dict(app.os.environ, {"RECAPTCHA_REQUIRED": "true"}, clear=False)
+    @patch.object(app, "RECAPTCHA_SECRET_KEY", None)
+    def test_required_recaptcha_still_fails_closed_without_secret(self):
+        with app.app.test_request_context("/api/upload_form", method="POST"):
+            self.assertFalse(app.verify_recaptcha(""))
+
 
 if __name__ == "__main__":
     unittest.main()

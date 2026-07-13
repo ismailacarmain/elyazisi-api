@@ -8,13 +8,24 @@ Fontify.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+import threading
+import time
 from typing import Any, Callable
 
 import requests
 
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_MODELS = (
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+)
+DEFAULT_GROQ_MODEL = GROQ_MODELS[0]
 DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
 DEFAULT_PROVIDER_ORDER = ("gemini", "groq", "openai", "openrouter")
@@ -24,13 +35,28 @@ _SECRET_PATTERNS = (
     re.compile(r"\b(?:gsk|sk-or-v1|sk|rk|xai)-[A-Za-z0-9._-]{16,}\b", re.IGNORECASE),
     re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}"),
 )
+_GROQ_MODEL_UNAVAILABLE = re.compile(
+    r"(?:model[^.]{0,120}(?:not found|does not exist|unavailable|decommission|deprecated|removed|no longer (?:available|supported)|not supported))"
+    r"|(?:(?:not found|does not exist|unavailable|decommission|deprecated|removed|no longer (?:available|supported)|not supported)[^.]{0,120}model)",
+    re.IGNORECASE,
+)
+_GROQ_COOLDOWNS: dict[str, float] = {}
+_GROQ_COOLDOWN_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 class AiProviderError(Exception):
-    def __init__(self, message: str, status_code: int = 503, provider: str = ""):
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 503,
+        provider: str = "",
+        retry_after: float | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.provider = provider
+        self.retry_after = retry_after
 
 
 def _clean_key(value: Any) -> str:
@@ -83,6 +109,42 @@ def _is_transient_error(exc: Exception) -> bool:
     return status in TRANSIENT_STATUS_CODES
 
 
+def _groq_timeout_seconds(config: dict[str, Any] | None = None) -> float:
+    raw = (config or {}).get("groq_model_timeout_ms") or os.environ.get(
+        "GROQ_MODEL_TIMEOUT_MS", "30000"
+    )
+    try:
+        milliseconds = int(raw)
+    except (TypeError, ValueError):
+        milliseconds = 30_000
+    return max(5_000, min(milliseconds, 120_000)) / 1000.0
+
+
+def _groq_error_is_retryable(exc: AiProviderError) -> bool:
+    status = int(getattr(exc, "status_code", 503) or 503)
+    if status in {401, 403}:
+        return False
+    if status in TRANSIENT_STATUS_CODES:
+        return True
+    return status in {400, 404, 410} and bool(_GROQ_MODEL_UNAVAILABLE.search(str(exc)))
+
+
+def _groq_model_is_cooling_down(model: str, now: float | None = None) -> bool:
+    timestamp = time.time() if now is None else now
+    with _GROQ_COOLDOWN_LOCK:
+        available_at = _GROQ_COOLDOWNS.get(model, 0.0)
+        if available_at <= timestamp:
+            _GROQ_COOLDOWNS.pop(model, None)
+            return False
+        return True
+
+
+def _set_groq_cooldown(model: str, retry_after: float | None) -> None:
+    seconds = 60.0 if retry_after is None else max(1.0, min(float(retry_after), 3600.0))
+    with _GROQ_COOLDOWN_LOCK:
+        _GROQ_COOLDOWNS[model] = time.time() + seconds
+
+
 def _normalized_error(provider: str, exc: Exception) -> AiProviderError:
     try:
         status = int(getattr(exc, "status_code", 503))
@@ -129,6 +191,16 @@ def _validate_provider_result(
     return parsed
 
 
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    try:
+        value = response.headers.get("retry-after")
+        if value is None:
+            return None
+        return max(1.0, min(float(value), 3600.0))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _parse_openai_response(response: requests.Response, provider: str) -> dict[str, Any]:
     try:
         data = response.json()
@@ -136,8 +208,17 @@ def _parse_openai_response(response: requests.Response, provider: str) -> dict[s
         raise AiProviderError(f"{provider} geçersiz bir yanıt döndürdü.", 502, provider) from exc
     if not response.ok:
         message = _safe_upstream_message(data, f"{provider} isteği reddedildi.")
-        status = response.status_code if 400 <= response.status_code < 500 else 502
-        raise AiProviderError(message, status, provider)
+        status = (
+            response.status_code
+            if 400 <= response.status_code < 500 or response.status_code in TRANSIENT_STATUS_CODES
+            else 502
+        )
+        raise AiProviderError(
+            message,
+            status,
+            provider,
+            retry_after=_retry_after_seconds(response) if response.status_code == 429 else None,
+        )
     try:
         content = data["choices"][0]["message"]["content"]
         if isinstance(content, list):
@@ -162,6 +243,7 @@ def _call_openai_compatible(
     schema: dict[str, Any],
     schema_name: str,
     max_tokens: int,
+    request_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     key = _clean_key(api_key)
     if not key:
@@ -184,19 +266,30 @@ def _call_openai_compatible(
     normalized_schema = _openai_schema(schema)
     if provider == "groq":
         url = "https://api.groq.com/openai/v1/chat/completions"
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {"name": schema_name, "strict": False, "schema": normalized_schema},
-        }
+        selected_model = model or DEFAULT_GROQ_MODEL
+        supports_json_schema = selected_model.startswith("openai/gpt-oss") or "llama-4-scout" in selected_model
+        response_format = (
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": False,
+                    "schema": normalized_schema,
+                },
+            }
+            if supports_json_schema
+            else {"type": "json_object"}
+        )
         payload = {
-            "model": model or DEFAULT_GROQ_MODEL,
+            "model": selected_model,
             "messages": clean_messages,
             "temperature": 0.35,
             "max_completion_tokens": min(max_tokens, 8_000),
-            "reasoning_effort": "low",
-            "reasoning_format": "hidden",
             "response_format": response_format,
         }
+        if selected_model.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = "low"
+            payload["reasoning_format"] = "hidden"
     elif provider == "openai":
         url = "https://api.openai.com/v1/chat/completions"
         payload = {
@@ -238,17 +331,86 @@ def _call_openai_compatible(
         }
 
     try:
+        read_timeout = request_timeout_seconds or 45.0
         response = requests.post(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
-            timeout=(6, 45),
+            timeout=(min(6.0, read_timeout), read_timeout),
         )
     except requests.Timeout as exc:
         raise AiProviderError(f"{provider} zaman aşımına uğradı.", 504, provider) from exc
     except requests.RequestException as exc:
         raise AiProviderError(f"{provider} servisine ulaşılamıyor.", 503, provider) from exc
     return _parse_openai_response(response, provider)
+
+
+def generate_with_groq_fallback(
+    *,
+    config: dict[str, Any],
+    api_key: str,
+    messages: list[dict[str, str]],
+    schema: dict[str, Any],
+    schema_name: str,
+    max_tokens: int,
+    result_validator: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Try each Groq model once, skipping models still in 429 cooldown."""
+    attempted_models: list[str] = []
+    statuses: list[int] = []
+    timeout_seconds = _groq_timeout_seconds(config)
+
+    for model in GROQ_MODELS:
+        if _groq_model_is_cooling_down(model):
+            logger.info("AI provider skipped provider=groq model=%s reason=cooldown", model)
+            continue
+
+        attempted_models.append(model)
+        started = time.perf_counter()
+        try:
+            parsed = _call_openai_compatible(
+                provider="groq",
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                schema=schema,
+                schema_name=schema_name,
+                max_tokens=max_tokens,
+                request_timeout_seconds=timeout_seconds,
+            )
+            parsed = _validate_provider_result(parsed, "groq", result_validator)
+            elapsed_ms = round((time.perf_counter() - started) * 1000)
+            logger.info(
+                "AI provider success provider=groq model=%s status=200 duration_ms=%s",
+                model,
+                elapsed_ms,
+            )
+            return {
+                "content": parsed,
+                "model": model,
+                "attemptedModels": attempted_models,
+            }
+        except AiProviderError as exc:
+            elapsed_ms = round((time.perf_counter() - started) * 1000)
+            status = int(exc.status_code or 503)
+            statuses.append(status)
+            logger.warning(
+                "AI provider failed provider=groq model=%s status=%s duration_ms=%s",
+                model,
+                status,
+                elapsed_ms,
+            )
+            if status == 429:
+                _set_groq_cooldown(model, exc.retry_after)
+            if not _groq_error_is_retryable(exc):
+                raise
+
+    status = 429 if statuses and all(value == 429 for value in statuses) else 503
+    raise AiProviderError(
+        "Yapay zekâ modelleri şu anda yoğun. Lütfen kısa süre sonra tekrar deneyin.",
+        status,
+        "groq",
+    )
 
 
 def call_structured_with_fallback(
@@ -291,8 +453,24 @@ def call_structured_with_fallback(
                     raise normalized from exc
                 attempts.append(("gemini", normalized.status_code))
             continue
+        if provider == "groq":
+            try:
+                result = generate_with_groq_fallback(
+                    config=config,
+                    api_key=key,
+                    messages=messages,
+                    schema=schema,
+                    schema_name=schema_name,
+                    max_tokens=max_tokens,
+                    result_validator=result_validator,
+                )
+                return result["content"], "groq", result["model"]
+            except AiProviderError as exc:
+                if not _is_transient_error(exc):
+                    raise
+                attempts.append(("groq", exc.status_code))
+            continue
         default_model = {
-            "groq": DEFAULT_GROQ_MODEL,
             "openai": DEFAULT_OPENAI_MODEL,
             "openrouter": DEFAULT_OPENROUTER_MODEL,
         }[provider]
@@ -320,7 +498,6 @@ def call_structured_with_fallback(
             "OPENAI_API_KEY veya OPENROUTER_API_KEY ekleyin.",
             503,
         )
-    providers = ", ".join(name for name, _ in attempts)
     if attempts and all(code == 429 for _, code in attempts):
         status = 429
     elif attempts and all(code == 502 for _, code in attempts):
@@ -328,7 +505,8 @@ def call_structured_with_fallback(
     else:
         status = 503
     raise AiProviderError(
-        f"AI sağlayıcıları geçerli bir belge planı üretemedi: {providers}.", status
+        "Yapay zekâ modelleri şu anda yoğun. Lütfen kısa süre sonra tekrar deneyin.",
+        status,
     )
 
 
