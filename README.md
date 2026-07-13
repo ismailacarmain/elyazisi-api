@@ -28,6 +28,7 @@ zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul 
 - `OPENROUTER_API_KEY`: OpenRouter API anahtarı
 - `GROQ_MODEL_TIMEOUT_MS`: her Groq modeli için zaman aşımı; varsayılan `30000`
 - `RECAPTCHA_REQUIRED`: `true` ise reCAPTCHA hataları yüklemeyi durdurur; varsayılan `false`
+- `MAX_FORM_UPLOAD_SIZE_MB`: PDF form yükleme limiti; 10x dokuz sayfalı form için varsayılan `25`, en fazla `30`
 - `OPENAI_MODEL`: varsayılan `gpt-5.6-luna`
 - `OPENROUTER_MODEL`: varsayılan `openrouter/free`
 - `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `gemini,groq,openai,openrouter`
@@ -41,6 +42,10 @@ Groq içinde modeller `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
 `retry-after` süresince atlanır; 401/403 ve normal 400 hataları zinciri durdurur.
 ChatGPT aboneliği OpenAI API kredisi sağlamaz; `OPENAI_API_KEY`, OpenAI Platform
 üzerinden ayrıca oluşturulmalıdır.
+
+`GET /api/operations/<job_id>` yalnızca işlemin sahibine durum döndürür. Frontend,
+Firestore'un gerçek zamanlı bağlantısı cihazın DNS/ağ koşulları nedeniyle geçici olarak
+ulaşılamazsa bu güvenli endpoint üzerinden ilerlemeyi sorgular.
 
 ## Yerel doğrulama
 

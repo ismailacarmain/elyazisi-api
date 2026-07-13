@@ -1,6 +1,6 @@
 import copy
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import ai_copilot
 import ai_document
@@ -567,6 +567,48 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
     def test_required_recaptcha_still_fails_closed_without_secret(self):
         with app.app.test_request_context("/api/upload_form", method="POST"):
             self.assertFalse(app.verify_recaptcha(""))
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
+    def test_operation_status_fallback_returns_only_the_owner_job(self, _verify):
+        snapshot = MagicMock()
+        snapshot.exists = True
+        snapshot.to_dict.return_value = {
+            "user_id": "user-a",
+            "status": "processing",
+            "progress": "42",
+            "message": "Bölüm 4/18 taranıyor...",
+            "processed_chars": 21,
+            "font_id": "user-a_font-a",
+            "internal_secret": "must-not-leak",
+        }
+        database = MagicMock()
+        database.collection.return_value.document.return_value.get.return_value = snapshot
+        job_id = "d1c6f5e0-f8c9-4acf-9acd-b4ee78fb94b0"
+        with patch("app.init_firebase", return_value=database):
+            response = app.app.test_client().get(
+                f"/api/operations/{job_id}",
+                headers={"Authorization": "Bearer test-token"},
+            )
+        self.assertEqual(200, response.status_code)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual("processing", payload["operation"]["status"])
+        self.assertEqual(42, payload["operation"]["progress"])
+        self.assertNotIn("internal_secret", payload["operation"])
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-b"})
+    def test_operation_status_hides_another_users_job(self, _verify):
+        snapshot = MagicMock()
+        snapshot.exists = True
+        snapshot.to_dict.return_value = {"user_id": "user-a", "status": "processing"}
+        database = MagicMock()
+        database.collection.return_value.document.return_value.get.return_value = snapshot
+        with patch("app.init_firebase", return_value=database):
+            response = app.app.test_client().get(
+                "/api/operations/d1c6f5e0-f8c9-4acf-9acd-b4ee78fb94b0",
+                headers={"Authorization": "Bearer test-token"},
+            )
+        self.assertEqual(404, response.status_code)
 
 
 if __name__ == "__main__":

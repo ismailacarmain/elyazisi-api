@@ -723,7 +723,20 @@ def mobil_page(): return send_file('static/mobil_yukle.html')
 
 # Dosya Güvenlik Ayarları
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg'}
-MAX_FILE_SIZE = 10 * 1024 * 1024 # 10 MB
+
+
+def _configured_max_upload_size() -> int:
+    """Return a bounded upload limit suitable for multi-page 10x forms."""
+    try:
+        megabytes = int(os.environ.get('MAX_FORM_UPLOAD_SIZE_MB', '25'))
+    except (TypeError, ValueError):
+        megabytes = 25
+    # A 10x form has nine A4 pages. 25 MB accepts normal iPad/scanner PDFs
+    # while the 30 MB ceiling keeps the free Render worker within a safe range.
+    return max(5, min(megabytes, 30)) * 1024 * 1024
+
+
+MAX_FILE_SIZE = _configured_max_upload_size()
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -802,6 +815,56 @@ def upload_form():
     except Exception as e:
         logger.error(f"System error in upload_form: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'İşlem başarısız. Lütfen tekrar deneyin.'}), 500
+
+
+@app.route('/api/operations/<job_id>', methods=['GET', 'OPTIONS'])
+@verified_login_required
+def get_operation_status(job_id):
+    """Return one user's upload job state for the Firestore-offline fallback."""
+    try:
+        job_id = str(uuid.UUID(str(job_id)))
+    except (TypeError, ValueError, AttributeError):
+        return jsonify({'success': False, 'message': 'İşlem kimliği geçersiz.'}), 400
+
+    database = init_firebase()
+    if database is None:
+        return jsonify({'success': False, 'message': 'İşlem durumu şu anda kullanılamıyor.'}), 503
+
+    try:
+        snapshot = database.collection('operations').document(job_id).get()
+        if not snapshot.exists:
+            return jsonify({'success': False, 'message': 'İşlem bulunamadı.'}), 404
+        operation = snapshot.to_dict() or {}
+    except Exception as exc:
+        logger.warning('Operation status lookup failed: %s', type(exc).__name__)
+        return jsonify({'success': False, 'message': 'İşlem durumu şu anda kullanılamıyor.'}), 503
+
+    # Respond as not-found rather than disclosing another user's operation ID.
+    if not isinstance(operation, dict) or operation.get('user_id') != request.uid:
+        return jsonify({'success': False, 'message': 'İşlem bulunamadı.'}), 404
+
+    status = str(operation.get('status') or 'queued').lower()
+    if status not in {'queued', 'processing', 'completed', 'error'}:
+        status = 'processing'
+    try:
+        progress = max(0, min(100, int(operation.get('progress') or 0)))
+    except (TypeError, ValueError):
+        progress = 0
+    try:
+        processed_chars = max(0, int(operation.get('processed_chars') or 0))
+    except (TypeError, ValueError):
+        processed_chars = 0
+
+    # Only expose the fields the progress UI needs; internal worker exceptions
+    # remain in server logs.
+    public_operation = {
+        'status': status,
+        'progress': progress,
+        'message': '' if status == 'error' else str(operation.get('message') or '')[:240],
+        'processed_chars': processed_chars,
+        'font_id': str(operation.get('font_id') or '')[:256],
+    }
+    return jsonify({'success': True, 'operation': public_operation})
 
 @app.route('/api/mobile_upload_session', methods=['POST'])
 @verified_login_required
