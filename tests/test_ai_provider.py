@@ -33,6 +33,15 @@ class ProviderFallbackTests(unittest.TestCase):
         })
         self.assertEqual(["gemini", "groq"], providers)
 
+    def test_groq_byok_key_is_redacted_from_upstream_errors(self):
+        key = "gsk_" + "sensitive" * 4
+        message = ai_provider._safe_upstream_message(
+            {"error": {"message": f"invalid key {key}"}},
+            "request failed",
+        )
+        self.assertNotIn(key, message)
+        self.assertIn("[redacted]", message)
+
     def test_gemini_quota_falls_back_to_groq_structured_json(self):
         success = self.response({
             "choices": [{"message": {"content": json.dumps({"status": "OK"})}}]

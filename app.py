@@ -1951,17 +1951,28 @@ def ai_status():
 def ai_connection_test():
     try:
         data = request.get_json(silent=True) or {}
-        model = data.get('model', ai_document.DEFAULT_GEMINI_MODEL)
+        requested_provider = str(data.get('provider') or '').strip().lower()
+        if requested_provider not in {'', 'gemini', 'groq'}:
+            raise ai_document.AiDocumentError('Desteklenmeyen AI sağlayıcısı.')
+
+        has_groq_byok = bool(request.headers.get('X-Groq-Api-Key'))
+        has_gemini_byok = bool(request.headers.get('X-Gemini-Api-Key'))
+        if not requested_provider and has_groq_byok != has_gemini_byok:
+            requested_provider = 'groq' if has_groq_byok else 'gemini'
+
+        # Groq chooses from its fixed server-side fallback chain. The model
+        # field is exclusively the Gemini model used when Gemini is selected.
+        model = ai_document.DEFAULT_GEMINI_MODEL if requested_provider == 'groq' else (
+            ai_document.validate_model(
+                data.get('model', ai_document.DEFAULT_GEMINI_MODEL)
+            )
+        )
+
         config = _ai_provider_config()
-        config['gemini_model'] = ai_document.validate_model(model)
-        
-        m_lower = model.lower()
-        if "llama" in m_lower or "mixtral" in m_lower or "gemma" in m_lower:
-            config["provider_order"] = "groq"
-            if "gemini_key" in config: del config["gemini_key"]
-        elif "gemini" in m_lower:
-            config["provider_order"] = "gemini"
-            
+        config['gemini_model'] = model
+        if requested_provider:
+            config['provider_order'] = requested_provider
+
         provider, actual_model = ai_provider.test_provider_chain(
             config=config,
             gemini_test=lambda key: ai_document.test_gemini_connection(key, model),

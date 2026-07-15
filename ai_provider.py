@@ -33,7 +33,7 @@ DEFAULT_PROVIDER_ORDER = ("gemini", "groq", "openai", "openrouter")
 TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 _SECRET_PATTERNS = (
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
-    re.compile(r"\b(?:gsk|sk-or-v1|sk|rk|xai)-[A-Za-z0-9._-]{16,}\b", re.IGNORECASE),
+    re.compile(r"\b(?:gsk[_-]|(?:sk-or-v1|sk|rk|xai)-)[A-Za-z0-9._-]{16,}\b", re.IGNORECASE),
     re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}"),
 )
 _GROQ_MODEL_UNAVAILABLE = re.compile(

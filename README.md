@@ -34,7 +34,10 @@ zorunludur. İstemciden gelen kullanıcı kimliği yetki kaynağı olarak kabul 
 - `AI_DOCUMENT_PROVIDER_ORDER`: varsayılan `groq,gemini,openai,openrouter`
 - `COPILOT_PROVIDER_ORDER`: varsayılan `groq,gemini,openai,openrouter`
 
-Anahtarlar kaynak koda veya frontend'e yazılmaz. Sağlayıcılar sırayla denenir;
+Anahtar değerleri kaynak koda gömülmez. Render ortam anahtarları sunucuda kalır;
+kullanıcının Ayarlar ekranına girdiği isteğe bağlı BYOK anahtarı ise HTTPS üzerinden
+yalnız ilgili AI isteğinde iletilir ve backend/Firebase veritabanına kaydedilmez.
+Sağlayıcılar sırayla denenir;
 kota, bağlantı veya servis hatasında yapılandırılmış sonraki sağlayıcıya geçilir.
 Groq içinde modeller `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
 `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` ve

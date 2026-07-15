@@ -14,13 +14,46 @@ class CopilotPageFitIntegrationTests(unittest.TestCase):
         {"GROQ_API_KEY": "gsk_server_only_key_1234567890"},
         clear=False,
     )
-    def test_groq_key_is_read_only_from_server_environment(self):
+    def test_request_groq_key_precedes_server_environment_for_byok(self):
         with app.app.test_request_context(headers={
-            "X-Groq-Api-Key": "gsk_client_key_that_must_be_ignored",
+            "X-Groq-Api-Key": "gsk_client_key_for_this_request_only",
         }):
             config = app._ai_provider_config(app.DEFAULT_AI_DOCUMENT_PROVIDER_ORDER)
-        self.assertEqual("gsk_server_only_key_1234567890", config["groq_key"])
+        self.assertEqual("gsk_client_key_for_this_request_only", config["groq_key"])
         self.assertEqual("groq", config["provider_order"].split(",", 1)[0])
+
+    @patch.dict(
+        app.os.environ,
+        {"GROQ_API_KEY": "gsk_server_fallback_key_1234567890"},
+        clear=False,
+    )
+    def test_server_groq_key_is_used_when_request_has_no_byok_key(self):
+        with app.app.test_request_context():
+            config = app._ai_provider_config(app.DEFAULT_AI_DOCUMENT_PROVIDER_ORDER)
+        self.assertEqual("gsk_server_fallback_key_1234567890", config["groq_key"])
+
+    @patch("app.auth.verify_id_token", return_value={"uid": "user-a"})
+    @patch(
+        "app.ai_provider.test_provider_chain",
+        return_value=("groq", "openai/gpt-oss-120b"),
+    )
+    def test_ai_connection_test_can_target_groq_byok(self, provider_test, _verify):
+        response = app.app.test_client().post(
+            "/api/ai/test",
+            # Legacy clients used to send a Groq model in this field. Groq now
+            # owns a fixed fallback chain, so the field is safely ignored.
+            json={"model": "llama-3.1-70b-versatile", "provider": "groq"},
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Groq-Api-Key": "gsk_client_key_for_connection_test",
+            },
+        )
+        self.assertEqual(200, response.status_code, response.get_json())
+        self.assertEqual("groq", response.get_json()["provider"])
+        config = provider_test.call_args.kwargs["config"]
+        self.assertEqual("groq", config["provider_order"])
+        self.assertEqual("gsk_client_key_for_connection_test", config["groq_key"])
+        self.assertEqual(app.ai_document.DEFAULT_GEMINI_MODEL, config["gemini_model"])
 
     def _state(self, word_count: int, target_pages: int = 1, settings: dict | None = None):
         blocks = [{"type": "paragraph", "text": "abc " * word_count, "page_break_before": False}]
